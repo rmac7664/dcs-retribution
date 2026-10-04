@@ -170,10 +170,18 @@ class Game:
         self.pretense_air_groups: dict[str, Flight] = {}
         self.pretense_carrier_zones: List[str] = []
 
+        from game.warehouse import WarehouseState
+
+        self.warehouse_logistics = WarehouseState()
+
         self.on_load(game_still_initializing=True)
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
+        if "warehouse_logistics" not in self.__dict__:
+            from game.warehouse import WarehouseState
+
+            self.warehouse_logistics = WarehouseState()
         # Heal carcass lists bloated by old saves. Guarded like laser_code_registry
         # below: __destroyed_units postdates the oldest saves, so a pre-2020 save
         # arrives without it and must not AttributeError here.
@@ -339,6 +347,9 @@ class Game:
 
         for control_point in self.theater.controlpoints:
             control_point.process_turn(self)
+
+        if self.settings.logistics_enabled:
+            self.warehouse_logistics.resupply(self)
 
         # Movable ship TGOs snap to their destination and re-parent to the
         # nearest friendly CP. Runs after captures are committed (process_results

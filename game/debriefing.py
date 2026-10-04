@@ -127,6 +127,9 @@ class StateData:
     #: Mangled names of bases that were captured during the mission.
     base_capture_events: List[str]
 
+    #: Fuel/munition use and DCS warehouse data reported by the logistics script.
+    warehouse_logistics: Dict[str, Any] = field(default_factory=dict)
+
     @classmethod
     def from_json(cls, data: Dict[str, Any], unit_map: UnitMap) -> StateData:
         def clean_unit_list(unit_list: List[Any]) -> List[str]:
@@ -165,6 +168,7 @@ class StateData:
             killed_ground_units=killed_ground_units,
             destroyed_statics=data.get("destroyed_objects_positions", []),
             base_capture_events=data.get("base_capture_events", []),
+            warehouse_logistics=data.get("warehouse_logistics") or {},
         )
 
 

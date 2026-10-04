@@ -48,6 +48,15 @@ function write_state()
         ["mission_ended"] = mission_ended,
         ["destroyed_objects_positions"] = destroyed_objects_positions,
     }
+    -- Base logistics ledger, when enabled (dcs_retribution_warehouses.lua).
+    if retributionWarehouses and retributionWarehouses.export then
+        local ok, warehouses = pcall(retributionWarehouses.export, mission_ended)
+        if ok then
+            game_state["warehouse_logistics"] = warehouses
+        else
+            logger:error("Unable to export warehouse logistics: " .. tostring(warehouses))
+        end
+    end
     local ok, write_error = pcall(function()
         fp:write(json:encode(game_state))
     end)

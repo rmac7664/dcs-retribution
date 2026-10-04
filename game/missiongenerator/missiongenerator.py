@@ -29,6 +29,7 @@ from game.radio.tacan import TacanRegistry
 from game.theater import Airfield
 from game.theater.bullseye import Bullseye
 from game.unitmap import UnitMap
+from game.warehouse.plan import MissionWarehousePlan
 from .briefinggenerator import BriefingGenerator, MissionInfoGenerator
 from .cargoshipgenerator import CargoShipGenerator
 from .convoygenerator import ConvoyGenerator
@@ -121,6 +122,8 @@ class MissionGenerator:
         # Generate ground conflicts first so the JTACs get the first laser code (1688)
         # rather than the first player flight with a TGP.
         self.generate_ground_conflicts()
+        # Loadouts are fitted to base stock as the aircraft are generated.
+        self.mission_data.warehouse_plan = MissionWarehousePlan.create(self.game)
         self.generate_air_units(tgo_generator)
 
         RebellionGenerator(self.mission, self.game).generate()
@@ -136,6 +139,9 @@ class MissionGenerator:
 
         namegen.reset_numbers()
         self.generate_warehouses()
+        if (plan := self.mission_data.warehouse_plan) is not None:
+            plan.apply_to_mission(self.mission, self.mission_data)
+            self.game.warehouse_logistics.pending_plan = plan
         output.parent.mkdir(parents=True, exist_ok=True)
         self.mission.save(output)
 

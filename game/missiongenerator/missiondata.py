@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from game.radio.tacan import TacanChannel
     from game.theater.player import Player
     from game.utils import Distance
+    from game.warehouse.plan import MissionWarehousePlan
     from uuid import UUID
 
 
@@ -125,3 +126,5 @@ class MissionData:
     cp_stack: dict[UUID, Distance] = field(default_factory=dict)
     player_frontline_groups: list[FrontlineUnitGroupsInfo] = field(default_factory=list)
     enemy_frontline_groups: list[FrontlineUnitGroupsInfo] = field(default_factory=list)
+    #: Present when base logistics (limited warehouses) is enabled.
+    warehouse_plan: Optional[MissionWarehousePlan] = None

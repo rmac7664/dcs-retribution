@@ -25,6 +25,8 @@ class MissionResultsProcessor:
 
     def commit(self, debriefing: Debriefing, events: GameUpdateEvents) -> None:
         with logged_duration("Committing mission results"):
+            with logged_duration("commit_warehouse_logistics"):
+                self.commit_warehouse_logistics(debriefing)
             with logged_duration("commit_air_losses"):
                 self.commit_air_losses(debriefing)
             with logged_duration("commit_pilot_experience"):
@@ -54,6 +56,15 @@ class MissionResultsProcessor:
                 self.commit_captures(debriefing, events)
             with logged_duration("record_carcasses"):
                 self.record_carcasses(debriefing)
+
+    def commit_warehouse_logistics(self, debriefing: Debriefing) -> None:
+        if not self.game.settings.logistics_enabled:
+            return
+        self.game.warehouse_logistics.apply_mission_results(
+            self.game,
+            debriefing.state_data.warehouse_logistics,
+            debriefing.state_data.mission_ended,
+        )
 
     def commit_air_losses(self, debriefing: Debriefing) -> None:
         for loss in debriefing.air_losses.losses:

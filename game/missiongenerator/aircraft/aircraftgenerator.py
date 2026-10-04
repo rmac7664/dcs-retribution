@@ -285,6 +285,13 @@ class AircraftGenerator:
                     )
                     group.uncontrolled = False
                     group.units[0].skill = Skill.Client
+                elif (
+                    plan := self.mission_data.warehouse_plan
+                ) is not None and plan.manages(squadron.location):
+                    # Spare airframes are parked clean so they don't tie up stock
+                    # the base's tasked flights need.
+                    for unit in group.units:
+                        unit.pylons.clear()
                 AircraftPainter(flight, group).apply_livery()
                 self.unit_map.add_aircraft(group, flight)
 

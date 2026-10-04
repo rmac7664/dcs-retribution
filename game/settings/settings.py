@@ -69,6 +69,7 @@ GENERAL_SECTION = "General"
 PILOTS_AND_SQUADRONS_SECTION = "Pilots and Squadrons"
 HQ_AUTOMATION_SECTION = "HQ Automation"
 FLIGHT_PLANNER_AUTOMATION = "Flight Planner Automation"
+LOGISTICS_SECTION = "Logistics (fuel & munitions)"
 
 CAMPAIGN_DOCTRINE_PAGE = "Campaign Doctrine"
 DOCTRINE_DISTANCES_SECTION = "Doctrine distances"
@@ -838,6 +839,93 @@ class Settings:
         max=250,
         detail="A larger number will force the auto-planner to stick with squadrons that have a matching primary task."
         " A smaller number will ignore squadrons with a matching primary task that are too far out.",
+    )
+
+    # Logistics (DCS warehouses)
+    logistics_enabled: bool = boolean_option(
+        "Limited fuel and munitions at bases",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=False,
+        detail=(
+            "Airfields and carriers get a finite stock of jet fuel and munitions that "
+            "is written into their DCS warehouses. What aircraft take off with, refuel "
+            "and rearm comes out of that stock; what they bring back goes back in. "
+            "Stock is resupplied a little every turn. Loadouts that a base can't fill "
+            "fall back to older weapons or empty pylons. The first mission after "
+            "enabling this calibrates munitions against your DCS install, so "
+            "munitions are only limited in DCS from the second mission on (fuel is "
+            "limited right away)."
+        ),
+    )
+    logistics_apply_to_opfor: bool = boolean_option(
+        "Limit OPFOR bases too",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=True,
+    )
+    logistics_airfield_fuel_tons: int = bounded_int_option(
+        "Airfield fuel capacity (tons)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=1500,
+        min=10,
+        max=50000,
+    )
+    logistics_ship_fuel_tons: int = bounded_int_option(
+        "Carrier/LHA aviation fuel capacity (tons)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=2500,
+        min=10,
+        max=50000,
+    )
+    logistics_fuel_resupply_percent: int = bounded_int_option(
+        "Fuel resupply per turn (% of capacity)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=35,
+        min=0,
+        max=100,
+    )
+    logistics_munitions_sorties: int = bounded_int_option(
+        "Munitions authorized per aircraft (sorties)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=4,
+        min=1,
+        max=50,
+        detail=(
+            "A base is stocked for this many full loads of each weapon its squadrons "
+            "can carry. Bases start full and are resupplied toward this level."
+        ),
+    )
+    logistics_munitions_resupply_percent: int = bounded_int_option(
+        "Munitions resupply per turn (% of authorized)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=25,
+        min=0,
+        max=100,
+    )
+    logistics_meter_missiles: bool = boolean_option(
+        "Limit missiles",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=True,
+    )
+    logistics_meter_bombs: bool = boolean_option(
+        "Limit bombs",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=True,
+    )
+    logistics_meter_rockets: bool = boolean_option(
+        "Limit rockets",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=False,
+        detail="Pods, fuel tanks and gun ammunition are never limited.",
     )
 
     # Mission Generator

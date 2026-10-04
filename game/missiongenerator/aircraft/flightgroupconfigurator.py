@@ -37,6 +37,7 @@ from .bingoestimator import BingoEstimator
 from .flightdata import FlightData
 from .waypoints import WaypointGenerator
 from ...ato.flightmember import FlightMember
+from ...ato.loadouts import Loadout
 from ...ato.flightplans.aewc import AewcFlightPlan
 from ...ato.flightplans.packagerefueling import PackageRefuelingFlightPlan
 from ...ato.flightplans.theaterrefueling import TheaterRefuelingFlightPlan
@@ -80,6 +81,7 @@ class FlightGroupConfigurator:
         self.mission_data = mission_data
         self.dynamic_runways = dynamic_runways
         self.use_client = use_client
+        self._final_loadouts: list[tuple[FlyingUnit, Loadout]] = []
 
     def configure(self) -> FlightData:
         flight_channel = self.setup_radios()
@@ -90,6 +92,11 @@ class FlightGroupConfigurator:
         self.setup_props()
         self.setup_payloads()
         self.setup_fuel()
+        if self.mission_data.warehouse_plan is not None:
+            for unit, loadout in self._final_loadouts:
+                self.mission_data.warehouse_plan.register_unit(
+                    self.flight, unit, loadout
+                )
 
         laser_codes: list[Optional[int]] = []
         for unit, member in zip(self.group.units, self.flight.iter_members()):
@@ -432,6 +439,11 @@ class FlightGroupConfigurator:
                 self.flight.squadron.coalition.faction,
                 target,
             )
+
+        warehouse_plan = self.mission_data.warehouse_plan
+        if warehouse_plan is not None:
+            loadout = warehouse_plan.constrain(self.flight, loadout)
+            self._final_loadouts.append((unit, loadout))
 
         for pylon_number, weapon in loadout.pylons.items():
             if weapon is None:

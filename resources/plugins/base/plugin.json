@@ -17,6 +17,10 @@
             "mnemonic": "retribution"
         },
         {
+            "file": "dcs_retribution_warehouses.lua",
+            "mnemonic": "retribution_warehouses"
+        },
+        {
             "file": "moose.lua",
             "mnemonic": "moose"
         },
