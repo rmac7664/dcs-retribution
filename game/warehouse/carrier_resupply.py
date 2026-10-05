@@ -277,8 +277,6 @@ class CarrierResupplyPlanner:
                 transfer = TransferOrder(
                     origin=depot,
                     destination=need.base,
-                    position=depot,
-                    player=self.coalition.player,
                     units={supply_unit_type: quantity},
                     request_airflift=False,  # Use cargo ship for naval bases
                 )
