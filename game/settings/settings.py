@@ -1263,6 +1263,18 @@ class Settings:
         section=PERFORMANCE_SECTION,
         default=False,
     )
+    perf_disable_airlift_resupply: bool = boolean_option(
+        "Disable aircraft resupply missions",
+        page=MISSION_GENERATOR_PAGE,
+        section=PERFORMANCE_SECTION,
+        default=False,
+    )
+    perf_disable_naval_resupply: bool = boolean_option(
+        "Disable automatic naval resupply (carriers/bases)",
+        page=MISSION_GENERATOR_PAGE,
+        section=PERFORMANCE_SECTION,
+        default=False,
+    )
     perf_frontline_units_prefer_roads: bool = boolean_option(
         "Front line troops prefer roads",
         page=MISSION_GENERATOR_PAGE,

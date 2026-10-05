@@ -184,10 +184,15 @@ class Coalition:
 
         with logged_duration("Transit network identification"):
             self.update_transit_network()
-        with logged_duration("Procurement of airlift assets"):
-            self.transfers.order_airlift_assets()
-        with logged_duration("Transport planning"):
-            self.transfers.plan_transports(self.game.conditions.start_time)
+        if not self.game.settings.perf_disable_airlift_resupply:
+            with logged_duration("Procurement of airlift assets"):
+                self.transfers.order_airlift_assets()
+            with logged_duration("Transport planning"):
+                self.transfers.plan_transports(self.game.conditions.start_time)
+        if not self.game.settings.perf_disable_naval_resupply:
+            with logged_duration("Naval resupply planning"):
+                from game.warehouse.carrier_resupply import CarrierResupplyPlanner
+                CarrierResupplyPlanner(self.game, self).plan_carrier_resupply()
 
         if not is_turn_0:
             self.plan_missions(self.game.conditions.start_time)
