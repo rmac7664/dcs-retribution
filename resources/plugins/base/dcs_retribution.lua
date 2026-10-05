@@ -130,7 +130,7 @@ local function discoverDebriefingFilePath()
     return nil
 end
 
-debriefing_file_location = discoverDebriefingFilePath()
+debriefing_file_location = lfs.writedir() .. "Missions\\state.json"
 local error_message_shown = false
 
 write_state_error_handling = function()
