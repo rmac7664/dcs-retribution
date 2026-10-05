@@ -10,8 +10,8 @@ price: 25
 role: Tanker
 max_range: 1000
 patrol:
-  # ~300 knots IAS.
-  speed: 445
+  # Set by Reid.
+  speed: 430
   altitude: 24000
 variants:
   KC-135 Stratotanker: {}
