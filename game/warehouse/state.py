@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import logging
-import math
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional, TYPE_CHECKING
 from uuid import UUID
 
-from game.theater.controlpoint import Airfield, ControlPoint, NavalControlPoint
+from game.theater.controlpoint import (
+    Airfield,
+    ControlPoint,
+    NavalControlPoint,
+    OffMapSpawn,
+)
 from .munitions import (
     MunitionCatalog,
     ammo_only,
@@ -23,6 +27,8 @@ if TYPE_CHECKING:
     from game.dcs.aircrafttype import AircraftType
     from game.settings import Settings
     from .plan import MissionWarehousePlan
+    from .supply import PurchaseReport
+    from game.debriefing import Debriefing
 
 KG_PER_TON = 1000.0
 
@@ -60,6 +66,8 @@ class WarehouseState:
         #: Plan for the mission currently being flown (needed to learn from results).
         self.pending_plan: Optional[MissionWarehousePlan] = None
         self.last_result: Optional[MissionResultSummary] = None
+        #: Last turn's purchases and shipments per side (Player name -> report).
+        self.last_purchase: dict[str, PurchaseReport] = {}
         #: Not persisted: (aircraft, date, faction, learned count) -> max load.
         self._load_cache: dict[tuple[str, Any, str, int], dict[str, int]] = {}
 
@@ -87,7 +95,8 @@ class WarehouseState:
             return False
         if not (cp.captured.is_blue or settings.logistics_apply_to_opfor):
             return False
-        if isinstance(cp, Airfield):
+        if isinstance(cp, (Airfield, OffMapSpawn)):
+            # Off-map spawns are the rear-area depot; they have no DCS warehouse.
             return True
         return isinstance(cp, NavalControlPoint) and (cp.is_carrier or cp.is_lha)
 
@@ -102,6 +111,8 @@ class WarehouseState:
     def fuel_capacity_kg(cp: ControlPoint, settings: Settings) -> float:
         if isinstance(cp, NavalControlPoint):
             return settings.logistics_ship_fuel_tons * KG_PER_TON
+        if isinstance(cp, OffMapSpawn):
+            return settings.logistics_airfield_fuel_tons * 4 * KG_PER_TON
         return settings.logistics_airfield_fuel_tons * KG_PER_TON
 
     def authorized_munitions(self, game: Game, cp: ControlPoint) -> dict[str, int]:
@@ -157,29 +168,85 @@ class WarehouseState:
             self.stocks[cp.id] = stock
         return stock
 
+    def receive(
+        self,
+        game: Game,
+        cp: ControlPoint,
+        munitions: dict[str, int],
+        fuel_kg: float = 0.0,
+    ) -> None:
+        """Adds delivered or returned cargo to a base's stock."""
+        stock = self.ensure_stock(game, cp)
+        for name, count in munitions.items():
+            stock.munitions[name] = stock.munitions.get(name, 0) + count
+        stock.jet_fuel_kg += fuel_kg
+
     def resupply(self, game: Game) -> None:
-        """Turn-end resupply toward each base's capacity and authorized levels."""
-        settings = game.settings
-        fuel_rate = settings.logistics_fuel_resupply_percent / 100
-        munitions_rate = settings.logistics_munitions_resupply_percent / 100
-        for cp in self.managed_points(game):
-            if cp.id not in self.stocks:
-                self.ensure_stock(game, cp)
+        """Turn end: each side buys munitions at its depots and ships them forward."""
+        from .supply import SupplyPlanner, report_lines
+
+        for coalition in (game.blue, game.red):
+            if coalition.player.is_red and not game.settings.logistics_apply_to_opfor:
                 continue
-            stock = self.stocks[cp.id]
-            capacity = self.fuel_capacity_kg(cp, settings)
-            if stock.jet_fuel_kg < capacity:
-                stock.jet_fuel_kg = min(
-                    capacity, stock.jet_fuel_kg + capacity * fuel_rate
+            report = SupplyPlanner(game, coalition).run()
+            self.last_purchase[coalition.player.name] = report
+            if coalition.player.is_blue:
+                lines = report_lines(report, game.settings)
+                if lines:
+                    game.message("Logistics: supply", " ".join(lines))
+            elif report.bought:
+                logging.info(
+                    "Supply: OPFOR bought %d munitions for %.1f",
+                    sum(report.bought.values()),
+                    report.spent,
                 )
-            for name, authorized in self.authorized_munitions(game, cp).items():
-                have = stock.munitions.get(name, 0)
-                if have < authorized:
-                    delivery = max(1, math.ceil(authorized * munitions_rate))
-                    if munitions_rate > 0:
-                        stock.munitions[name] = min(authorized, have + delivery)
 
     # Mission results ----------------------------------------------------------------
+
+    def apply_airlift_deliveries(
+        self, game: Game, debriefing: Debriefing, data: Optional[dict[str, Any]]
+    ) -> None:
+        """Supply airlifters that didn't land at their destination bring cargo back.
+
+        Only applied when the mission script reported deliveries, i.e. the mission
+        was flown in DCS and ended normally. Shot-down transports are handled by the
+        regular airlift loss processing.
+        """
+        from .supply import return_to, supply_of
+
+        plan = self.pending_plan
+        if (
+            plan is None
+            or not data
+            or not debriefing.state_data.mission_ended
+            or not getattr(plan, "cargo_units", None)
+        ):
+            return
+        delivered = _as_dict(data.get("delivered"))
+        killed = set(debriefing.state_data.killed_aircraft)
+        for name in plan.cargo_units:
+            if name in delivered or name in killed:
+                continue
+            airlift = debriefing.unit_map.airlift_unit(name)
+            if airlift is None:
+                continue
+            transfer = airlift.transfer
+            if supply_of(transfer) is None:
+                continue
+            returned = 0
+            for unit_type in airlift.cargo:
+                try:
+                    transfer.kill_unit(unit_type)
+                    returned += 1
+                except KeyError:
+                    continue
+            return_to(transfer, transfer.position, returned)
+            logging.info(
+                "Supply: %s did not land at %s; its cargo stays at %s",
+                name,
+                transfer.destination.name,
+                transfer.position.name,
+            )
 
     def apply_mission_results(
         self, game: Game, data: Optional[dict[str, Any]], mission_ended: bool

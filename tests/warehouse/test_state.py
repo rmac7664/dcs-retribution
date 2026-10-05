@@ -84,32 +84,6 @@ def test_unfinished_mission_does_not_change_stock() -> None:
     assert AIM_120C in state.resource_map
 
 
-def test_resupply_tops_up_toward_capacity_and_authorized(monkeypatch: Any) -> None:
-    cp = make_cp("Batumi")
-    game = make_game(cp)
-    game.settings.logistics_fuel_resupply_percent = 25
-    game.settings.logistics_munitions_resupply_percent = 25
-    state = WarehouseState()
-    state.stocks[cp.id] = BaseStock(0.0, {AIM_120C: 1, "weapons.bombs.Mk_82": 99})
-    monkeypatch.setattr(state, "managed_points", lambda g: iter([cp]))
-    monkeypatch.setattr(state, "fuel_capacity_kg", lambda c, s: 1000.0)
-    monkeypatch.setattr(
-        state,
-        "authorized_munitions",
-        lambda g, c: {AIM_120C: 10, "weapons.bombs.Mk_82": 40},
-    )
-    state.resupply(game)
-    stock = state.stocks[cp.id]
-    assert stock.jet_fuel_kg == pytest.approx(250)
-    assert stock.munitions[AIM_120C] == 1 + 3  # ceil(10 * 25%)
-    # Over-stocked items (e.g. a squadron moved away) are kept, not destroyed.
-    assert stock.munitions["weapons.bombs.Mk_82"] == 99
-    for _ in range(5):
-        state.resupply(game)
-    assert stock.jet_fuel_kg == pytest.approx(1000)
-    assert stock.munitions[AIM_120C] == 10
-
-
 def test_state_survives_pickling_and_old_saves() -> None:
     state = WarehouseState()
     state.learned["X"] = {AIM_120C: 1}
@@ -125,10 +99,12 @@ def test_plan_pickles_only_learning_data() -> None:
     plan = MissionWarehousePlan.__new__(MissionWarehousePlan)
     plan.loadout_keys = {"k": ["{A}"]}
     plan.learn_keys = {"k"}
+    plan.cargo_units = {"Herc 1": "cp-id"}
     plan.bases = {uuid.uuid4(): SimpleNamespace()}  # type: ignore[dict-item]
     restored = pickle.loads(pickle.dumps(plan))
     assert restored.loadout_keys == {"k": ["{A}"]}
     assert restored.learn_keys == {"k"}
+    assert restored.cargo_units == {"Herc 1": "cp-id"}
     assert restored.bases == {}
 
 

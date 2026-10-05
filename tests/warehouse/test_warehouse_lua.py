@@ -106,6 +106,7 @@ dcsRetributionWarehouses = {
         ["Tomcat 1"] = { home = "cpB" },
     },
     learn = { k1 = true },
+    cargo = { ["Herc 1"] = "cpB", ["Herc 2"] = "cpB" },
     ws = { ["weapons.missiles.AIM_120C"] = {4, 4, 7, 106} },
     wantResourceMap = true,
 }
@@ -261,3 +262,18 @@ def test_script_is_inert_without_data() -> None:
     runtime.execute(MOCK_DCS)
     runtime.execute(SCRIPT.read_text(encoding="utf-8"))
     assert runtime.globals().retributionWarehouses is None
+
+
+def test_supply_airlifters_are_delivered_only_when_landing_at_destination(
+    lua: Any,
+) -> None:
+    lua.execute("""
+        local A = make_airbase("Batumi")
+        local B = make_airbase("CVN-71")
+        local h1 = make_unit("Herc 1", {}, 9000, true)
+        local h2 = make_unit("Herc 2", {}, 9000, true)
+        fire(world.event.S_EVENT_LAND, h1, B)  -- reached its destination
+        fire(world.event.S_EVENT_LAND, h2, A)  -- diverted
+        result = retributionWarehouses.export(true)
+        """)
+    assert to_py(lua.globals().result)["delivered"] == {"Herc 1": True}

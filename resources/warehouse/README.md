@@ -23,9 +23,37 @@ default; rockets optional; pods, tanks and gun ammunition never).
 3. **Debrief** (`WarehouseState.apply_mission_results`). The ledger is applied to stock
    (only if the mission ended cleanly). DCS' resource map (item name → wsType) is cached,
    and launchers the mission reported on are learned.
-4. **Turn end** (`WarehouseState.resupply`). Fuel is topped up by a percentage of capacity
-   and each munition by a percentage of its authorized level (N sorties of the biggest
-   load each squadron's aircraft can carry).
+4. **Turn end** (`WarehouseState.resupply` → `game/warehouse/supply.py`). See *Supply
+   lines* below.
+
+## Supply lines and munition costs
+
+With **Deliver munitions by convoy, ship and airlift** on (the default), new munitions
+only appear at **depots**: bases (and FOBs) with a live ammo depot, fuel depot, factory or
+warehouse, off-map spawns, and carriers/LHAs (whose stores stay aboard). Each turn, for
+each side:
+
+1. **Buy.** Every depot buys what it and the bases it serves are short of (up to the
+   per-turn resupply percentage of the side's authorized total). With **Munitions cost
+   money** on, purchases come out of the side's budget before aircraft and ground-unit
+   procurement, capped at a share of the budget, most-needed items first. Prices are in
+   `munition_prices.yaml` (roughly millions of USD; scale with the price multiplier).
+2. **Ship.** Each other base is served by its cheapest-to-reach depot. What it's short of
+   and the depot has spare becomes a *supply run*: a regular transfer order carrying a
+   `SupplyLoad`, whose units are cargo trucks from the faction's logistics units (M818,
+   Ural-375...). Road links become convoys, sea links cargo ships, otherwise the side's
+   transport squadrons airlift it (C-130, C-17, Il-76, Mi-8, CH-47...), with capacity by
+   weight. One run carries at most *trucks × tons per truck* (60 t by default); the rest
+   waits a turn. Missing items are prioritized, then the most valuable.
+3. **Deliver.** A run arrives when its transfer completes. Destroyed trucks and shot-down
+   transports lose their share. In a mission flown in DCS, an airlifter only delivers
+   if it lands at the destination; otherwise its share goes back to where it started.
+
+Red runs exactly the same planner with its own budget, depots, trucks and transports, so
+its supply runs show up as convoy and airlift targets.
+
+Fuel is drawn locally by default (one busy day is dozens of truck loads); turn on **Ship
+fuel on supply runs too** to move it the same way.
 
 ## Why the first mission "calibrates"
 

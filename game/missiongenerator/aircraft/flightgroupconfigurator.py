@@ -116,11 +116,17 @@ class FlightGroupConfigurator:
             if self.flight.flight_type == FlightType.TRANSPORT:
                 coalition = self.game.coalition_for(player=self.flight.blue)
                 transfer = coalition.transfers.transfer_for_flight(self.flight)
-            self.mission_data.logistics.append(
-                LogisticsGenerator(
-                    self.flight, self.group, self.mission, self.game.settings, transfer
-                ).generate_logistics()
-            )
+            # Supply runs deliver by landing at the destination, not by CTLD crates.
+            if transfer is None or getattr(transfer, "supplies", None) is None:
+                self.mission_data.logistics.append(
+                    LogisticsGenerator(
+                        self.flight,
+                        self.group,
+                        self.mission,
+                        self.game.settings,
+                        transfer,
+                    ).generate_logistics()
+                )
 
         mission_start_time, waypoints = WaypointGenerator(
             self.flight,

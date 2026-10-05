@@ -1,0 +1,37 @@
+# Price of one munition, in the same budget units as aircraft and ground units
+# (roughly millions of USD, scaled like the rest of Retribution's economy).
+#
+# Rules are matched in order against the warehouse item name with its category prefix
+# removed (e.g. "AIM_120C" from "weapons.missiles.AIM_120C"), case-insensitively. The
+# first matching pattern wins; anything unmatched uses the category default at the end.
+# The campaign setting "Munition price multiplier" scales everything.
+rules:
+  # Long-range and strategic
+  - { pattern: "AGM_158|JASSM|X_101|X_555|X_65|KH-?101|KH-?555|BGM_109|TOMAHAWK|SCALP|STORM|TAURUS|KEPD|YJ-?12|YJ-?83|X_59M|AGM_84H|AGM_84K|SLAM", price: 1.5 }
+  - { pattern: "AGM_84|HARPOON|X_35|KH-?35|AM39|EXOCET|RB_?15|RBS_?15|C_802|C-802|YJ|P_?700|X_22|X_15|KSR|X_31A", price: 1.2 }
+  - { pattern: "AIM_54|PHOENIX", price: 1.2 }
+  - { pattern: "AGM_88|HARM|X_31P|X_58|X_25MP|ALARM|AGM_45|AGM_78|MARTEL|SHRIKE|LD-?10|CM-?102", price: 0.8 }
+  # BVR air-to-air
+  - { pattern: "AIM_120|AMRAAM|P_77|R_77|R-?77|METEOR|MICA|PL-?12|PL-?15|SD-?10|DERBY|IRIS|ASRAAM|AIM_260", price: 1.0 }
+  - { pattern: "P_27|R-?27|AIM_7|AIM-7|SPARROW|SKYFLASH|ASPIDE|S530|SUPER 530|P_33|R-?33|P_40|R-?40|PL-?11|R_?24", price: 0.5 }
+  # Short-range air-to-air
+  - { pattern: "AIM_9X|AIM-9X|IRIS-T|P_73|R-?73|R_?74|PL-?10|PYTHON|A-?DARTER", price: 0.45 }
+  - { pattern: "AIM_9|AIM-9|SIDEWINDER|R_?60|P_60|R-?60|R_?13|K-?13|MAGIC|R550|PL-?[5-9]|SHAFRIR|RB_?24|RB_?74", price: 0.15 }
+  # Precision air-to-ground
+  - { pattern: "AGM_154|JSOW", price: 0.5 }
+  - { pattern: "AGM_65|MAVERICK|X_29|KH-?29|X_25|KH-?25|X_38|RB_?75|AGM_12|AGM_62|WALLEYE|AS_?30|KAB_?1500|ALARM", price: 0.25 }
+  - { pattern: "AGM_114|HELLFIRE|9M120|VIKHR|9M127|ATAKA|BGM_71|TOW|SPIKE|BRIMSTONE|AGR_20|APKWS|JAGM|HOT_?3|9M114|SHTURM|MOKOPA|KH-?66", price: 0.12 }
+  - { pattern: "GBU_57|GBU_28|GBU_27|GBU_24|BLU_109|KAB_?500|KAB_?1500|GBU_15", price: 0.12 }
+  - { pattern: "GBU_3[1-9]|GBU_54|GBU_10|GBU_16|GBU_12|GBU_|JDAM|LJDAM|PAVEWAY|LS_?6|GB-?6|AASM|HAMMER|KAB|LT_?2|LS-?6|GB_?6", price: 0.05 }
+  - { pattern: "CBU_97|CBU_105|SFW", price: 0.35 }
+  - { pattern: "CBU_|ROCKEYE|MK_?20|BL_?755|BLU_|RBK|BETAB|BAP|DURANDAL|BLG|BELOUGA|KMGU|SPPU", price: 0.03 }
+  - { pattern: "ADM_141|TALD|MALD|ADM_160", price: 0.2 }
+  # Unguided
+  - { pattern: "MK_84|MK-84|FAB_1500|FAB_1000|M_118|M_117|SAB|FAB_500|MK_83|BR_500|BR_250|FAB_250|SAMP|MK_82|MK_81|FAB_100|OFAB|M_?117|BDU", price: 0.008 }
+  - { pattern: "HYDRA|ZUNI|S_?5|C_5|S_?8|C_8|S_?13|C_13|S_?24|C_24|S_?25|C_25|SNEB|ARF|FFAR|ROCKET", price: 0.002 }
+  - { pattern: "MK_46|MK_48|MARK_46|TORPEDO|LTF|AT_1|APR", price: 1.0 }
+defaults:
+  weapons.missiles.: 0.3
+  weapons.torpedoes.: 1.0
+  weapons.bombs.: 0.01
+  weapons.nurs.: 0.002

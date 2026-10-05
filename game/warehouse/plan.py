@@ -76,6 +76,8 @@ class MissionWarehousePlan:
         self.loadout_keys: dict[str, list[str]] = {}
         self.learn_keys: set[str] = set()
         self.units: dict[str, dict[str, str]] = {}
+        #: Supply airlift unit name -> destination control point id.
+        self.cargo_units: dict[str, str] = {}
         no_wstypes = not self.state.resource_map
         for cp in self.state.managed_points(game):
             stock = self.state.ensure_stock(game, cp)
@@ -92,10 +94,12 @@ class MissionWarehousePlan:
         return {
             "loadout_keys": self.loadout_keys,
             "learn_keys": self.learn_keys,
+            "cargo_units": self.cargo_units,
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
+        self.cargo_units = state.get("cargo_units", {})
         self.bases = {}
         self.units = {}
 
@@ -194,6 +198,12 @@ class MissionWarehousePlan:
         return None
 
     def register_unit(self, flight: Flight, unit: FlyingUnit, loadout: Loadout) -> None:
+        transfer = getattr(flight, "cargo", None)
+        if transfer is not None and getattr(transfer, "supplies", None) is not None:
+            destination = transfer.destination
+            if transfer.transport is not None:
+                destination = transfer.transport.destination
+            self.cargo_units[str(unit.name)] = str(destination.id)
         base = self.bases.get(flight.departure.id)
         if base is None:
             return
@@ -317,6 +327,7 @@ class MissionWarehousePlan:
             "bases": bases,
             "units": self.units,
             "learn": {key: True for key in sorted(self.learn_keys)},
+            "cargo": self.cargo_units,
             "ws": ws,
             "wantResourceMap": True,
         }
@@ -341,6 +352,21 @@ class MissionWarehousePlan:
                 self.game.message(f"Logistics: {base.cp.name}", " ".join(lines))
             for line in lines:
                 logging.info("Warehouse logistics: %s: %s", base.cp.name, line)
+        from .supply import supply_of
+
+        stranded = [
+            t
+            for t in self.game.blue.transfers.pending_transfers
+            if supply_of(t) is not None and t.transport is None
+        ]
+        if stranded:
+            self.game.message(
+                "Logistics: supply runs waiting",
+                f"{len(stranded)} supply run(s) have no transport this turn: "
+                + "; ".join(str(t) for t in stranded[:4])
+                + ". Airlifts need transport-capable squadrons (C-130, C-17, CH-47...) "
+                "that can reach the depot.",
+            )
         calibrating = [b.cp.name for b in self.bases.values() if b.calibrate]
         if calibrating:
             logging.info(

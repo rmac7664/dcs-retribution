@@ -927,6 +927,97 @@ class Settings:
         default=False,
         detail="Pods, fuel tanks and gun ammunition are never limited.",
     )
+    logistics_supply_lines: bool = boolean_option(
+        "Deliver munitions by convoy, ship and airlift",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=True,
+        detail=(
+            "New munitions arrive only at depots (bases with an ammo or fuel depot, "
+            "factory or warehouse, off-map spawns, carriers) and are shipped to other "
+            "bases as supply runs: truck convoys, cargo ships, or airlifts by your "
+            "transport squadrons (C-130, C-17, Il-76, Mi-8...). Supply runs can be "
+            "intercepted, and cargo on destroyed trucks or transports is lost. If off, "
+            "every base is restocked where it stands."
+        ),
+    )
+    logistics_fuel_by_supply_lines: bool = boolean_option(
+        "Ship fuel on supply runs too",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=False,
+        detail=(
+            "Fuel is heavy: a day of flying from a busy airfield is dozens of truck "
+            "loads. If off, bases draw fuel locally (pipelines) and only munitions are "
+            "shipped."
+        ),
+    )
+    logistics_prefer_airlift: bool = boolean_option(
+        "Send supply runs by air",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=False,
+        detail=(
+            "Use transport aircraft even where a road or shipping lane exists. Supply "
+            "runs that can only go by air are always airlifted."
+        ),
+    )
+    logistics_truck_tons: int = bounded_int_option(
+        "Cargo per truck (tons)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=10,
+        min=1,
+        max=40,
+    )
+    logistics_max_trucks_per_shipment: int = bounded_int_option(
+        "Most trucks in one supply run",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=6,
+        min=1,
+        max=30,
+        detail=(
+            "With the cargo per truck, this caps how much one base can receive per "
+            "turn (6 x 10 t = 60 t by default). Anything more waits for the next turn. "
+            "Keeps convoy unit counts, and frame rates, reasonable."
+        ),
+    )
+    logistics_min_shipment_tons: int = bounded_int_option(
+        "Smallest supply run worth sending (tons)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=1,
+        min=0,
+        max=50,
+        detail="Missiles are always sent, however light.",
+    )
+    logistics_munitions_cost: bool = boolean_option(
+        "Munitions cost money",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=True,
+        detail=(
+            "Replacement munitions are paid for from the side's budget, before other "
+            "purchases. Prices are in resources/warehouse/munition_prices.yaml."
+        ),
+    )
+    logistics_munitions_budget_percent: int = bounded_int_option(
+        "Most of the budget spent on munitions per turn (%)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=30,
+        min=0,
+        max=100,
+    )
+    logistics_munition_price_percent: int = bounded_int_option(
+        "Munition price multiplier (%)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=100,
+        min=0,
+        max=1000,
+    )
 
     # Mission Generator
     # Gameplay

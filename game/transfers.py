@@ -75,6 +75,7 @@ from game.utils import meters, nautical_miles
 
 if TYPE_CHECKING:
     from game import Game
+    from game.warehouse.supply import SupplyLoad
     from game.squadrons import Squadron
     from game.theater import Coalition
 
@@ -117,8 +118,18 @@ class TransferOrder:
 
     request_airflift: bool = field(default=False)
 
+    #: Fuel and munitions carried by a supply order (see game/warehouse/supply.py).
+    #: The units of a supply order are its cargo trucks; they are never commissioned.
+    supplies: Optional[SupplyLoad] = field(default=None)
+
     def __str__(self) -> str:
         """Returns the text that should be displayed for the transfer."""
+        if self.supplies is not None:
+            side = "Supply run" if self.player else "Enemy supply run"
+            return (
+                f"{side} of {self.supplies.describe()} from {self.origin.name} to "
+                f"{self.destination.name}"
+            )
         count = self.size
         origin = self.origin.name
         destination = self.destination.name
@@ -160,6 +171,12 @@ class TransferOrder:
         return self.destination == self.position or not self.size
 
     def disband_at(self, location: ControlPoint) -> None:
+        if self.supplies is not None:
+            from game.warehouse.supply import deliver
+
+            deliver(self, location)
+            self.units.clear()
+            return
         logging.info(f"Units halting at {location}.")
         location.base.commission_units(self.units)
         self.units.clear()
@@ -347,8 +364,11 @@ class AirliftPlanner:
             EventStream.put_nowait(events)
 
     def create_airlift_flight(self, squadron: Squadron) -> int:
+        from game.warehouse.supply import carriers_per_aircraft
+
         available_aircraft = squadron.untasked_aircraft
-        capacity_each = 1 if squadron.aircraft.dcs_unit_type.helicopter else 2
+        # Ground units: one per helicopter, two per plane. Supply: by cargo weight.
+        capacity_each = carriers_per_aircraft(self.transfer, squadron.aircraft)
         required = math.ceil(self.transfer.size / capacity_each)
         flight_size = min(
             required,
@@ -675,6 +695,11 @@ class PendingTransfers:
         for td in to_delete:
             del transfer.units[td]
         new_transfer = TransferOrder(transfer.origin, transfer.destination, units)
+        if transfer.supplies is not None:
+            new_transfer.supplies = transfer.supplies.split_off(
+                sum(new_transfer.units.values())
+            )
+            new_transfer.request_airflift = transfer.request_airflift
         self.pending_transfers.append(new_transfer)
         return new_transfer
 
@@ -719,7 +744,13 @@ class PendingTransfers:
         if transfer.transport is not None:
             self.cancel_transport(transfer.transport, transfer)
         self.pending_transfers.remove(transfer)
-        transfer.origin.base.commission_units(transfer.units)
+        if transfer.supplies is not None:
+            from game.warehouse.supply import return_to
+
+            return_to(transfer, transfer.position, transfer.size)
+            transfer.units.clear()
+        else:
+            transfer.origin.base.commission_units(transfer.units)
         self._send_supply_route_event_stream_update()
 
     def perform_transfers(self) -> None:

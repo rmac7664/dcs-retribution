@@ -27,6 +27,7 @@ local W = {
     deltas = {},    -- control point id -> { fuel = kg, mun = { [item] = count } }
     learned = {},   -- loadout key -> { [item] = count }
     diag = {},      -- control point id -> { start = {...}, finish = {...} }
+    delivered = {}, -- supply airlift unit name -> true once landed at its destination
     stale = false,
     finalized = false,
 }
@@ -39,6 +40,7 @@ for dcsName, base in pairs(data.bases) do
 end
 local units = data.units or {}
 local learnKeys = data.learn or {}
+local cargo = data.cargo or {}  -- supply airlift unit name -> destination control point id
 local prefixes = data.prefixes or {}
 
 local function log(message)
@@ -191,11 +193,17 @@ end
 
 local function onLand(event)
     local unit = event.initiator
-    local entry = tracked[unit:getName()]
+    local name = unit:getName()
+    local cp = baseAt(event.place)
+    if cargo[name] and cp == cargo[name] and not W.delivered[name] then
+        W.delivered[name] = true
+        dirty_state = true
+        log(name .. " delivered its supply cargo")
+    end
+    local entry = tracked[name]
     if not entry or entry.done then
         return
     end
-    local cp = baseAt(event.place)
     local now = ammoOf(unit, isMetered)
     local fuel = fuelOf(unit)
     if cp then
@@ -382,6 +390,7 @@ function W.export(missionEnded)
         version = 1,
         bases = W.deltas,
         learned = W.learned,
+        delivered = W.delivered,
         stale = W.stale,
     }
     if missionEnded then
