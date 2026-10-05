@@ -1002,6 +1002,18 @@ class Settings:
             "purchases. Prices are in resources/warehouse/munition_prices.yaml."
         ),
     )
+    logistics_manual_munition_purchases: bool = boolean_option(
+        "Pick munition purchases yourself",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=False,
+        detail=(
+            "The computer stops buying munitions for your side. Order them with "
+            "Order munitions in any base's Logistics tab; it suggests what's running "
+            "short. Orders are paid when placed and arrive at the depot at the end "
+            "of the turn. The enemy still buys automatically."
+        ),
+    )
     logistics_munitions_budget_percent: int = bounded_int_option(
         "Most of the budget spent on munitions per turn (%)",
         CAMPAIGN_MANAGEMENT_PAGE,
@@ -1009,6 +1021,7 @@ class Settings:
         default=30,
         min=0,
         max=100,
+        detail="Limits automatic purchases only; your own orders can use any amount.",
     )
     logistics_munition_price_percent: int = bounded_int_option(
         "Munition price multiplier (%)",

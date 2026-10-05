@@ -104,7 +104,7 @@ def test_airlifter_that_did_not_land_brings_its_cargo_back() -> None:
     state = WarehouseState()
     game.warehouse_logistics = state
     state.stocks[origin.id] = BaseStock(0.0, {})
-    state.pending_plan = SimpleNamespace(cargo_units={"Herc 1": "x", "Herc 2": "x"})
+    state.pending_plan = SimpleNamespace(cargo_units={"Herc 1": "x", "Herc 2": "x"})  # type: ignore[assignment]
     airlifts = {
         "Herc 1": SimpleNamespace(cargo=(truck, truck), transfer=transfer),
         "Herc 2": SimpleNamespace(cargo=(truck, truck), transfer=transfer),
@@ -119,3 +119,106 @@ def test_airlifter_that_did_not_land_brings_its_cargo_back() -> None:
     # Herc 2 never landed at Akrotiri: its two pallets (20 missiles) stay at the depot.
     assert transfer.size == 2
     assert state.stocks[origin.id].munitions == {AIM_120C: 20}
+
+
+class FakeCoalition:
+    def __init__(self, budget: float) -> None:
+        self.budget = budget
+        self.player = SimpleNamespace(is_blue=True)
+
+    def adjust_budget(self, amount: float) -> None:
+        self.budget += amount
+
+
+def order_world(budget: float = 10.0) -> Any:
+    import uuid
+
+    from game.warehouse.state import BaseStock, WarehouseState
+
+    coalition = FakeCoalition(budget)
+    depot = SimpleNamespace(
+        id=uuid.uuid4(), name="Incirlik", coalition=coalition, captured=coalition.player
+    )
+    settings = Settings()
+    settings.logistics_enabled = True
+    state = WarehouseState()
+    state.stocks[depot.id] = BaseStock(0.0, {AIM_120C: 2})
+    game = SimpleNamespace(
+        settings=settings,
+        warehouse_logistics=state,
+        theater=SimpleNamespace(
+            controlpoints=[depot],
+            find_control_point_by_id=lambda cp_id: {depot.id: depot}[cp_id],
+        ),
+    )
+    return game, coalition, depot
+
+
+def test_player_orders_are_paid_when_placed_and_refunded_when_cut() -> None:
+    from game.warehouse.supply import ordered_at, set_order
+
+    game, coalition, depot = order_world(budget=10.0)
+    assert set_order(game, depot, AIM_120C, 4) == pytest.approx(4.0)
+    assert coalition.budget == pytest.approx(6.0)
+    assert ordered_at(game.warehouse_logistics, depot) == {AIM_120C: 4}
+
+    # A price change mid-turn doesn't change what a cancellation refunds.
+    game.settings.logistics_munition_price_percent = 300
+    assert set_order(game, depot, AIM_120C, 1) == pytest.approx(-3.0)
+    assert coalition.budget == pytest.approx(9.0)
+
+    with pytest.raises(ValueError):
+        set_order(game, depot, AIM_120C, 10)  # 9 more at $3M each
+    assert coalition.budget == pytest.approx(9.0)
+
+    set_order(game, depot, AIM_120C, 0)
+    assert coalition.budget == pytest.approx(10.0)
+    assert game.warehouse_logistics.orders == {}
+
+
+def test_orders_are_free_when_munitions_cost_nothing() -> None:
+    from game.warehouse.supply import set_order
+
+    game, coalition, depot = order_world(budget=0.0)
+    game.settings.logistics_munitions_cost = False
+    set_order(game, depot, AIM_120C, 50)
+    assert coalition.budget == 0.0
+
+
+def test_orders_arrive_at_turn_end_or_are_refunded_if_the_depot_fell() -> None:
+    from game.warehouse.supply import PurchaseReport, SupplyPlanner, set_order
+
+    game, coalition, depot = order_world(budget=10.0)
+    set_order(game, depot, AIM_120C, 3)
+    set_order(game, depot, MK_82, 100)
+    planner = SupplyPlanner.__new__(SupplyPlanner)
+    planner.game = game
+    planner.coalition = coalition
+    planner.state = game.warehouse_logistics
+    report = PurchaseReport()
+    planner.deliver_orders(report)
+    stock = game.warehouse_logistics.stocks[depot.id].munitions
+    assert stock == {AIM_120C: 5, MK_82: 100}
+    assert report.delivered == {AIM_120C: 3, MK_82: 100}
+    assert game.warehouse_logistics.orders == {}
+
+    set_order(game, depot, AIM_120C, 2)
+    budget = coalition.budget
+    depot.captured = SimpleNamespace(is_blue=False)  # captured before turn end
+    report = PurchaseReport()
+    planner.deliver_orders(report)
+    assert report.refunded == pytest.approx(2.0)
+    assert coalition.budget == pytest.approx(budget + 2.0)
+    assert stock[AIM_120C] == 5
+
+
+def test_manual_purchasing_is_player_only() -> None:
+    from game.warehouse.supply import manual_purchasing
+
+    settings = Settings()
+    assert settings.logistics_manual_munition_purchases is False
+    settings.logistics_manual_munition_purchases = True
+    game: Any = SimpleNamespace(settings=settings)
+    assert manual_purchasing(game, FakeCoalition(0))  # type: ignore[arg-type]
+    red: Any = SimpleNamespace(player=SimpleNamespace(is_blue=False))
+    assert not manual_purchasing(game, red)

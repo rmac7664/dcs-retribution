@@ -49,6 +49,16 @@ each side:
    transports lose their share. In a mission flown in DCS, an airlifter only delivers
    if it lands at the destination; otherwise its share goes back to where it started.
 
+**Ordering munitions yourself.** *Order munitions…* in any base's Logistics tab opens a
+shopping list for a depot: what it holds, what the computer suggests buying (step 1's
+list, less anything already ordered), unit prices, and how many to order. *Use
+suggestions* fills in the computer's picks to edit from. Orders are paid when placed
+(cutting one refunds what was paid) and arrive at the depot at the end of the turn, then
+ship forward like any other stock; an order at a depot lost during the turn is refunded.
+With **Pick munition purchases yourself** on, the computer buys nothing for your side and
+the turn-end message says how many munition types are running short; with it off, your
+orders come on top of the automatic purchases.
+
 Red runs exactly the same planner with its own budget, depots, trucks and transports, so
 its supply runs show up as convoy and airlift targets.
 

@@ -269,6 +269,92 @@ class PurchaseReport:
     bought: Counter[str] = field(default_factory=Counter)
     unaffordable: Counter[str] = field(default_factory=Counter)
     shipments: int = 0
+    #: Munitions the player ordered last turn that arrived at their depots.
+    delivered: Counter[str] = field(default_factory=Counter)
+    #: Money returned for orders at depots lost before they arrived.
+    refunded: float = 0.0
+    #: Munition types still short that the player could order (manual purchasing).
+    still_short: int = 0
+
+
+@dataclass
+class MunitionOrder:
+    """Munitions the player ordered at one depot this turn, already paid for."""
+
+    count: int = 0
+    paid: float = 0.0
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    """One line of the computer's shopping list."""
+
+    urgency: float
+    depot: ControlPoint
+    resource: str
+    quantity: int
+
+
+def manual_purchasing(game: Game, coalition: Coalition) -> bool:
+    """True if the player picks this side's munition purchases."""
+    return (
+        coalition.player.is_blue and game.settings.logistics_manual_munition_purchases
+    )
+
+
+def ordered_at(state: WarehouseState, depot: ControlPoint) -> dict[str, int]:
+    return {
+        name: order.count
+        for name, order in state.orders.get(depot.id, {}).items()
+        if order.count > 0
+    }
+
+
+def set_order(game: Game, depot: ControlPoint, resource: str, count: int) -> float:
+    """Sets the player's order for a munition at a depot, paying or refunding the
+    difference. Returns the change in money spent (negative for a refund).
+
+    Raises ValueError if the side can't afford the increase.
+    """
+    state = game.warehouse_logistics
+    coalition = depot.coalition
+    orders = state.orders.setdefault(depot.id, {})
+    order = orders.get(resource, MunitionOrder())
+    count = max(0, count)
+    if count == order.count:
+        return 0.0
+    if count > order.count:
+        price = (
+            MunitionPrices.price(resource, game.settings)
+            if game.settings.logistics_munitions_cost
+            else 0.0
+        )
+        cost = (count - order.count) * price
+        if cost > coalition.budget + 1e-9:
+            raise ValueError(
+                f"Not enough money: {short(resource)} ×{count - order.count} costs "
+                f"${cost:,.2f}M, you have ${coalition.budget:,.2f}M."
+            )
+        coalition.adjust_budget(-cost)
+        order = MunitionOrder(count, order.paid + cost)
+        change = cost
+    else:
+        # Refund at what was paid, so a price change mid-turn can't make money.
+        refund = order.paid * (order.count - count) / order.count
+        coalition.adjust_budget(refund)
+        order = MunitionOrder(count, order.paid - refund)
+        change = -refund
+    if order.count:
+        orders[resource] = order
+    else:
+        orders.pop(resource, None)
+    if not orders:
+        state.orders.pop(depot.id, None)
+    return change
+
+
+def short(resource: str) -> str:
+    return resource.split(".", 2)[-1]
 
 
 class SupplyPlanner:
@@ -368,10 +454,17 @@ class SupplyPlanner:
 
     # Production ---------------------------------------------------------------------
 
-    def produce(self, report: PurchaseReport) -> None:
+    def suggestions(self) -> list[Suggestion]:
+        """What the side should buy this turn, most urgent first.
+
+        Each depot needs what it and the bases it serves are short of, less spare stock
+        it already holds and anything the player has already ordered there. Each
+        munition is capped at the per-turn resupply share of the side's authorized
+        total, split between depots by need.
+        """
         rate = self.settings.logistics_munitions_resupply_percent / 100
         if rate <= 0:
-            return
+            return []
         need: dict[Any, Counter[str]] = {d.id: Counter() for d in self.depots}
         for cp in self.bases:
             depot = self.served_by.get(cp.id)
@@ -385,6 +478,9 @@ class SupplyPlanner:
             for name in list(need[depot.id]):
                 spare = max(0, stock.get(name, 0) - own.get(name, 0))
                 need[depot.id][name] = max(0, need[depot.id][name] - spare)
+            for name, count in ordered_at(self.state, depot).items():
+                if name in need[depot.id]:
+                    need[depot.id][name] = max(0, need[depot.id][name] - count)
 
         total_authorized: Counter[str] = Counter()
         for auth in self.authorized.values():
@@ -398,7 +494,7 @@ class SupplyPlanner:
             total_need.update(depot_need)
 
         # Most-needed first (relative to what the side is authorized to hold).
-        orders: list[tuple[float, ControlPoint, str, int]] = []
+        orders: list[Suggestion] = []
         for depot in self.depots:
             for name, count in need[depot.id].items():
                 if count <= 0:
@@ -406,14 +502,45 @@ class SupplyPlanner:
                 share = count / max(1, total_need[name])
                 quantity = min(count, max(1, math.floor(cap.get(name, 1) * share)))
                 urgency = count / max(1, total_authorized[name])
-                orders.append((urgency, depot, name, quantity))
-        orders.sort(key=lambda o: -o[0])
+                orders.append(Suggestion(urgency, depot, name, quantity))
+        orders.sort(key=lambda o: (-o.urgency, short(o.resource)))
+        return orders
+
+    def deliver_orders(self, report: PurchaseReport) -> None:
+        """The player's orders from this turn arrive at their depots."""
+        if not self.coalition.player.is_blue:
+            return
+        for depot_id, items in list(self.state.orders.items()):
+            try:
+                depot = self.game.theater.find_control_point_by_id(depot_id)
+            except KeyError:
+                depot = None
+            if depot is None or depot.captured != self.coalition.player:
+                refund = sum(order.paid for order in items.values())
+                self.coalition.adjust_budget(refund)
+                report.refunded += refund
+                continue
+            arrived = {n: o.count for n, o in items.items() if o.count > 0}
+            self.state.receive(self.game, depot, arrived)
+            report.delivered.update(arrived)
+        self.state.orders.clear()
+
+    def produce(self, report: PurchaseReport) -> None:
+        self.deliver_orders(report)
+        if manual_purchasing(self.game, self.coalition):
+            report.still_short = len({s.resource for s in self.suggestions()})
+            return
 
         pay = self.settings.logistics_munitions_cost
         budget = self.coalition.budget * (
             self.settings.logistics_munitions_budget_percent / 100
         )
-        for _, depot, name, quantity in orders:
+        for suggestion in self.suggestions():
+            depot, name, quantity = (
+                suggestion.depot,
+                suggestion.resource,
+                suggestion.quantity,
+            )
             if pay:
                 price = MunitionPrices.price(name, self.settings)
                 affordable = (
@@ -596,6 +723,14 @@ class SupplyPlanner:
 
 def report_lines(report: PurchaseReport, settings: Settings) -> list[str]:
     lines = []
+    if report.delivered:
+        lines.append(
+            f"{sum(report.delivered.values())} ordered munitions arrived at depots."
+        )
+    if report.refunded:
+        lines.append(
+            f"${report.refunded:,.1f}M refunded for orders at depots lost this turn."
+        )
     if report.bought:
         bought = sum(report.bought.values())
         cost = (
@@ -609,6 +744,11 @@ def report_lines(report: PurchaseReport, settings: Settings) -> list[str]:
         lines.append(f"Couldn't afford: {top}.")
     if report.shipments:
         lines.append(f"{report.shipments} supply shipment(s) dispatched.")
+    if report.still_short:
+        lines.append(
+            f"{report.still_short} munition type(s) are running short. Order them "
+            "with Order munitions in any base's Logistics tab."
+        )
     return lines
 
 

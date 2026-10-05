@@ -3,8 +3,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QProgressBar,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -14,7 +16,13 @@ from game import Game
 from game.theater import ControlPoint
 from game.warehouse.munitions import ammo_only
 from game.warehouse.state import KG_PER_TON, short_name
-from game.warehouse.supply import MunitionPrices, SupplyPlanner, supply_of
+from game.warehouse.supply import (
+    MunitionPrices,
+    SupplyPlanner,
+    manual_purchasing,
+    ordered_at,
+    supply_of,
+)
 
 
 class QWarehouseInfo(QFrame):
@@ -44,6 +52,16 @@ class QWarehouseInfo(QFrame):
             role_label = QLabel(role)
             role_label.setWordWrap(True)
             content.addWidget(role_label)
+
+        if cp.captured.is_blue:
+            order_row = QHBoxLayout()
+            self.order_label = QLabel(self._order_note(cp, game))
+            self.order_label.setWordWrap(True)
+            order_row.addWidget(self.order_label, 1)
+            order_button = QPushButton("Order munitions…")
+            order_button.clicked.connect(lambda: self._open_orders(cp, game))
+            order_row.addWidget(order_button)
+            content.addLayout(order_row)
 
         fuel_group = QGroupBox("Aviation fuel")
         fuel_layout = QVBoxLayout()
@@ -120,3 +138,21 @@ class QWarehouseInfo(QFrame):
         layout = QVBoxLayout()
         layout.addWidget(scroll)
         self.setLayout(layout)
+
+    def _open_orders(self, cp: ControlPoint, game: Game) -> None:
+        from qt_ui.windows.basemenu.QMunitionOrders import QMunitionOrders
+
+        QMunitionOrders(game, cp, self).exec()
+        self.order_label.setText(self._order_note(cp, game))
+
+    @staticmethod
+    def _order_note(cp: ControlPoint, game: Game) -> str:
+        on_order = ordered_at(game.warehouse_logistics, cp)
+        if on_order:
+            summary = ", ".join(
+                f"{short_name(k)} ×{v}" for k, v in sorted(on_order.items())
+            )
+            return f"On order (arrives at turn end): {summary}"
+        if manual_purchasing(game, cp.coalition):
+            return "You pick munition purchases. Nothing on order here yet."
+        return "Munitions are bought automatically; you can order extra."

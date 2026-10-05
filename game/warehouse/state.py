@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from game.dcs.aircrafttype import AircraftType
     from game.settings import Settings
     from .plan import MissionWarehousePlan
-    from .supply import PurchaseReport
+    from .supply import MunitionOrder, PurchaseReport
     from game.debriefing import Debriefing
 
 KG_PER_TON = 1000.0
@@ -68,6 +68,9 @@ class WarehouseState:
         self.last_result: Optional[MissionResultSummary] = None
         #: Last turn's purchases and shipments per side (Player name -> report).
         self.last_purchase: dict[str, PurchaseReport] = {}
+        #: The player's munition orders this turn: depot ID -> resource -> order.
+        #: Paid when placed, delivered at turn end.
+        self.orders: dict[UUID, dict[str, MunitionOrder]] = {}
         #: Not persisted: (aircraft, date, faction, learned count) -> max load.
         self._load_cache: dict[tuple[str, Any, str, int], dict[str, int]] = {}
 
