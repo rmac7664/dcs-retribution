@@ -864,6 +864,32 @@ class Settings:
         LOGISTICS_SECTION,
         default=True,
     )
+    logistics_player_starting_supply: float = bounded_float_option(
+        "Player starting supply",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=LOGISTICS_SECTION,
+        min=0.1,
+        max=1.0,
+        divisor=100,
+        default=1.0,
+        detail=(
+            "How full the player's bases are when the campaign starts, as a fraction "
+            "of their fuel capacity and authorized munitions (1.0 = full)."
+        ),
+    )
+    logistics_enemy_starting_supply: float = bounded_float_option(
+        "Enemy starting supply",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=LOGISTICS_SECTION,
+        min=0.1,
+        max=1.0,
+        divisor=100,
+        default=1.0,
+        detail=(
+            "How full the enemy's bases are when the campaign starts, as a fraction "
+            "of their fuel capacity and authorized munitions (1.0 = full)."
+        ),
+    )
     logistics_airfield_fuel_tons: int = bounded_int_option(
         "Airfield fuel capacity (tons)",
         CAMPAIGN_MANAGEMENT_PAGE,

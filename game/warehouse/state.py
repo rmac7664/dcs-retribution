@@ -24,6 +24,7 @@ from .munitions import (
 
 if TYPE_CHECKING:
     from game import Game
+    from game.ato.flighttype import FlightType
     from game.dcs.aircrafttype import AircraftType
     from game.settings import Settings
     from .plan import MissionWarehousePlan
@@ -151,23 +152,66 @@ class WarehouseState:
         return settings.logistics_airfield_fuel_tons * KG_PER_TON
 
     def authorized_munitions(self, game: Game, cp: ControlPoint) -> dict[str, int]:
-        """Munitions a base is stocked for: N sorties of every load its squadrons use.
+        """Munitions a base is stocked for: N sorties of the loads its squadrons fly.
 
-        For each aircraft type, the per-aircraft need for a munition is the most any of
-        that type's loadouts carries (after date restrictions), so every standard and
-        user-defined loadout can be flown from a full base.
+        Each squadron is stocked for the default loadouts of the missions it flies (its
+        auto-assignable mission types): per aircraft, the most of each munition any of
+        those loadouts carries. A squadron whose missions have no loadouts with
+        munitions falls back to every loadout its aircraft has.
         """
         prefixes = metered_prefixes(game.settings)
         sorties = game.settings.logistics_munitions_sorties
-        per_type: dict[AircraftType, int] = Counter()
-        for squadron in cp.squadrons:
-            per_type[squadron.aircraft] += squadron.owned_aircraft
         authorized: Counter[str] = Counter()
-        for aircraft, count in per_type.items():
-            for name, per_aircraft in self._max_loads(game, cp, aircraft).items():
+        for squadron in cp.squadrons:
+            count = squadron.owned_aircraft
+            if count <= 0:
+                continue
+            tasks = set(squadron.auto_assignable_mission_types) | {
+                squadron.primary_task
+            }
+            loads = self._task_loads(game, cp, squadron.aircraft, tasks)
+            if not any(name.startswith(prefixes) for name in loads):
+                loads = self._max_loads(game, cp, squadron.aircraft)
+            for name, per_aircraft in loads.items():
                 if name.startswith(prefixes):
                     authorized[name] += per_aircraft * count * sorties
         return dict(authorized)
+
+    def _task_loads(
+        self,
+        game: Game,
+        cp: ControlPoint,
+        aircraft: AircraftType,
+        tasks: set[FlightType],
+    ) -> dict[str, int]:
+        """Per aircraft, the most of each munition the tasks' default loadouts carry."""
+        from game.ato.loadouts import Loadout
+
+        faction = cp.coalition.faction
+        task_key = ",".join(sorted(t.value for t in tasks))
+        key = (
+            f"{aircraft.variant_id}|{task_key}",
+            game.date,
+            faction.name,
+            len(self.learned),
+        )
+        cached = self._load_cache.get(key)
+        if cached is not None:
+            return cached
+        catalog = self.catalog
+        best: Counter[str] = Counter()
+        for task in tasks:
+            loadout = Loadout.default_for_task_and_aircraft(
+                task, aircraft.dcs_unit_type
+            )
+            if game.settings.restrict_weapons_by_date:
+                loadout = loadout.degrade_for_date(aircraft, game.date, faction)
+            weapons = [w for w in loadout.pylons.values() if w is not None]
+            demand, _, _ = catalog.demand(weapons)
+            for name, count in demand.items():
+                best[name] = max(best[name], count)
+        self._load_cache[key] = dict(best)
+        return self._load_cache[key]
 
     def _max_loads(
         self, game: Game, cp: ControlPoint, aircraft: AircraftType
@@ -197,15 +241,25 @@ class WarehouseState:
         """The base's stock, created on first sight.
 
         Bases the logistics system manages (airfields, carriers, the rear area) start
-        full. Anything else seen for the first time, such as a FOB holding stock for
+        full, scaled by the player's or enemy's starting supply setting. Anything else seen for the first time, such as a FOB holding stock for
         shipping, starts empty and fills from production or deliveries.
         """
         stock = self.stocks.get(cp.id)
         if stock is None:
             if self.is_managed(cp, game.settings):
+                settings = game.settings
+                fill = (
+                    settings.logistics_player_starting_supply
+                    if cp.captured.is_blue
+                    else settings.logistics_enemy_starting_supply
+                )
                 stock = BaseStock(
-                    jet_fuel_kg=self.fuel_capacity_kg(cp, game.settings),
-                    munitions=self.authorized_munitions(game, cp),
+                    jet_fuel_kg=self.fuel_capacity_kg(cp, settings) * fill,
+                    munitions={
+                        name: int(count * fill)
+                        for name, count in self.authorized_munitions(game, cp).items()
+                        if int(count * fill) > 0
+                    },
                 )
             else:
                 stock = BaseStock(jet_fuel_kg=0.0)

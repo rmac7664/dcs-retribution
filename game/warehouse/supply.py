@@ -502,9 +502,17 @@ class SupplyPlanner:
 
     @staticmethod
     def is_depot(cp: ControlPoint) -> bool:
+        """Where new munitions are bought: the rear area, and carriers (by ship).
+
+        A land base is a depot only if it has a live ammo depot, factory, fuel depot
+        or warehouse, has been held since the campaign began, and isn't on a front
+        line. Front-line and captured bases are always supplied by supply run.
+        """
         if isinstance(cp, (OffMapSpawn, NavalControlPoint)):
             return True
         if cp.captured.is_neutral:
+            return False
+        if cp.captured != cp.starting_coalition or cp.has_frontline:
             return False
         return any(
             tgo.category in DEPOT_CATEGORIES and not tgo.is_dead
