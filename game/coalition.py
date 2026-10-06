@@ -198,7 +198,10 @@ class Coalition:
         # This isn't quite right. If the player has ground purchases automated we should
         # be refunding the ground units, and if they have air automated but not ground
         # we should be refunding air units.
-        if self.player and not self.game.settings.automate_aircraft_reinforcements:
+        if (
+            self.player.is_blue
+            and not self.game.settings.automate_aircraft_reinforcements
+        ):
             return
 
         for cp in self.game.theater.control_points_for(self.player):
