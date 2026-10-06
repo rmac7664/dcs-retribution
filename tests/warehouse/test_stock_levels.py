@@ -70,11 +70,13 @@ def land_base(
     owner: Player, started: Player, front: bool, depot_alive: bool = True
 ) -> Any:
     building = SimpleNamespace(category="ammo", is_dead=not depot_alive)
+    no_rear_area = SimpleNamespace(theater=SimpleNamespace(controlpoints=[]))
     return SimpleNamespace(
         captured=owner,
         starting_coalition=started,
         has_frontline=front,
         connected_objectives=[building],
+        coalition=SimpleNamespace(game=no_rear_area),
     )
 
 
@@ -109,3 +111,93 @@ def test_starting_supply_scales_each_sides_first_stock(
     red = state.ensure_stock(game, base(Player.RED))
     assert blue.jet_fuel_kg == 500 and blue.munitions == {AIM_9: 20, MK_82: 1}
     assert red.jet_fuel_kg == 250 and red.munitions == {AIM_9: 10}
+
+
+class FakeBase:
+    def __init__(self, name: str, x: float, owner: Player, started: Player) -> None:
+        from dcs.mapping import Point
+        from dcs.terrain import Caucasus
+
+        self.name = name
+        self.position = Point(x, 0, Caucasus())
+        self.captured = owner
+        self.starting_coalition = started
+
+    def runway_is_operational(self) -> bool:
+        return True
+
+
+class FakeAirfield(FakeBase):
+    pass
+
+
+class FakeOffMap(FakeBase):
+    """Like OffMapSpawn, not an Airfield."""
+
+
+def test_rear_area_supplies_arrive_at_the_rear_most_airfield(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import game.warehouse.supply as supply_module
+
+    monkeypatch.setattr(supply_module, "Airfield", FakeAirfield)
+    monkeypatch.setattr(supply_module, "OffMapSpawn", FakeOffMap)
+    blue, red = Player.BLUE, Player.RED
+    rear = FakeAirfield("Vaziani", 0, blue, blue)
+    forward = FakeAirfield("Tbilisi", 150_000, blue, blue)
+    captured = FakeAirfield("Sukhumi", -100_000, blue, red)  # farther, but captured
+    enemy = FakeAirfield("Sochi", 250_000, red, red)
+    off_map: Any = FakeOffMap("Fairford", 900_000, blue, blue)
+    points = [rear, forward, captured, enemy]
+    game: Any = SimpleNamespace(
+        theater=SimpleNamespace(controlpoints=points + [off_map])
+    )
+
+    assert supply_module.airhead(game, blue) is rear
+    # No off-map rear area, no airhead.
+    game.theater.controlpoints = points
+    assert supply_module.airhead(game, blue) is None
+
+
+def test_rear_area_runs_waiting_off_map_continue_from_the_airhead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import game.warehouse.supply as supply_module
+
+    monkeypatch.setattr(supply_module, "OffMapSpawn", FakeOffMap)
+    airhead: Any = SimpleNamespace(name="Vaziani")
+    off_map = FakeOffMap("Fairford", 0, Player.BLUE, Player.BLUE)
+    onward = SimpleNamespace(
+        supplies="cargo",
+        transport=None,
+        position=off_map,
+        destination=SimpleNamespace(name="Sukhumi"),
+    )
+    delivered_here = SimpleNamespace(
+        supplies="cargo",
+        transport=None,
+        position=off_map,
+        destination=airhead,
+        units={"truck": 2},
+    )
+    flying = SimpleNamespace(
+        supplies="cargo", transport="airlift", position=off_map, destination=airhead
+    )
+    pending = [onward, delivered_here, flying]
+    unloaded: list[Any] = []
+    monkeypatch.setattr(supply_module, "supply_of", lambda t: t.supplies)
+    monkeypatch.setattr(
+        supply_module, "deliver", lambda t, cp: unloaded.append((t, cp))
+    )
+    planner = SupplyPlanner.__new__(SupplyPlanner)
+    planner.airhead = airhead
+    planner.coalition = SimpleNamespace(  # type: ignore[assignment]
+        transfers=SimpleNamespace(pending_transfers=pending)
+    )
+
+    planner._land_rear_area_runs()
+
+    assert onward.position is airhead
+    assert unloaded == [(delivered_here, airhead)] and delivered_here not in pending
+    # Already on its way (has a transport): left alone.
+    assert flying.position is off_map and flying in pending

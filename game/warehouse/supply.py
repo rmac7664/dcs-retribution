@@ -28,7 +28,12 @@ from typing import Any, ClassVar, Iterable, Optional, TYPE_CHECKING
 
 import yaml
 
-from game.theater.controlpoint import ControlPoint, NavalControlPoint, OffMapSpawn
+from game.theater.controlpoint import (
+    Airfield,
+    ControlPoint,
+    NavalControlPoint,
+    OffMapSpawn,
+)
 from .munitions import MunitionCatalog, metered_prefixes
 
 if TYPE_CHECKING:
@@ -413,6 +418,37 @@ def short(resource: str) -> str:
     return resource.split(".", 2)[-1]
 
 
+def airhead(game: Game, player: Any) -> Optional[ControlPoint]:
+    """Where the side's off-map rear area delivers: its rear-most main airfield.
+
+    Stock from the rear area arrives here by strategic airlift (it isn't flown in the
+    mission and can't be intercepted) and goes forward by convoy or airlift. It is the
+    side's airfield with a working runway, held since the campaign began, that is
+    farthest from any enemy base. None if the side has no off-map rear area or no such
+    airfield.
+    """
+    points = list(game.theater.controlpoints)
+    if not any(isinstance(cp, OffMapSpawn) and cp.captured == player for cp in points):
+        return None
+    enemy = [cp.position for cp in points if cp.captured == player.opponent]
+    candidates = [
+        cp
+        for cp in points
+        if isinstance(cp, Airfield)
+        and cp.captured == player
+        and cp.starting_coalition == player
+        and cp.runway_is_operational()
+    ]
+    if not candidates:
+        return None
+
+    def safety(cp: ControlPoint) -> tuple[float, str]:
+        nearest = min((cp.position.distance_to_point(e) for e in enemy), default=0.0)
+        return nearest, cp.name
+
+    return max(candidates, key=safety)
+
+
 class SupplyPlanner:
     """Turn-end production and distribution for one side."""
 
@@ -427,6 +463,8 @@ class SupplyPlanner:
             for cp in self.state.managed_points(game)
             if cp.captured == coalition.player
         ]
+        self.airhead = airhead(game, coalition.player)
+        self._land_rear_area_runs()
         if game.settings.logistics_supply_lines:
             self.depots = [cp for cp in self.bases if self.is_depot(cp)]
             # Forward supply points: FOBs and other bases with a live ammo/fuel
@@ -512,12 +550,41 @@ class SupplyPlanner:
             return True
         if cp.captured.is_neutral:
             return False
+        if airhead(cp.coalition.game, cp.captured) is cp:
+            return True
         if cp.captured != cp.starting_coalition or cp.has_frontline:
             return False
         return any(
             tgo.category in DEPOT_CATEGORIES and not tgo.is_dead
             for tgo in cp.connected_objectives
         )
+
+    def _land_rear_area_runs(self) -> None:
+        """Supply runs waiting in the off-map rear area are flown to the airhead.
+
+        Strategic airlift: they continue from the airhead by convoy or airlift (or
+        are unloaded there if it's their destination), instead of a transport being
+        sent to the edge of the map to collect them.
+        """
+        if self.airhead is None:
+            return
+        transfers = self.coalition.transfers.pending_transfers
+        for transfer in list(transfers):
+            if supply_of(transfer) is None or transfer.transport is not None:
+                continue
+            if not isinstance(transfer.position, OffMapSpawn):
+                continue
+            if transfer.destination is self.airhead:
+                deliver(transfer, self.airhead)
+                transfer.units.clear()
+                transfers.remove(transfer)
+            else:
+                transfer.position = self.airhead
+            logging.info(
+                "Supply: rear-area supply run for %s landed at the airhead %s",
+                transfer.destination.name,
+                self.airhead.name,
+            )
 
     def _assign_depots(self) -> dict[Any, ControlPoint]:
         network = self.coalition.transit_network
@@ -530,6 +597,9 @@ class SupplyPlanner:
             for depot in self.depots:
                 if isinstance(depot, NavalControlPoint):
                     # Ship's stores replenish the ship; they don't go ashore.
+                    continue
+                if isinstance(depot, OffMapSpawn) and self.airhead is not None:
+                    # The rear area supplies the theater through its airhead.
                     continue
                 try:
                     if not network.has_path_between(depot, cp):
