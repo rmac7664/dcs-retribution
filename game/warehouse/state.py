@@ -127,7 +127,13 @@ class WarehouseState:
         if isinstance(cp, (Airfield, OffMapSpawn)):
             # Off-map spawns are the rear-area depot; they have no DCS warehouse.
             return True
-        return isinstance(cp, NavalControlPoint) and (cp.is_carrier or cp.is_lha)
+        # A sunk carrier or LHA is no longer a base: nothing is stocked or shipped
+        # for it (its squadrons were lost with it).
+        return (
+            isinstance(cp, NavalControlPoint)
+            and (cp.is_carrier or cp.is_lha)
+            and cp.runway_is_operational()
+        )
 
     def managed_points(self, game: Game) -> Iterator[ControlPoint]:
         for cp in game.theater.controlpoints:

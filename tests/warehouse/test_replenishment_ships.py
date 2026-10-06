@@ -267,3 +267,26 @@ def test_red_and_blue_supply_ships_look_different() -> None:
     red = ReplenishmentShipGenerator.ship_type("RED", lst)
     assert blue.dcs_unit_type is dcs.ships.Ship_Tilde_Supply
     assert red.dcs_unit_type is dcs.ships.ELNYA
+
+
+def test_a_sunk_carrier_is_no_longer_supplied(monkeypatch: pytest.MonkeyPatch) -> None:
+    import game.warehouse.state as state_module
+
+    class Carrier:
+        is_carrier = True
+        is_lha = False
+
+        def __init__(self, afloat: bool) -> None:
+            self.afloat = afloat
+            self.captured = SimpleNamespace(is_neutral=False, is_blue=True)
+
+        def runway_is_operational(self) -> bool:
+            return self.afloat
+
+    monkeypatch.setattr(state_module, "NavalControlPoint", Carrier)
+    settings = Settings()
+    settings.logistics_enabled = True
+    afloat: Any = Carrier(afloat=True)
+    sunk: Any = Carrier(afloat=False)
+    assert WarehouseState.is_managed(afloat, settings)
+    assert not WarehouseState.is_managed(sunk, settings)
