@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from game.transfers import TransferOrder
     from .state import WarehouseState
 
+from .state import SupplyShip
+
 PRICES = Path("resources/warehouse/munition_prices.yaml")
 DEPOT_CATEGORIES = {"ammo", "factory", "fuel", "ware"}
 
@@ -275,6 +277,10 @@ class PurchaseReport:
     refunded: float = 0.0
     #: Munition types still short that the player could order (manual purchasing).
     still_short: int = 0
+    #: Replenishment ships sent to carriers, unloaded, and lost with their carrier.
+    ships_sent: int = 0
+    ships_arrived: int = 0
+    ships_lost: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -403,7 +409,46 @@ class SupplyPlanner:
             share = load.scaled(transfer.size / max(1, load.carriers))
             self.inbound[transfer.destination.id].update(share.munitions)
             self.inbound_fuel[transfer.destination.id] += share.fuel_kg
+        # Ships already at sea count too, so a carrier is never ordered for twice.
+        for cp in self.bases:
+            for ship in self.state.ships_bound_for(cp):
+                self.inbound[cp.id].update(ship.munitions)
+                self.inbound_fuel[cp.id] += ship.fuel_kg
+        #: What this turn's replenishment ships will carry, by carrier ID. Carriers
+        #: buy like any depot, but what they buy arrives by ship a turn later.
+        self.ship_cargo: dict[Any, SupplyShip] = {}
         self.served_by = self._assign_depots()
+
+    def _stock_or_ship(
+        self, cp: ControlPoint, munitions: dict[str, int], fuel_kg: float = 0.0
+    ) -> None:
+        """New stores for `cp`: straight into stock, or onto a carrier's ship."""
+        if not isinstance(cp, NavalControlPoint):
+            self.state.receive(self.game, cp, munitions, fuel_kg)
+            return
+        ship = self.ship_cargo.get(cp.id)
+        if ship is None:
+            ship = SupplyShip(cp.id, cp.name, self.coalition.player.name)
+            self.ship_cargo[cp.id] = ship
+        for name, count in munitions.items():
+            ship.munitions[name] = ship.munitions.get(name, 0) + count
+        ship.fuel_kg += fuel_kg
+        self.inbound[cp.id].update(munitions)
+        self.inbound_fuel[cp.id] += fuel_kg
+
+    def dispatch_ships(self, report: PurchaseReport) -> None:
+        for ship in self.ship_cargo.values():
+            if ship.is_empty():
+                continue
+            self.state.supply_ships.append(ship)
+            report.ships_sent += 1
+            logging.info(
+                "Supply: replenishment ship sails for %s (%d munitions, %.1f t fuel)",
+                ship.carrier_name,
+                sum(ship.munitions.values()),
+                ship.fuel_kg / 1000,
+            )
+        self.ship_cargo.clear()
 
     @staticmethod
     def is_depot(cp: ControlPoint) -> bool:
@@ -521,7 +566,7 @@ class SupplyPlanner:
                 report.refunded += refund
                 continue
             arrived = {n: o.count for n, o in items.items() if o.count > 0}
-            self.state.receive(self.game, depot, arrived)
+            self._stock_or_ship(depot, arrived)
             report.delivered.update(arrived)
         self.state.orders.clear()
 
@@ -553,8 +598,7 @@ class SupplyPlanner:
             else:
                 bought = quantity
             if bought:
-                stock = self.state.stocks[depot.id].munitions
-                stock[name] = stock.get(name, 0) + bought
+                self._stock_or_ship(depot, {name: bought})
                 report.bought[name] += bought
         if pay and report.spent:
             self.coalition.adjust_budget(-report.spent)
@@ -569,6 +613,12 @@ class SupplyPlanner:
         for cp in self.bases:
             stock = self.state.stocks[cp.id]
             capacity = self.state.fuel_capacity_kg(cp, self.settings)
+            if isinstance(cp, NavalControlPoint):
+                # Ships are refuelled by their replenishment ship, not at sea.
+                gap = capacity - stock.jet_fuel_kg - self.inbound_fuel[cp.id]
+                if gap >= 1:
+                    self._stock_or_ship(cp, {}, min(gap, capacity * rate))
+                continue
             if by_supply_lines:
                 if cp not in self.depots:
                     continue
@@ -716,6 +766,7 @@ class SupplyPlanner:
         report = PurchaseReport()
         self.produce_fuel()
         self.produce(report)
+        self.dispatch_ships(report)
         if self.settings.logistics_supply_lines:
             self.distribute(report)
         return report
@@ -744,6 +795,13 @@ def report_lines(report: PurchaseReport, settings: Settings) -> list[str]:
         lines.append(f"Couldn't afford: {top}.")
     if report.shipments:
         lines.append(f"{report.shipments} supply shipment(s) dispatched.")
+    if report.ships_sent:
+        lines.append(f"{report.ships_sent} replenishment ship(s) sailed for carriers.")
+    if report.ships_arrived:
+        lines.append(f"{report.ships_arrived} replenishment ship(s) unloaded.")
+    if report.ships_lost:
+        names = ", ".join(sorted(set(report.ships_lost)))
+        lines.append(f"Cargo lost: no carrier left to unload at ({names}).")
     if report.still_short:
         lines.append(
             f"{report.still_short} munition type(s) are running short. Order them "

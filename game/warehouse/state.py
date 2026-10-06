@@ -32,6 +32,30 @@ if TYPE_CHECKING:
 
 KG_PER_TON = 1000.0
 
+#: Turns a carrier supply ship spends at sea. Ships set out about an hour and a half's
+#: sailing from the carrier, so they arrive during the next turn.
+SUPPLY_SHIP_TRANSIT_TURNS = 1
+
+
+@dataclass
+class SupplyShip:
+    """A replenishment ship sailing to a carrier or LHA with its stores.
+
+    Carriers have no shipping lanes (they move), so these don't use the transfer
+    system. What the ship carries counts as inbound, so nothing is ordered twice.
+    """
+
+    carrier_id: UUID
+    carrier_name: str
+    #: Name of the Player (side) that sent the ship.
+    side: str
+    munitions: dict[str, int] = field(default_factory=dict)
+    fuel_kg: float = 0.0
+    turns_left: int = SUPPLY_SHIP_TRANSIT_TURNS
+
+    def is_empty(self) -> bool:
+        return not any(self.munitions.values()) and self.fuel_kg < 1
+
 
 @dataclass
 class BaseStock:
@@ -71,6 +95,8 @@ class WarehouseState:
         #: The player's munition orders this turn: depot ID -> resource -> order.
         #: Paid when placed, delivered at turn end.
         self.orders: dict[UUID, dict[str, MunitionOrder]] = {}
+        #: Replenishment ships at sea, bound for carriers and LHAs.
+        self.supply_ships: list[SupplyShip] = []
         #: Not persisted: (aircraft, date, faction, learned count) -> max load.
         self._load_cache: dict[tuple[str, Any, str, int], dict[str, int]] = {}
 
@@ -191,7 +217,12 @@ class WarehouseState:
         for coalition in (game.blue, game.red):
             if coalition.player.is_red and not game.settings.logistics_apply_to_opfor:
                 continue
+            # Ships that left last turn unload first, so they aren't counted as both
+            # stock and inbound when this turn's needs are worked out.
+            arrived, lost = self.arrive_supply_ships(game, coalition.player.name)
             report = SupplyPlanner(game, coalition).run()
+            report.ships_arrived += arrived
+            report.ships_lost.extend(lost)
             self.last_purchase[coalition.player.name] = report
             if coalition.player.is_blue:
                 lines = report_lines(report, game.settings)
@@ -203,6 +234,74 @@ class WarehouseState:
                     sum(report.bought.values()),
                     report.spent,
                 )
+
+    def arrive_supply_ships(self, game: Game, side: str) -> tuple[int, list[str]]:
+        """Advances one side's supply ships; those due unload at their carrier.
+
+        Returns how many unloaded, and the names of carriers whose ship had nobody to
+        unload to (the carrier was sunk or changed hands), so its cargo was lost.
+        """
+        arrived = 0
+        lost: list[str] = []
+        at_sea: list[SupplyShip] = []
+        for ship in self.supply_ships:
+            if ship.side != side:
+                at_sea.append(ship)
+                continue
+            ship.turns_left -= 1
+            if ship.turns_left > 0:
+                at_sea.append(ship)
+                continue
+            try:
+                carrier: Optional[ControlPoint] = game.theater.find_control_point_by_id(
+                    ship.carrier_id
+                )
+            except KeyError:
+                carrier = None
+            if (
+                carrier is None
+                or carrier.captured.name != side
+                or not carrier.runway_is_operational()
+            ):
+                logging.info(
+                    "Supply: ship for %s lost its carrier; cargo lost",
+                    ship.carrier_name,
+                )
+                lost.append(ship.carrier_name)
+                continue
+            self.receive(game, carrier, ship.munitions, ship.fuel_kg)
+            arrived += 1
+            logging.info("Supply: replenishment ship unloaded at %s", carrier.name)
+        self.supply_ships = at_sea
+        return arrived, lost
+
+    def ships_bound_for(self, cp: ControlPoint) -> Iterator[SupplyShip]:
+        for ship in self.supply_ships:
+            if ship.carrier_id == cp.id:
+                yield ship
+
+    def on_capture(self, game: Game, cp: ControlPoint) -> None:
+        """A base changed hands: its munitions are destroyed, half its fuel survives.
+
+        Called before the base flips. A base the old owner never stocked (e.g. OPFOR
+        with logistics off) is taken as having been full, so the captor finds half a
+        fuel farm and no munitions rather than a fully stocked warehouse.
+        """
+        if not game.settings.logistics_enabled:
+            return
+        stock = self.stocks.get(cp.id)
+        if stock is not None:
+            fuel_kg = stock.jet_fuel_kg
+        elif cp.captured.is_neutral:
+            fuel_kg = 0.0
+        else:
+            fuel_kg = self.fuel_capacity_kg(cp, game.settings)
+        self.stocks[cp.id] = BaseStock(jet_fuel_kg=fuel_kg / 2, munitions={})
+        logging.info(
+            "Supply: %s captured; munitions destroyed, %.1f t of fuel remain",
+            cp.name,
+            fuel_kg / 2 / KG_PER_TON,
+        )
 
     # Mission results ----------------------------------------------------------------
 

@@ -1033,6 +1033,7 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
     # TODO: Should be Airbase specific.
     def capture(self, game: Game, events: GameUpdateEvents, for_player: Player) -> None:
         new_coalition = game.coalition_for(for_player)
+        game.warehouse_logistics.on_capture(game, self)
         self.ground_unit_orders.refund_all(self.coalition)
         self.retreat_ground_units(game)
         self.retreat_air_units(game)
