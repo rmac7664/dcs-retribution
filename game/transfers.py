@@ -364,8 +364,9 @@ class AirliftPlanner:
             EventStream.put_nowait(events)
 
     def create_airlift_flight(self, squadron: Squadron) -> int:
-        from game.warehouse.supply import carriers_per_aircraft
+        from game.warehouse.supply import carriers_per_aircraft, fit_pallets
 
+        fit_pallets(self.transfer, squadron.aircraft)
         available_aircraft = squadron.untasked_aircraft
         # Ground units: one per helicopter, two per plane. Supply: by cargo weight.
         capacity_each = carriers_per_aircraft(self.transfer, squadron.aircraft)
@@ -434,13 +435,13 @@ class MultiGroupTransport(MissionTarget, Transport):
         self.transfers.remove(transfer)
 
     def kill_unit(self, unit_type: GroundUnitType) -> None:
-        for transfer in self.transfers:
-            try:
-                transfer.kill_unit(unit_type)
-                return
-            except KeyError:
-                pass
-        raise KeyError
+        # Take the loss from whichever order has the most of that unit left, so losses
+        # in a merged convoy are spread over its orders instead of all hitting the
+        # first one.
+        carrying = [t for t in self.transfers if t.units.get(unit_type, 0) > 0]
+        if not carrying:
+            raise KeyError
+        max(carrying, key=lambda t: t.units[unit_type]).kill_unit(unit_type)
 
     def kill_all(self) -> None:
         for transfer in self.transfers:

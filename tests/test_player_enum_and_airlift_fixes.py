@@ -77,31 +77,51 @@ def test_helicopter_airlift_checks_the_leg_to_the_destination() -> None:
     assert not helicopter_planner(150).compatible_with_mission(helicopter(), home)
 
 
+class FakeTransports:
+    def __init__(self, transports: list[Any]) -> None:
+        self.transports = transports
+
+    def travelling_to(self, cp: Any) -> list[Any]:
+        return [t for t in self.transports if t.destination is cp]
+
+    def __iter__(self) -> Any:
+        return iter(self.transports)
+
+
+def transport(name: str, destination: Any, supplies: Any = None) -> Any:
+    order = SimpleNamespace(supplies=supplies)
+    return SimpleNamespace(name=name, destination=destination, transfers=[order])
+
+
 def test_ai_targets_the_enemys_convoys_and_cargo_ships() -> None:
     from game.commander.objectivefinder import ObjectiveFinder
 
-    red_base = SimpleNamespace(name="Red forward base")
+    red_front = SimpleNamespace(name="Red forward base")
+    red_rear = SimpleNamespace(name="Red rear base")
+    to_front = transport("tanks to the front", red_front)
+    rear_supply = transport("munitions to the rear", red_rear, supplies="cargo")
+    rear_tanks = transport("tanks to the rear", red_rear)
+    red = FakeTransports([to_front, rear_supply, rear_tanks])
+    blue = FakeTransports([transport("blue convoy", red_front)])
 
-    def transfers_of(player: Player) -> Any:
-        mine = ["red convoy"] if player.is_red else []
-        travelling = SimpleNamespace(
-            travelling_to=lambda cp: list(mine) if cp is red_base else []
-        )
+    def coalition_for(player: Player) -> Any:
+        transports = red if player.is_red else blue
         return SimpleNamespace(
-            transfers=SimpleNamespace(convoys=travelling, cargo_ships=travelling)
+            transfers=SimpleNamespace(convoys=transports, cargo_ships=transports)
         )
 
-    front_line = SimpleNamespace(control_point_hostile_to=lambda _player: red_base)
+    front_line = SimpleNamespace(control_point_hostile_to=lambda _player: red_front)
     game: Any = SimpleNamespace(
         settings=SimpleNamespace(
             perf_disable_convoys=False, perf_disable_cargo_ships=False
         ),
         theater=SimpleNamespace(conflicts=lambda: [front_line]),
-        coalition_for=transfers_of,
+        coalition_for=coalition_for,
     )
     finder = ObjectiveFinder(game, Player.BLUE)
-    assert list(finder.convoys()) == ["red convoy"]
-    assert list(finder.cargo_ships()) == ["red convoy"]
+    # Red's own front-line convoy, plus red supply runs anywhere; never blue's.
+    assert list(finder.convoys()) == [to_front, rear_supply]
+    assert list(finder.cargo_ships()) == [to_front, rear_supply]
 
     game.settings.perf_disable_cargo_ships = True
     assert list(finder.cargo_ships()) == []

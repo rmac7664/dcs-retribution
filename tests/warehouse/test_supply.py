@@ -10,6 +10,7 @@ from game.warehouse.supply import (
     SupplyLoad,
     cargo_tons,
     carriers_per_aircraft,
+    fit_pallets,
 )
 
 AIM_120C = "weapons.missiles.AIM_120C"
@@ -66,13 +67,56 @@ def test_cargo_capacity_by_type() -> None:
 def test_airlift_capacity_counts_pallets_by_weight() -> None:
     supply = SimpleNamespace(supplies=SupplyLoad({AIM_120C: 60}, tons=40, carriers=4))
     ground = SimpleNamespace(supplies=None)
-    # 10 t pallets: a C-17 takes 8, a C-130 two, a Mi-8 at least one.
-    assert carriers_per_aircraft(supply, aircraft("C-17A")) == 8  # type: ignore[arg-type]
-    assert carriers_per_aircraft(supply, aircraft("C-130J-30")) == 2  # type: ignore[arg-type]
+    # 10 t pallets, whole pallets only: a C-17 (77 t) takes 7, a C-130 (19 t) one.
+    assert carriers_per_aircraft(supply, aircraft("C-17A")) == 7  # type: ignore[arg-type]
+    assert carriers_per_aircraft(supply, aircraft("C-130J-30")) == 1  # type: ignore[arg-type]
     assert carriers_per_aircraft(supply, aircraft("Mi-8MT", True)) == 1  # type: ignore[arg-type]
     # Ground-unit transfers keep the old rule.
     assert carriers_per_aircraft(ground, aircraft("C-130")) == 2  # type: ignore[arg-type]
     assert carriers_per_aircraft(ground, aircraft("Mi-8MT", True)) == 1  # type: ignore[arg-type]
+
+
+def test_small_helicopters_get_smaller_pallets() -> None:
+    truck = "truck"
+    transfer = SimpleNamespace(
+        units={truck: 4},
+        supplies=SupplyLoad({AIM_120C: 40}, fuel_kg=0, tons=40, carriers=4),
+    )
+    transfer.size = 4
+    mi8 = aircraft("Mi-8MT", True)
+
+    fit_pallets(transfer, mi8)  # type: ignore[arg-type]
+
+    # 40 t no longer goes up as four 10 t truckloads: ten 4 t pallets instead.
+    assert transfer.units == {truck: 10}
+    assert transfer.supplies.carriers == 10
+    assert transfer.supplies.tons_per_carrier == pytest.approx(4)
+    assert transfer.supplies.munitions == {AIM_120C: 40}
+    assert carriers_per_aircraft(transfer, mi8) == 1  # type: ignore[arg-type]
+
+
+def test_pallets_lost_on_the_way_are_not_repacked_into_cargo() -> None:
+    transfer = SimpleNamespace(
+        units={"truck": 2},
+        supplies=SupplyLoad({AIM_120C: 40}, tons=40, carriers=4),
+    )
+    transfer.size = 2
+
+    fit_pallets(transfer, aircraft("Mi-8MT", True))  # type: ignore[arg-type]
+
+    # Two of four trucks were lost: only the surviving 20 t is repacked.
+    assert transfer.supplies.munitions == {AIM_120C: 20}
+    assert transfer.units == {"truck": 5}
+
+
+def test_big_transports_keep_their_pallets() -> None:
+    load = SupplyLoad({AIM_120C: 40}, tons=40, carriers=4)
+    transfer = SimpleNamespace(units={"truck": 4}, supplies=load)
+    transfer.size = 4
+
+    fit_pallets(transfer, aircraft("C-17A"))  # type: ignore[arg-type]
+
+    assert transfer.supplies is load and transfer.units == {"truck": 4}
 
 
 def test_airlifter_that_did_not_land_brings_its_cargo_back() -> None:

@@ -6,6 +6,7 @@
 * **[Logistics]** Order munitions yourself: "Order munitions…" in any base's Logistics tab lets you pick what each depot buys, with the computer's suggestions pre-filled. Orders are paid when placed and arrive at the end of the turn. Turn on "Pick munition purchases yourself" to stop automatic purchases for your side.
 * **[Logistics]** Carriers and LHAs are resupplied by replenishment ships: what a carrier buys sails a turn later and is lost if the carrier sinks first. Stores already at sea count toward its needs, so nothing is ordered twice.
 * **[Logistics]** Capturing a base destroys the munitions stored there and leaves half its fuel. A base the enemy never stocked is no longer captured fully stocked.
+* **[Logistics]** The AI now hunts enemy supply runs behind the lines as well as at the front. Airlifts are sized by real cargo weight (smaller aircraft get smaller pallets), and a supply airlift that hadn't landed when a mission stopped brings its cargo back.
 * **[Modding]** Added support for the CurrentHill Iran Military Assets pack: the Shahed-136 launcher, two IRGCN fast-attack craft, and a new `[CH] Iran 2020` faction, behind a New Game mods checkbox. (#886)
 * **[Kneeboard]** Use a light-grey daytime kneeboard background instead of near-white, to avoid glare under HDR / Auto-HDR while staying readable in daylight.
 * **[UX]** Hovering a friendly flight's route line on the map highlights it in yellow, and clicking it selects that flight's package (and the flight) in the ATO sidebar.

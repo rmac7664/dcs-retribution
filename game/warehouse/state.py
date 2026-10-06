@@ -188,12 +188,21 @@ class WarehouseState:
     # Lifecycle --------------------------------------------------------------------
 
     def ensure_stock(self, game: Game, cp: ControlPoint) -> BaseStock:
+        """The base's stock, created on first sight.
+
+        Bases the logistics system manages (airfields, carriers, the rear area) start
+        full. Anything else seen for the first time, such as a FOB holding stock for
+        shipping, starts empty and fills from production or deliveries.
+        """
         stock = self.stocks.get(cp.id)
         if stock is None:
-            stock = BaseStock(
-                jet_fuel_kg=self.fuel_capacity_kg(cp, game.settings),
-                munitions=self.authorized_munitions(game, cp),
-            )
+            if self.is_managed(cp, game.settings):
+                stock = BaseStock(
+                    jet_fuel_kg=self.fuel_capacity_kg(cp, game.settings),
+                    munitions=self.authorized_munitions(game, cp),
+                )
+            else:
+                stock = BaseStock(jet_fuel_kg=0.0)
             self.stocks[cp.id] = stock
         return stock
 
@@ -204,8 +213,15 @@ class WarehouseState:
         munitions: dict[str, int],
         fuel_kg: float = 0.0,
     ) -> None:
-        """Adds delivered or returned cargo to a base's stock."""
-        stock = self.ensure_stock(game, cp)
+        """Adds delivered or returned cargo to a base's stock.
+
+        A base with no stock yet starts from empty, so cargo arriving somewhere new
+        never comes with a free full warehouse.
+        """
+        stock = self.stocks.get(cp.id)
+        if stock is None:
+            stock = BaseStock(jet_fuel_kg=0.0)
+            self.stocks[cp.id] = stock
         for name, count in munitions.items():
             stock.munitions[name] = stock.munitions.get(name, 0) + count
         stock.jet_fuel_kg += fuel_kg
@@ -310,19 +326,16 @@ class WarehouseState:
     ) -> None:
         """Supply airlifters that didn't land at their destination bring cargo back.
 
-        Only applied when the mission script reported deliveries, i.e. the mission
-        was flown in DCS and ended normally. Shot-down transports are handled by the
-        regular airlift loss processing.
+        Applied whenever the mission script reported, even if the mission didn't end
+        cleanly: an airlifter that hadn't landed when the mission stopped didn't
+        deliver. Without any report (the mission wasn't flown in DCS) transports
+        are assumed to arrive. Shot-down transports are handled by the regular
+        airlift loss processing.
         """
         from .supply import return_to, supply_of
 
         plan = self.pending_plan
-        if (
-            plan is None
-            or not data
-            or not debriefing.state_data.mission_ended
-            or not getattr(plan, "cargo_units", None)
-        ):
+        if plan is None or not data or not getattr(plan, "cargo_units", None):
             return
         delivered = _as_dict(data.get("delivered"))
         killed = set(debriefing.state_data.killed_aircraft)

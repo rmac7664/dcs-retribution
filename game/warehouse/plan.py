@@ -203,7 +203,11 @@ class MissionWarehousePlan:
             destination = transfer.destination
             if transfer.transport is not None:
                 destination = transfer.transport.destination
-            self.cargo_units[str(unit.name)] = str(destination.id)
+            # The mission script only sees landings at bases with a warehouse plan
+            # (airfields, carriers). A leg to a FOB or helipad can't be confirmed, so
+            # it counts as delivered unless the transport is shot down.
+            if destination.id in self.bases:
+                self.cargo_units[str(unit.name)] = str(destination.id)
         base = self.bases.get(flight.departure.id)
         if base is None:
             return

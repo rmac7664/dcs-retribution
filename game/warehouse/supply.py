@@ -228,10 +228,36 @@ def supply_of(transfer: TransferOrder) -> Optional[SupplyLoad]:
 
 
 def carriers_per_aircraft(transfer: TransferOrder, aircraft: AircraftType) -> int:
+    """Trucks or pallets of a transfer one aircraft can lift.
+
+    Supply loads are sized by weight: only whole pallets that fit count. Call
+    `fit_pallets` first so a pallet is never heavier than the aircraft can carry.
+    """
     load = supply_of(transfer)
     if load is None:
         return 1 if aircraft.dcs_unit_type.helicopter else 2
-    return max(1, round(cargo_tons(aircraft) / max(0.1, load.tons_per_carrier)))
+    return max(1, int(cargo_tons(aircraft) / max(0.1, load.tons_per_carrier) + 1e-6))
+
+
+def fit_pallets(transfer: TransferOrder, aircraft: AircraftType) -> None:
+    """Repacks a supply load into pallets no heavier than `aircraft` can lift.
+
+    Supply runs are loaded into ~10 t trucks. A helicopter that lifts 4 t can't take
+    a whole truckload, so the remaining cargo is split into smaller pallets.
+    """
+    load = supply_of(transfer)
+    if load is None or len(transfer.units) != 1:
+        return
+    capacity = cargo_tons(aircraft)
+    if capacity <= 0 or load.tons_per_carrier <= capacity + 1e-6:
+        return
+    (unit_type,) = transfer.units
+    # Trucks lost on earlier legs took their share of the cargo with them.
+    remaining = load.scaled(transfer.size / max(1, load.carriers))
+    pallets = max(1, math.ceil(remaining.tons / capacity - 1e-9))
+    remaining.carriers = pallets
+    transfer.supplies = remaining
+    transfer.units[unit_type] = pallets
 
 
 def deliver(transfer: TransferOrder, location: ControlPoint) -> None:
@@ -261,7 +287,9 @@ def return_to(transfer: TransferOrder, location: ControlPoint, carriers: int) ->
     if load is None or carriers <= 0:
         return
     game = location.coalition.game
-    cargo = load.scaled(carriers / max(1, load.carriers))
+    # Taken out of the load (not just scaled), so what is returned plus what is later
+    # delivered adds up to the whole load: no munitions vanish to rounding.
+    cargo = load.split_off(min(carriers, load.carriers))
     game.warehouse_logistics.receive(game, location, cargo.munitions, cargo.fuel_kg)
 
 

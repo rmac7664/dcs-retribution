@@ -31,9 +31,10 @@ from game.utils import meters, nautical_miles
 
 if TYPE_CHECKING:
     from game import Game
-    from game.transfers import CargoShip, Convoy
+    from game.transfers import CargoShip, Convoy, MultiGroupTransport, TransportMap
 
 MissionTargetType = TypeVar("MissionTargetType", bound=MissionTarget)
+TransportT = TypeVar("TransportT", bound="MultiGroupTransport")
 
 
 class ObjectiveFinder:
@@ -223,24 +224,39 @@ class ObjectiveFinder:
     def convoys(self) -> Iterator[Convoy]:
         if self.game.settings.perf_disable_convoys:
             return
-        # The enemy's convoys heading for its front-line bases.
-        for front_line in self.front_lines():
-            yield from self.game.coalition_for(
-                self.is_player.opponent
-            ).transfers.convoys.travelling_to(
-                front_line.control_point_hostile_to(self.is_player)
-            )
+        yield from self._enemy_transports(
+            self.game.coalition_for(self.is_player.opponent).transfers.convoys
+        )
 
     def cargo_ships(self) -> Iterator[CargoShip]:
         if self.game.settings.perf_disable_cargo_ships:
             return
-        # The enemy's cargo ships heading for its front-line bases.
+        yield from self._enemy_transports(
+            self.game.coalition_for(self.is_player.opponent).transfers.cargo_ships
+        )
+
+    def _enemy_transports(
+        self, transports: TransportMap[TransportT]
+    ) -> Iterator[TransportT]:
+        """The enemy's transports worth attacking.
+
+        Anything heading for a front-line base, plus supply runs carrying fuel and
+        munitions wherever they are, so cutting supply lines behind the front pays.
+        """
+        seen: set[int] = set()
         for front_line in self.front_lines():
-            yield from self.game.coalition_for(
-                self.is_player.opponent
-            ).transfers.cargo_ships.travelling_to(
+            for transport in transports.travelling_to(
                 front_line.control_point_hostile_to(self.is_player)
-            )
+            ):
+                if id(transport) not in seen:
+                    seen.add(id(transport))
+                    yield transport
+        for transport in transports:
+            if id(transport) in seen:
+                continue
+            if any(transfer.supplies is not None for transfer in transport.transfers):
+                seen.add(id(transport))
+                yield transport
 
     def friendly_control_points(self) -> Iterator[ControlPoint]:
         """Iterates over all friendly control points."""
