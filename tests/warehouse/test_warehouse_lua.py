@@ -322,18 +322,27 @@ def lua_with_ship() -> Any:
     return runtime
 
 
-def test_replenishment_ship_is_steered_at_the_carrier_until_alongside(
+def test_replenishment_ship_keeps_its_route_until_close(lua_with_ship: Any) -> None:
+    lua_with_ship.execute("""
+        ship._point = { x = 30000, y = 0, z = 0 }  -- 16 nm out
+        run_scheduled()
+    """)
+    assert to_py(lua_with_ship.globals().tasks) == {}
+
+
+def test_replenishment_ship_chases_the_carrier_on_final_approach(
     lua_with_ship: Any,
 ) -> None:
     lua_with_ship.execute("""
-        ship._point = { x = 30000, y = 0, z = 0 }
+        carrier._point = { x = 1000, y = 0, z = 2000 }
+        ship._point = { x = 1000, y = 0, z = 15000 }  -- 7 nm off
         run_scheduled()
         result = retributionWarehouses.export(false)
     """)
     g = lua_with_ship.globals()
-    task = to_py(g.tasks)["CVN-71 replenishment 1"]
-    # Heading for where the carrier is now.
-    assert task["params"]["route"]["points"][2]["x"] == 0
+    route = to_py(g.tasks)["CVN-71 replenishment 1"]["params"]["route"]["points"]
+    # Mission routes take DCS x (north) and y (= world z, east).
+    assert (route[2]["x"], route[2]["y"]) == (1000, 2000)
     assert to_py(g.result)["replenished"] == {}
     assert to_py(g.carrier_base._wh["items"]) == {}
 
@@ -352,9 +361,8 @@ def test_replenishment_ship_unloads_into_the_carrier_when_alongside(
     # Usable in DCS straight away...
     assert to_py(g.carrier_base._wh["items"]) == {"weapons.missiles.AIM_120C": 12}
     assert g.carrier_base._wh.fuel == 1500000 + 40000
-    # ...and booked to the carrier's ledger for Retribution.
-    assert result["bases"]["cpB"]["mun"] == {"weapons.missiles.AIM_120C": 12}
-    assert result["bases"]["cpB"]["fuel"] == 40000
+    # ...but not booked to the ledger: Retribution credits the cargo itself.
+    assert result["bases"] == {}
     assert g.dirty_state is True
 
 

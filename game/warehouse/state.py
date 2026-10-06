@@ -296,16 +296,14 @@ class WarehouseState:
         game: Game,
         debriefing: Debriefing,
         data: Optional[dict[str, Any]],
-        mission_ended: bool,
     ) -> None:
         """Replenishment ships that were in the mission: unloaded, sunk, or still out.
 
-        A ship that came alongside unloaded straight into the carrier's DCS warehouse,
-        and the mission script booked it to the carrier's ledger, so when the mission
-        ended cleanly the cargo arrives with the rest of the mission results. If it
-        didn't end cleanly those results aren't applied, so the cargo is added here.
-        A sunk ship loses its cargo. Ships still sailing arrive at the end of the turn
-        as usual.
+        A ship that came alongside unloaded straight into the carrier's DCS warehouse;
+        the mission script reports it as replenished (without booking it to the
+        ledger), and its cargo is added to the carrier's stock here, whether or not the
+        mission ended cleanly. A sunk ship loses its cargo. Ships still sailing arrive
+        at the end of the turn as usual.
         """
         reported = _as_dict(data.get("replenished")) if data else {}
         unloaded: list[str] = []
@@ -314,12 +312,11 @@ class WarehouseState:
             if ship is None or not self._remove_ship(ship):
                 continue
             unloaded.append(ship.carrier_name)
-            if not mission_ended:
-                try:
-                    carrier = game.theater.find_control_point_by_id(ship.carrier_id)
-                except KeyError:
-                    continue
-                self.receive(game, carrier, ship.munitions, ship.fuel_kg)
+            try:
+                carrier = game.theater.find_control_point_by_id(ship.carrier_id)
+            except KeyError:
+                continue
+            self.receive(game, carrier, ship.munitions, ship.fuel_kg)
         for ship in debriefing.replenishment_ships_lost():
             if self._remove_ship(ship):
                 logging.info(

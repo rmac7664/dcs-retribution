@@ -185,9 +185,7 @@ def test_disabled_ships_stay_off_the_map(monkeypatch: pytest.MonkeyPatch) -> Non
 # Debrief -----------------------------------------------------------------------------
 
 
-def debrief_setup(
-    killed: list[str], replenished: dict[str, bool], mission_ended: bool
-) -> Any:
+def debrief_setup(killed: list[str], replenished: dict[str, bool]) -> Any:
     carrier = SimpleNamespace(id=uuid.uuid4(), name="CVN-73")
     settings = Settings()
     settings.logistics_enabled = True
@@ -197,6 +195,8 @@ def debrief_setup(
         theater=SimpleNamespace(find_control_point_by_id=lambda _id: carrier),
         message=lambda title, _text="": messages.append(title),
     )
+    carrier.captured = SimpleNamespace(name="BLUE")
+    carrier.runway_is_operational = lambda: True
     state = WarehouseState()
     state.stocks[carrier.id] = BaseStock(0.0)
     unloaded = SupplyShip(carrier.id, carrier.name, "BLUE", {AIM_120C: 12}, 5000)
@@ -212,25 +212,23 @@ def debrief_setup(
     debriefing.unit_map = SimpleNamespace(  # type: ignore[assignment]
         replenishment_ship=ships.get
     )
-    state.apply_replenishment(
-        game, debriefing, {"replenished": replenished}, mission_ended
-    )
+    state.apply_replenishment(game, debriefing, {"replenished": replenished})
     return SimpleNamespace(
-        state=state, carrier=carrier, sailing=sailing, messages=messages
+        game=game, state=state, carrier=carrier, sailing=sailing, messages=messages
     )
 
 
-def test_unloaded_ships_are_booked_by_the_mission_results() -> None:
-    result = debrief_setup(["Ship 2"], {"Ship 1": True}, mission_ended=True)
-    # Ship 1's cargo comes in through the carrier's ledger, not twice.
-    assert result.state.stocks[result.carrier.id].munitions == {}
+def test_unloaded_cargo_is_credited_once_and_sunk_cargo_is_lost() -> None:
+    result = debrief_setup(["Ship 2"], {"Ship 1": True})
+    stock = result.state.stocks[result.carrier.id]
+    assert stock.munitions == {AIM_120C: 12} and stock.jet_fuel_kg == 5000
     # Ship 2 was sunk; only Ship 3, still sailing, is left at sea.
     assert result.state.supply_ships == [result.sailing]
     assert result.messages == ["Logistics: replenishment ship sunk"]
 
-
-def test_unloaded_cargo_is_kept_even_if_the_mission_did_not_end_cleanly() -> None:
-    result = debrief_setup([], {"Ship 1": True}, mission_ended=False)
-    stock = result.state.stocks[result.carrier.id]
-    assert stock.munitions == {AIM_120C: 12} and stock.jet_fuel_kg == 5000
-    assert len(result.state.supply_ships) == 2
+    # At the end of the turn only the ship still at sea arrives: Ship 1's cargo is
+    # not delivered a second time and Ship 2's never arrives.
+    arrived, lost = result.state.arrive_supply_ships(result.game, "BLUE")
+    assert (arrived, lost) == (1, [])
+    assert stock.munitions == {AIM_120C: 16}
+    assert result.state.supply_ships == []

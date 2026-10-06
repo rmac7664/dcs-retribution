@@ -13,7 +13,8 @@
 --   player leaves an aircraft parked-> credit what is still aboard
 --   still alive at mission end      -> credit what is aboard to where it is (or home)
 --   destroyed                       -> nothing comes back
---   replenishment ship alongside    -> credit the carrier with the ship's stores
+--   replenishment ship alongside    -> stores go into the carrier's DCS warehouse
+--                                      (Retribution credits them itself; not booked)
 --
 -- It also reports, once per mission, DCS' resource map (warehouse item name -> wsType),
 -- which Retribution needs to write limited warehouses, and what aircraft with not yet
@@ -287,12 +288,15 @@ local function warehouseFor(dcsName)
 end
 
 -- Replenishment ships ------------------------------------------------------------------
--- Each ship sails for its carrier. Every minute it is re-steered at the carrier's
--- current position; once within ALONGSIDE_METERS its stores go into the carrier's DCS
--- warehouse (usable straight away) and are booked to the carrier in the ledger.
+-- Each ship sails for where its carrier's launch-and-recovery leg ends. Once within
+-- APPROACH_METERS of the carrier it is re-steered at the carrier every minute; within
+-- ALONGSIDE_METERS its stores go into the carrier's DCS warehouse, usable straight
+-- away. They aren't booked to the ledger: Retribution credits the cargo itself when it
+-- reads "replenished", whether or not the mission ends cleanly.
 
 local replenishment = data.replenishment or {}
 local ALONGSIDE_METERS = 5556 -- 3 nm
+local APPROACH_METERS = 18520 -- 10 nm
 local SAIL_SPEED = 6.17 -- 12 kt, in m/s
 
 local function aliveUnit(name)
@@ -334,7 +338,6 @@ local function unload(shipName, ship)
             pcall(warehouse.addLiquid, warehouse, 0, ship.fuel)
         end
     end
-    book(ship.cp, ship.mun or {}, ship.fuel or 0, 1)
     W.replenished[shipName] = true
     dirty_state = true
     log(shipName .. " came alongside " .. tostring(ship.carrier) .. " and unloaded")
@@ -350,9 +353,12 @@ local function checkReplenishment()
                 atSea = true
                 local a, b = shipUnit:getPoint(), carrier:getPoint()
                 local dx, dz = a.x - b.x, a.z - b.z
-                if math.sqrt(dx * dx + dz * dz) <= ALONGSIDE_METERS then
+                local distance = math.sqrt(dx * dx + dz * dz)
+                if distance <= ALONGSIDE_METERS then
                     unload(shipName, ship)
-                else
+                elseif distance <= APPROACH_METERS then
+                    -- Final approach: chase the carrier itself. Further out the ship
+                    -- keeps to its route, since the carrier usually outruns it.
                     steer(shipUnit, b)
                 end
             end
