@@ -5,7 +5,7 @@ jobs:
     name: Python tests
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
 
@@ -18,13 +18,13 @@ jobs:
           pytest --cov --cov-report=xml tests
 
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
 
   ts-tests:
     name: Typescript tests
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up JS environment
         uses: ./.github/actions/setup-liberation-js
@@ -35,4 +35,4 @@ jobs:
           npm test -- --coverage
 
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
