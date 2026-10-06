@@ -1,10 +1,12 @@
 """Puts carrier replenishment ships in the mission.
 
 Each SupplyShip the logistics system has at sea (game/warehouse/state.py) becomes a
-single ship that starts about an hour and a half's sailing from its carrier and heads
-for it. The warehouse script (dcs_retribution_warehouses.lua) keeps steering it at the
-carrier and, when it comes alongside, unloads its stores into the carrier's warehouse.
-If it is sunk on the way its cargo is lost.
+single ship timed to meet its carrier an hour and a half into the mission: the meeting
+point is where the carrier will be by then along its route, and the ship starts an
+hour and a half's sailing from there. On final approach the warehouse script
+(dcs_retribution_warehouses.lua) steers it at the carrier and, when it comes alongside,
+unloads its stores into the carrier's warehouse. If it is sunk on the way its cargo is
+lost.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from typing import Callable, Optional, TYPE_CHECKING
 import dcs.ships
 from dcs import Mission
 from dcs.mapping import Point
+from dcs.point import MovingPoint
 from dcs.unitgroup import ShipGroup
 
 from game.dcs.shipunittype import ShipUnitType
@@ -28,13 +31,42 @@ if TYPE_CHECKING:
     from game.unitmap import UnitMap
     from game.warehouse.state import SupplyShip
 
-#: How far out the ship starts: an hour and a half at its cruising speed.
+#: The ship meets its carrier this far into the mission, sailing at SAIL_SPEED.
 SAIL_SPEED = knots(12)
-START_DISTANCE = nautical_miles(18)
+MEET_AFTER_SECONDS = 90 * 60
+START_DISTANCE = nautical_miles(SAIL_SPEED.knots * MEET_AFTER_SECONDS / 3600)
 
-#: DCS ship types for the role, most fitting first. The faction's cargo ship is the
-#: fallback.
-SHIP_PREFERENCE = (dcs.ships.Ship_Tilde_Supply, dcs.ships.ELNYA, dcs.ships.HandyWind)
+#: DCS ship types for the role, most fitting first; the faction's cargo ship is the
+#: fallback. Red uses the Soviet Project 160 fleet oiler, so the sides look different.
+SHIP_PREFERENCE = {
+    "BLUE": (dcs.ships.Ship_Tilde_Supply, dcs.ships.HandyWind),
+    "RED": (dcs.ships.ELNYA, dcs.ships.Dry_cargo_ship_2),
+}
+
+
+def position_after(points: list[MovingPoint], seconds: float) -> Point:
+    """Where a group following `points` will be after `seconds`.
+
+    Each leg is sailed at the speed set on the waypoint it heads for. A group that
+    has run out of route (or is told to stop) stays at its last point.
+    """
+    here = points[0].position
+    remaining = seconds
+    for waypoint in points[1:]:
+        leg = here.distance_to_point(waypoint.position)
+        speed = waypoint.speed  # m/s
+        if leg <= 0:
+            continue
+        if speed <= 0:
+            return here
+        if remaining * speed < leg:
+            return here.point_from_heading(
+                here.heading_between_point(waypoint.position), remaining * speed
+            )
+        remaining -= leg / speed
+        here = waypoint.position
+    return here
+
 
 #: Bearings tried (relative to "directly away from the enemy") to find open water.
 BEARING_OFFSETS = (0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180)
@@ -108,8 +140,8 @@ class ReplenishmentShipGenerator:
         if info is None:
             return
         carrier_group: ShipGroup = info.ship_group
-        # Meet the carrier where its launch-and-recovery leg ends.
-        rendezvous = carrier_group.points[-1].position
+        # Meet the carrier where it will be MEET_AFTER_SECONDS into the mission.
+        rendezvous = position_after(list(carrier_group.points), MEET_AFTER_SECONDS)
         threat = self.nearest_enemy_base(cp)
         start = start_point(
             rendezvous, threat, START_DISTANCE, self.game.theater.is_in_sea
@@ -127,7 +159,7 @@ class ReplenishmentShipGenerator:
         group = self.mission.ship_group(
             country,
             name,
-            self.ship_type(coalition.faction.cargo_ship).dcs_unit_type,
+            self.ship_type(ship.side, coalition.faction.cargo_ship).dcs_unit_type,
             position=start,
             group_size=1,
         )
@@ -156,8 +188,8 @@ class ReplenishmentShipGenerator:
         return min(enemy, key=lambda p: p.distance_to_point(cp.position))
 
     @staticmethod
-    def ship_type(fallback: ShipUnitType) -> ShipUnitType:
-        for dcs_type in SHIP_PREFERENCE:
+    def ship_type(side: str, fallback: ShipUnitType) -> ShipUnitType:
+        for dcs_type in SHIP_PREFERENCE.get(side, ()):
             for unit_type in ShipUnitType.for_dcs_type(dcs_type):
                 return unit_type
         return fallback

@@ -146,7 +146,8 @@ def test_ships_at_sea_are_put_in_the_mission(monkeypatch: pytest.MonkeyPatch) ->
         if str(g.name) == info.group_name
     )
     assert group.units[0].type == dcs.ships.Ship_Tilde_Supply.id
-    # It sails for the end of the carrier's launch-and-recovery leg, from 18 nm out.
+    # This carrier finishes its short leg before 90 minutes, so they meet at its end;
+    # the ship starts 18 nm (90 minutes at 12 kt) out.
     assert group.points[-1].position.distance_to_point(at(30_000, 0)) < 1
     assert group.points[0].position.distance_to_point(at(30_000, 0)) == pytest.approx(
         nautical_miles(18).meters, rel=1e-3
@@ -232,3 +233,37 @@ def test_unloaded_cargo_is_credited_once_and_sunk_cargo_is_lost() -> None:
     assert (arrived, lost) == (1, [])
     assert stock.munitions == {AIM_120C: 16}
     assert result.state.supply_ships == []
+
+
+def test_meeting_point_is_where_the_carrier_will_be_after_90_minutes() -> None:
+    from dcs.point import MovingPoint
+
+    from game.missiongenerator.replenishmentshipgenerator import (
+        MEET_AFTER_SECONDS,
+        position_after,
+    )
+
+    def waypoint(x: float, speed_ms: float) -> MovingPoint:
+        p = MovingPoint(at(x, 0))
+        p.speed = speed_ms
+        return p
+
+    # Like the Lincoln's route in a real test: a 54 nm leg at 21.4 kt (11 m/s).
+    leg = nautical_miles(54).meters
+    route = [waypoint(0, 11.0), waypoint(leg, 11.0)]
+    meet = position_after(route, MEET_AFTER_SECONDS)
+    assert meet.x == pytest.approx(11.0 * MEET_AFTER_SECONDS, rel=1e-3)
+    # A short leg the carrier finishes early: it waits at the end.
+    assert position_after([waypoint(0, 11), waypoint(5000, 11)], 5400).x == (
+        pytest.approx(5000)
+    )
+    # A stopped carrier stays put.
+    assert position_after([waypoint(0, 0), waypoint(5000, 0)], 5400).x == 0
+
+
+def test_red_and_blue_supply_ships_look_different() -> None:
+    lst = next(iter(ShipUnitType.for_dcs_type(dcs.ships.LST_Mk2)))
+    blue = ReplenishmentShipGenerator.ship_type("BLUE", lst)
+    red = ReplenishmentShipGenerator.ship_type("RED", lst)
+    assert blue.dcs_unit_type is dcs.ships.Ship_Tilde_Supply
+    assert red.dcs_unit_type is dcs.ships.ELNYA
