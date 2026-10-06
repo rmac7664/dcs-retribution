@@ -32,6 +32,7 @@
 ## Fixes
 * **[Procurement]** Enemy ground and aircraft orders are refunded at turn start again when "Automate aircraft reinforcements" is off for the player.
 * **[Transfers]** Helicopter airlifts now check the distance to the drop-off; enemy transfers are labelled as such.
+* **[Campaign AI]** The AI plans convoy interdiction and anti-shipping strikes against enemy transports again (it was looking at its own side's convoys). "Disable cargo ships" now also stops the AI from targeting them.
 * **[Mission Generation]** Airlift cargo stops on carriers and LHAs land on the ship instead of using an airfield ID.
 * **[UI]** Buying or selling a ground object re-plans only the side that was targeting it.
 * **[Mission Generation]** Fix mission generation dying on "Duplicate convoy unit": convoy and cargo-ship names no longer reset each turn onto a convoy still in transit.

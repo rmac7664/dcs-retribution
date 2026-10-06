@@ -75,3 +75,33 @@ def test_helicopter_airlift_checks_the_leg_to_the_destination() -> None:
     assert helicopter_planner(60).compatible_with_mission(helicopter(), home)
     # Pickup is at home, so only the 150 nm leg is too long.
     assert not helicopter_planner(150).compatible_with_mission(helicopter(), home)
+
+
+def test_ai_targets_the_enemys_convoys_and_cargo_ships() -> None:
+    from game.commander.objectivefinder import ObjectiveFinder
+
+    red_base = SimpleNamespace(name="Red forward base")
+
+    def transfers_of(player: Player) -> Any:
+        mine = ["red convoy"] if player.is_red else []
+        travelling = SimpleNamespace(
+            travelling_to=lambda cp: list(mine) if cp is red_base else []
+        )
+        return SimpleNamespace(
+            transfers=SimpleNamespace(convoys=travelling, cargo_ships=travelling)
+        )
+
+    front_line = SimpleNamespace(control_point_hostile_to=lambda _player: red_base)
+    game: Any = SimpleNamespace(
+        settings=SimpleNamespace(
+            perf_disable_convoys=False, perf_disable_cargo_ships=False
+        ),
+        theater=SimpleNamespace(conflicts=lambda: [front_line]),
+        coalition_for=transfers_of,
+    )
+    finder = ObjectiveFinder(game, Player.BLUE)
+    assert list(finder.convoys()) == ["red convoy"]
+    assert list(finder.cargo_ships()) == ["red convoy"]
+
+    game.settings.perf_disable_cargo_ships = True
+    assert list(finder.cargo_ships()) == []
