@@ -160,3 +160,61 @@ def test_losses_in_a_merged_convoy_are_spread_over_its_orders() -> None:
 
     assert first.units[truck] + second.units[truck] == 3
     assert first.units[truck] >= 1 and second.units[truck] >= 1
+
+
+def test_pallets_go_back_into_full_trucks_for_the_road() -> None:
+    from game.warehouse.supply import load_into_trucks
+
+    settings = Settings()  # 10 t trucks, at most 6 per shipment
+    transfer: Any = SimpleNamespace(
+        units={"truck": 10},
+        supplies=SupplyLoad({AIM_120C: 40}, tons=40, carriers=10),
+    )
+    transfer.size = 10
+
+    load_into_trucks(transfer, settings)
+
+    assert transfer.units == {"truck": 4}
+    assert transfer.supplies.carriers == 4
+    assert transfer.supplies.munitions == {AIM_120C: 40}
+
+
+def test_an_empty_order_is_not_repacked() -> None:
+    from game.warehouse.supply import fit_pallets
+
+    transfer: Any = SimpleNamespace(
+        units={"truck": 0}, supplies=SupplyLoad({AIM_120C: 4}, tons=40, carriers=4)
+    )
+    transfer.size = 0
+    mi8: Any = SimpleNamespace(
+        dcs_unit_type=SimpleNamespace(id="Mi-8MT", helicopter=True)
+    )
+
+    fit_pallets(transfer, mi8)
+
+    assert transfer.units == {"truck": 0}
+
+
+def test_airlifts_to_bases_dropped_from_the_mission_count_as_delivered() -> None:
+    from dcs import Mission
+    from dcs.terrain import Caucasus
+
+    from game.missiongenerator.missiondata import MissionData
+
+    kept, dropped = fob(), fob()
+    plan = MissionWarehousePlan.__new__(MissionWarehousePlan)
+    # A non-Airfield, non-naval base is dropped by apply_to_mission.
+    dropped_base: Any = SimpleNamespace(
+        cp=dropped, fuel_kg=0.0, calibrate=True, munitions={}
+    )
+    plan.bases = {dropped.id: dropped_base}
+    plan.cargo_units = {"Hip 1": str(dropped.id), "Herc 1": str(kept.id)}
+    plan.units = {}
+    plan.learn_keys = set()
+    plan.prefixes = ("weapons.missiles.",)
+    plan.state = WarehouseState()
+    plan.report = lambda: None  # type: ignore[method-assign]
+
+    plan.apply_to_mission(Mission(Caucasus()), MissionData())
+
+    assert plan.cargo_units == {}

@@ -296,6 +296,13 @@ class MissionWarehousePlan:
             else:
                 del self.bases[cp.id]
 
+        # Bases dropped above have no warehouse in the mission, so the script can't
+        # confirm landings there either: those airlifts count as delivered.
+        known = {str(cp_id) for cp_id in self.bases}
+        self.cargo_units = {
+            name: dest for name, dest in self.cargo_units.items() if dest in known
+        }
+
         trigger = TriggerStart(comment="Set DCS Retribution warehouse data")
         trigger.add_action(
             DoScript(

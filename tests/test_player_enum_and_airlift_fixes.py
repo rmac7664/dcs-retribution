@@ -96,12 +96,14 @@ def transport(name: str, destination: Any, supplies: Any = None) -> Any:
 def test_ai_targets_the_enemys_convoys_and_cargo_ships() -> None:
     from game.commander.objectivefinder import ObjectiveFinder
 
-    red_front = SimpleNamespace(name="Red forward base")
-    red_rear = SimpleNamespace(name="Red rear base")
+    red_front = SimpleNamespace(name="Red forward base", position=point(0))
+    red_rear = SimpleNamespace(name="Red rear base", position=point(100))
+    red_far = SimpleNamespace(name="Red deep rear base", position=point(400))
     to_front = transport("tanks to the front", red_front)
     rear_supply = transport("munitions to the rear", red_rear, supplies="cargo")
+    far_supply = transport("munitions far away", red_far, supplies="cargo")
     rear_tanks = transport("tanks to the rear", red_rear)
-    red = FakeTransports([to_front, rear_supply, rear_tanks])
+    red = FakeTransports([to_front, rear_supply, far_supply, rear_tanks])
     blue = FakeTransports([transport("blue convoy", red_front)])
 
     def coalition_for(player: Player) -> Any:
@@ -110,7 +112,9 @@ def test_ai_targets_the_enemys_convoys_and_cargo_ships() -> None:
             transfers=SimpleNamespace(convoys=transports, cargo_ships=transports)
         )
 
-    front_line = SimpleNamespace(control_point_hostile_to=lambda _player: red_front)
+    front_line = SimpleNamespace(
+        control_point_hostile_to=lambda _player: red_front, position=point(0)
+    )
     game: Any = SimpleNamespace(
         settings=SimpleNamespace(
             perf_disable_convoys=False, perf_disable_cargo_ships=False
@@ -119,7 +123,8 @@ def test_ai_targets_the_enemys_convoys_and_cargo_ships() -> None:
         coalition_for=coalition_for,
     )
     finder = ObjectiveFinder(game, Player.BLUE)
-    # Red's own front-line convoy, plus red supply runs anywhere; never blue's.
+    # Red's front-line convoy and red supply runs within 150 nm of the front; never
+    # blue's own, nor red supply runs deep in the rear.
     assert list(finder.convoys()) == [to_front, rear_supply]
     assert list(finder.cargo_ships()) == [to_front, rear_supply]
 

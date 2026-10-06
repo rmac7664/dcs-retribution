@@ -36,6 +36,9 @@ if TYPE_CHECKING:
 MissionTargetType = TypeVar("MissionTargetType", bound=MissionTarget)
 TransportT = TypeVar("TransportT", bound="MultiGroupTransport")
 
+#: Enemy supply runs to bases this close to a front line are worth attacking.
+REAR_SUPPLY_RANGE = nautical_miles(150)
+
 
 class ObjectiveFinder:
     """Identifies potential objectives for the mission planner."""
@@ -241,20 +244,28 @@ class ObjectiveFinder:
         """The enemy's transports worth attacking.
 
         Anything heading for a front-line base, plus supply runs carrying fuel and
-        munitions wherever they are, so cutting supply lines behind the front pays.
+        munitions to bases within REAR_SUPPLY_RANGE of a front line, so cutting supply
+        lines behind the front pays without sending strikes deep into the rear.
         """
         seen: set[int] = set()
-        for front_line in self.front_lines():
+        front_lines = list(self.front_lines())
+        for front_line in front_lines:
             for transport in transports.travelling_to(
                 front_line.control_point_hostile_to(self.is_player)
             ):
                 if id(transport) not in seen:
                     seen.add(id(transport))
                     yield transport
+        reach = REAR_SUPPLY_RANGE.meters
         for transport in transports:
             if id(transport) in seen:
                 continue
-            if any(transfer.supplies is not None for transfer in transport.transfers):
+            if not any(t.supplies is not None for t in transport.transfers):
+                continue
+            destination = transport.destination.position
+            if any(
+                destination.distance_to_point(f.position) <= reach for f in front_lines
+            ):
                 seen.add(id(transport))
                 yield transport
 
