@@ -13,7 +13,7 @@ from typing import Optional, Sequence, TYPE_CHECKING
 
 from dcs.mapping import Point
 from game.dcs.groundunittype import GroundUnitType
-from game.theater import ControlPoint, NavalControlPoint, OffMapSpawn
+from game.theater import ControlPoint, NavalControlPoint
 from game.theater.player import Player
 from game.transfers import TransferOrder
 
@@ -52,9 +52,7 @@ def distance_nm(p1: Point, p2: Point) -> float:
     return p1.distance_to_point(p2) / 1852.0  # 1 nautical mile = 1852 meters
 
 
-def get_travel_distance_nm(
-    origin: ControlPoint, destination: ControlPoint
-) -> float:
+def get_travel_distance_nm(origin: ControlPoint, destination: ControlPoint) -> float:
     """Calculate approximate travel distance in nautical miles via shipping lane."""
     try:
         route: Sequence[Point] = origin.shipping_lanes.get(destination, ())
@@ -87,7 +85,7 @@ class CarrierResupplyPlanner:
         """
         needs: list[CarrierResupplyNeed] = []
 
-        for cp in self.game.theater.control_points:
+        for cp in self.game.theater.controlpoints:
             # Only process friendly naval control points
             if cp.captured != self.coalition.player:
                 continue
@@ -108,22 +106,20 @@ class CarrierResupplyPlanner:
 
             # Check if resupply is needed (threshold: >40% destroyed = <60% remaining)
             ammo_depleted = (
-                total_ammo > 0 and active_ammo / total_ammo < AMMO_DEPOT_RESUPPLY_THRESHOLD
+                total_ammo > 0
+                and active_ammo / total_ammo < AMMO_DEPOT_RESUPPLY_THRESHOLD
             )
             fuel_depleted = (
-                total_fuel > 0 and active_fuel / total_fuel < FUEL_DEPOT_RESUPPLY_THRESHOLD
+                total_fuel > 0
+                and active_fuel / total_fuel < FUEL_DEPOT_RESUPPLY_THRESHOLD
             )
 
             if not (ammo_depleted or fuel_depleted):
                 continue
 
             # Calculate urgency: higher for more losses
-            ammo_urgency = (
-                (missing_ammo / total_ammo) if total_ammo > 0 else 0.0
-            )
-            fuel_urgency = (
-                (missing_fuel / total_fuel) if total_fuel > 0 else 0.0
-            )
+            ammo_urgency = (missing_ammo / total_ammo) if total_ammo > 0 else 0.0
+            fuel_urgency = (missing_fuel / total_fuel) if total_fuel > 0 else 0.0
             urgency = max(ammo_urgency, fuel_urgency)
 
             need = CarrierResupplyNeed(
@@ -144,9 +140,7 @@ class CarrierResupplyPlanner:
         needs.sort(key=lambda n: -n.urgency)
         return needs
 
-    def find_nearest_depot(
-        self, destination: ControlPoint
-    ) -> Optional[ControlPoint]:
+    def find_nearest_depot(self, destination: ControlPoint) -> Optional[ControlPoint]:
         """Find nearest suitable depot to source supplies from.
 
         Prefers depots with active warehouse infrastructure and checks for
@@ -154,10 +148,8 @@ class CarrierResupplyPlanner:
         """
         depots = [
             cp
-            for cp in self.game.theater.control_points
-            if cp.captured == self.coalition.player
-            and (isinstance(cp, OffMapSpawn) or cp.has_runway or cp.has_helipads)
-            and self._has_warehouse(cp)
+            for cp in self.game.theater.controlpoints
+            if cp.captured == self.coalition.player and self._has_warehouse(cp)
         ]
 
         if not depots:
@@ -194,32 +186,14 @@ class CarrierResupplyPlanner:
         """
         faction = self.coalition.faction
 
-        # Try to find logistics/transport units in the faction
-        # Common logistics units: Ural-4320 (USSR), M1078 LMTV (USA), etc.
-        logistics_unit_names = {"Ural", "LMTV", "truck", "supply", "transport"}
+        # Factions list their supply trucks (Ural-4320, M1078 LMTV, etc.) here.
+        # Sort by name so the choice is stable from turn to turn.
+        logistics = sorted(faction.logistics_units, key=lambda u: u.display_name)
+        if logistics:
+            return logistics[0]
 
-        # Search faction unit inventory for suitable logistics units
-        for unit_type in faction.units:
-            if unit_type is None:
-                continue
-            unit_name = unit_type.name.lower()
-            # Check if this is a logistics-type unit
-            if any(keyword in unit_name for keyword in logistics_unit_names):
-                return unit_type
-
-        # Fallback: use any available ground unit for supply transport
-        # (in reality, this would transport ammo/fuel containers)
-        for unit_type in faction.units:
-            if unit_type and hasattr(unit_type, "helicopter") and not unit_type.helicopter:
-                # Prefer non-helicopter ground units
-                return unit_type
-
-        # Last resort: use first available unit from faction
-        for unit_type in faction.units:
-            if unit_type:
-                return unit_type
-
-        return None
+        # Fallback: any ground unit the faction can field.
+        return next(iter(faction.ground_units), None)
 
     @staticmethod
     def _has_warehouse(cp: ControlPoint) -> bool:
@@ -289,7 +263,7 @@ class CarrierResupplyPlanner:
                 resupply_count += 1
 
                 logger.info(
-                    f"Resupply order created: {quantity} {supply_unit_type.name} "
+                    f"Resupply order created: {quantity} {supply_unit_type.display_name} "
                     f"from {depot.name} to {need.base.name} "
                     f"(urgency: {need.urgency:.2f})"
                 )
@@ -300,6 +274,4 @@ class CarrierResupplyPlanner:
                 )
                 continue
 
-        logger.info(
-            f"Carrier resupply: {resupply_count}/{len(needs)} orders created"
-        )
+        logger.info(f"Carrier resupply: {resupply_count}/{len(needs)} orders created")

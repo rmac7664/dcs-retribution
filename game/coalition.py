@@ -192,6 +192,7 @@ class Coalition:
         if not self.game.settings.perf_disable_naval_resupply:
             with logged_duration("Naval resupply planning"):
                 from game.warehouse.carrier_resupply import CarrierResupplyPlanner
+
                 CarrierResupplyPlanner(self.game, self).plan_carrier_resupply()
 
         if not is_turn_0:
