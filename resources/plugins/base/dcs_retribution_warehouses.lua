@@ -13,6 +13,7 @@
 --   player leaves an aircraft parked-> credit what is still aboard
 --   still alive at mission end      -> credit what is aboard to where it is (or home)
 --   destroyed                       -> nothing comes back
+--   replenishment ship alongside    -> credit the carrier with the ship's stores
 --
 -- It also reports, once per mission, DCS' resource map (warehouse item name -> wsType),
 -- which Retribution needs to write limited warehouses, and what aircraft with not yet
@@ -28,6 +29,7 @@ local W = {
     learned = {},   -- loadout key -> { [item] = count }
     diag = {},      -- control point id -> { start = {...}, finish = {...} }
     delivered = {}, -- supply airlift unit name -> true once landed at its destination
+    replenished = {}, -- replenishment ship unit name -> true once it unloaded
     stale = false,
     finalized = false,
 }
@@ -284,6 +286,97 @@ local function warehouseFor(dcsName)
     return nil
 end
 
+-- Replenishment ships ------------------------------------------------------------------
+-- Each ship sails for its carrier. Every minute it is re-steered at the carrier's
+-- current position; once within ALONGSIDE_METERS its stores go into the carrier's DCS
+-- warehouse (usable straight away) and are booked to the carrier in the ledger.
+
+local replenishment = data.replenishment or {}
+local ALONGSIDE_METERS = 5556 -- 3 nm
+local SAIL_SPEED = 6.17 -- 12 kt, in m/s
+
+local function aliveUnit(name)
+    local ok, unit = pcall(Unit.getByName, name)
+    if ok and unit then
+        local okExist, exists = pcall(unit.isExist, unit)
+        if okExist and exists then
+            return unit
+        end
+    end
+    return nil
+end
+
+local function steer(shipUnit, target)
+    local group = shipUnit:getGroup()
+    if not group then
+        return
+    end
+    local from = shipUnit:getPoint()
+    local route = {
+        points = {
+            { x = from.x, y = from.z, type = "Turning Point", action = "Turning Point",
+              speed = SAIL_SPEED, speed_locked = true },
+            { x = target.x, y = target.z, type = "Turning Point", action = "Turning Point",
+              speed = SAIL_SPEED, speed_locked = true },
+        },
+    }
+    local controller = group:getController()
+    pcall(controller.setTask, controller, { id = "Mission", params = { route = route } })
+end
+
+local function unload(shipName, ship)
+    local warehouse = warehouseFor(ship.carrier)
+    if warehouse then
+        for item, count in pairs(ship.mun or {}) do
+            pcall(warehouse.addItem, warehouse, item, count)
+        end
+        if (ship.fuel or 0) > 0 then
+            pcall(warehouse.addLiquid, warehouse, 0, ship.fuel)
+        end
+    end
+    book(ship.cp, ship.mun or {}, ship.fuel or 0, 1)
+    W.replenished[shipName] = true
+    dirty_state = true
+    log(shipName .. " came alongside " .. tostring(ship.carrier) .. " and unloaded")
+end
+
+local function checkReplenishment()
+    local atSea = false
+    for shipName, ship in pairs(replenishment) do
+        if not W.replenished[shipName] then
+            local shipUnit = aliveUnit(shipName)
+            local carrier = aliveUnit(ship.carrier)
+            if shipUnit and carrier then
+                atSea = true
+                local a, b = shipUnit:getPoint(), carrier:getPoint()
+                local dx, dz = a.x - b.x, a.z - b.z
+                if math.sqrt(dx * dx + dz * dz) <= ALONGSIDE_METERS then
+                    unload(shipName, ship)
+                else
+                    steer(shipUnit, b)
+                end
+            end
+        end
+    end
+    if atSea then
+        return timer.getTime() + 60
+    end
+    return nil
+end
+
+local function checkReplenishmentSafely()
+    local ok, result = pcall(checkReplenishment)
+    if not ok then
+        log("replenishment check failed: " .. tostring(result))
+        return timer.getTime() + 60
+    end
+    return result
+end
+
+if next(replenishment) then
+    timer.scheduleFunction(checkReplenishmentSafely, nil, timer.getTime() + 30)
+end
+
 local function snapshot(dcsName, base)
     local warehouse = warehouseFor(dcsName)
     if not warehouse then
@@ -391,6 +484,7 @@ function W.export(missionEnded)
         bases = W.deltas,
         learned = W.learned,
         delivered = W.delivered,
+        replenished = W.replenished,
         stale = W.stale,
     }
     if missionEnded then

@@ -42,6 +42,7 @@ from .kneeboard import KneeboardGenerator
 from .luagenerator import LuaGenerator
 from .missiondata import MissionData
 from .rebelliongenerator import RebellionGenerator
+from .replenishmentshipgenerator import ReplenishmentShipGenerator
 from .motorpoolpopulator import MotorpoolPopulator
 from .tgogenerator import TgoGenerator
 from .triggergenerator import TriggerGenerator
@@ -116,6 +117,10 @@ class MissionGenerator:
 
         ConvoyGenerator(self.mission, self.game, self.unit_map).generate()
         CargoShipGenerator(self.mission, self.game, self.unit_map).generate()
+        # After the carriers (tgo_generator), which the ships sail to.
+        ReplenishmentShipGenerator(
+            self.mission, self.game, self.unit_map, self.mission_data
+        ).generate()
 
         self.generate_destroyed_units()
 

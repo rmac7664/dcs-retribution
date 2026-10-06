@@ -19,6 +19,7 @@ from game.theater.theatergroup import SceneryUnit
 
 if TYPE_CHECKING:
     from game.transfers import CargoShip, Convoy, TransferOrder
+    from game.warehouse.state import SupplyShip
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,7 @@ class UnitMap:
         self.convoys: Dict[str, ConvoyUnit] = {}
         self.cargo_ships: Dict[str, CargoShip] = {}
         self.airlifts: Dict[str, AirliftUnits] = {}
+        self.replenishment_ships: Dict[str, SupplyShip] = {}
 
     def add_aircraft(self, group: FlyingGroup[Any], flight: Flight) -> None:
         for pilot, unit in zip(flight.roster.iter_pilots(), group.units):
@@ -158,6 +160,17 @@ class UnitMap:
 
     def cargo_ship(self, name: str) -> Optional[CargoShip]:
         return self.cargo_ships.get(name, None)
+
+    def add_replenishment_ship(self, group: ShipGroup, ship: SupplyShip) -> None:
+        if len(group.units) != 1:
+            raise ValueError("Expected a replenishment ship to be a single unit.")
+        name = str(group.units[0].name)
+        if name in self.replenishment_ships:
+            raise RuntimeError(f"Duplicate replenishment ship: {name}")
+        self.replenishment_ships[name] = ship
+
+    def replenishment_ship(self, name: str) -> Optional[SupplyShip]:
+        return self.replenishment_ships.get(name, None)
 
     def add_airlift_units(
         self, group: FlyingGroup[Any], transfer: TransferOrder

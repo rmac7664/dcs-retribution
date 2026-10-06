@@ -65,6 +65,20 @@ class CarrierInfo(UnitInfo):
 
 
 @dataclass
+class ReplenishmentShipInfo:
+    """A replenishment ship sailing to a carrier, for the warehouse script."""
+
+    group_name: str
+    unit_name: str
+    #: Unit name of the carrier (or LHA) it supplies; also its DCS airbase name.
+    carrier_unit_name: str
+    #: The carrier's control point ID.
+    carrier_cp_id: str
+    munitions: dict[str, int]
+    fuel_kg: float
+
+
+@dataclass
 class JtacInfo(UnitInfo):
     """JTAC information."""
 
@@ -117,6 +131,7 @@ class MissionData:
     awacs: list[AwacsInfo] = field(default_factory=list)
     runways: list[RunwayData] = field(default_factory=list)
     carriers: list[CarrierInfo] = field(default_factory=list)
+    replenishment_ships: list[ReplenishmentShipInfo] = field(default_factory=list)
     flights: list[FlightData] = field(default_factory=list)
     packages: dict[int, list[FlightData]] = field(default_factory=dict)
     tankers: list[TankerInfo] = field(default_factory=list)

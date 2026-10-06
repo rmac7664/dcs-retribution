@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from game.ato.flight import Flight
     from game.sim.simulationresults import SimulationResults
     from game.transfers import CargoShip
+    from game.warehouse.state import SupplyShip
     from game.unitmap import (
         AirliftUnits,
         ConvoyUnit,
@@ -372,6 +373,15 @@ class Debriefing:
                 enemy_losses.append(aircraft)
         return AirLosses(player_losses, enemy_losses)
 
+    def replenishment_ships_lost(self) -> List[SupplyShip]:
+        """Carrier replenishment ships sunk in the mission (with their cargo)."""
+        lost: List[SupplyShip] = []
+        for unit_name in self.state_data.killed_ground_units:
+            ship = self.unit_map.replenishment_ship(unit_name)
+            if ship is not None and not any(ship is s for s in lost):
+                lost.append(ship)
+        return lost
+
     def dead_ground_units(self) -> GroundLosses:
         losses = GroundLosses()
         untracked: List[str] = []
@@ -442,6 +452,10 @@ class Debriefing:
             # one summary instead of a line each: per-unit logging here floods
             # the handlers (a file stat + flush per line, plus the log-window UI
             # hook) and froze the debrief for ~20s on busy missions.
+            if self.unit_map.replenishment_ship(unit_name) is not None:
+                # Handled by the logistics system (replenishment_ships_lost).
+                continue
+
             untracked.append(unit_name)
 
         if untracked:

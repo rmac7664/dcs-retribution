@@ -63,6 +63,12 @@ class MissionResultsProcessor:
         self.game.warehouse_logistics.apply_airlift_deliveries(
             self.game, debriefing, debriefing.state_data.warehouse_logistics
         )
+        self.game.warehouse_logistics.apply_replenishment(
+            self.game,
+            debriefing,
+            debriefing.state_data.warehouse_logistics,
+            debriefing.state_data.mission_ended,
+        )
         self.game.warehouse_logistics.apply_mission_results(
             self.game,
             debriefing.state_data.warehouse_logistics,

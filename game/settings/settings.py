@@ -1455,6 +1455,18 @@ class Settings:
         section=PERFORMANCE_SECTION,
         default=False,
     )
+    perf_disable_replenishment_ships: bool = boolean_option(
+        "Disable carrier replenishment ships",
+        page=MISSION_GENERATOR_PAGE,
+        section=PERFORMANCE_SECTION,
+        default=False,
+        detail=(
+            "With limited fuel and munitions, carriers and LHAs are resupplied by "
+            "replenishment ships that sail to them during the mission and can be "
+            "sunk. When disabled, the ships aren't put in the mission: their stores "
+            "arrive at the end of the turn and can't be intercepted."
+        ),
+    )
     perf_frontline_units_prefer_roads: bool = boolean_option(
         "Front line troops prefer roads",
         page=MISSION_GENERATOR_PAGE,

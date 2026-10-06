@@ -277,3 +277,94 @@ def test_supply_airlifters_are_delivered_only_when_landing_at_destination(
         result = retributionWarehouses.export(true)
         """)
     assert to_py(lua.globals().result)["delivered"] == {"Herc 1": True}
+
+
+REPLENISHMENT_DATA = """
+dcsRetributionWarehouses.replenishment = {
+    ["CVN-71 replenishment 1"] = {
+        carrier = "CVN-71", cp = "cpB",
+        mun = { ["weapons.missiles.AIM_120C"] = 12 }, fuel = 40000,
+    },
+}
+"""
+
+SHIP_MOCKS = """
+local probe = make_unit("probe", {}, 0, false)
+local U = getmetatable(probe).__index
+function U:getPoint() return self._point end
+tasks = {}
+function U:getGroup()
+    local unit = self
+    return { getController = function()
+        return { setTask = function(_, task) tasks[unit._name] = task end }
+    end }
+end
+local W = getmetatable(make_airbase("probe"):getWarehouse()).__index
+function W:addItem(n, c) self.items[n] = (self.items[n] or 0) + c end
+function W:addLiquid(t, amount) self.fuel = self.fuel + amount end
+"""
+
+
+@pytest.fixture
+def lua_with_ship() -> Any:
+    runtime = lupa.LuaRuntime(unpack_returned_tuples=True)
+    runtime.execute(MOCK_DCS)
+    runtime.execute(SHIP_MOCKS)
+    runtime.execute(DATA)
+    runtime.execute(REPLENISHMENT_DATA)
+    runtime.execute(SCRIPT.read_text(encoding="utf-8"))
+    runtime.execute("""
+        carrier_base = make_airbase("CVN-71")
+        carrier = make_unit("CVN-71", {}, 0, false)
+        carrier._point = { x = 0, y = 0, z = 0 }
+        ship = make_unit("CVN-71 replenishment 1", {}, 0, false)
+    """)
+    return runtime
+
+
+def test_replenishment_ship_is_steered_at_the_carrier_until_alongside(
+    lua_with_ship: Any,
+) -> None:
+    lua_with_ship.execute("""
+        ship._point = { x = 30000, y = 0, z = 0 }
+        run_scheduled()
+        result = retributionWarehouses.export(false)
+    """)
+    g = lua_with_ship.globals()
+    task = to_py(g.tasks)["CVN-71 replenishment 1"]
+    # Heading for where the carrier is now.
+    assert task["params"]["route"]["points"][2]["x"] == 0
+    assert to_py(g.result)["replenished"] == {}
+    assert to_py(g.carrier_base._wh["items"]) == {}
+
+
+def test_replenishment_ship_unloads_into_the_carrier_when_alongside(
+    lua_with_ship: Any,
+) -> None:
+    lua_with_ship.execute("""
+        ship._point = { x = 3000, y = 0, z = 0 }
+        run_scheduled()
+        result = retributionWarehouses.export(false)
+    """)
+    g = lua_with_ship.globals()
+    result = to_py(g.result)
+    assert result["replenished"] == {"CVN-71 replenishment 1": True}
+    # Usable in DCS straight away...
+    assert to_py(g.carrier_base._wh["items"]) == {"weapons.missiles.AIM_120C": 12}
+    assert g.carrier_base._wh.fuel == 1500000 + 40000
+    # ...and booked to the carrier's ledger for Retribution.
+    assert result["bases"]["cpB"]["mun"] == {"weapons.missiles.AIM_120C": 12}
+    assert result["bases"]["cpB"]["fuel"] == 40000
+    assert g.dirty_state is True
+
+
+def test_sunk_replenishment_ship_unloads_nothing(lua_with_ship: Any) -> None:
+    lua_with_ship.execute("""
+        ship._point = { x = 3000, y = 0, z = 0 }
+        ship._exists = false
+        run_scheduled()
+        result = retributionWarehouses.export(false)
+    """)
+    g = lua_with_ship.globals()
+    assert to_py(g.result)["replenished"] == {}
+    assert to_py(g.carrier_base._wh["items"]) == {}

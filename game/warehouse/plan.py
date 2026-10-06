@@ -298,13 +298,15 @@ class MissionWarehousePlan:
 
         trigger = TriggerStart(comment="Set DCS Retribution warehouse data")
         trigger.add_action(
-            DoScript(String(f"{LUA_DATA_GLOBAL} = {to_lua(self.lua_data())}"))
+            DoScript(
+                String(f"{LUA_DATA_GLOBAL} = {to_lua(self.lua_data(mission_data))}")
+            )
         )
         # Must run before the plugin scripts that read it.
         mission.triggerrules.triggers.insert(0, trigger)
         self.report()
 
-    def lua_data(self) -> dict[str, Any]:
+    def lua_data(self, mission_data: Optional[MissionData] = None) -> dict[str, Any]:
         bases: dict[str, Any] = {}
         ws: dict[str, list[int]] = {}
         for base in self.bases.values():
@@ -334,6 +336,16 @@ class MissionWarehousePlan:
             "cargo": self.cargo_units,
             "ws": ws,
             "wantResourceMap": True,
+            # Replenishment ship unit name -> the carrier it sails to and its cargo.
+            "replenishment": {
+                info.unit_name: {
+                    "carrier": info.carrier_unit_name,
+                    "cp": info.carrier_cp_id,
+                    "mun": dict(info.munitions),
+                    "fuel": round(info.fuel_kg, 1),
+                }
+                for info in (mission_data.replenishment_ships if mission_data else [])
+            },
         }
 
     def report(self) -> None:
