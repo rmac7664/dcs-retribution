@@ -246,7 +246,7 @@ def fit_pallets(transfer: TransferOrder, aircraft: AircraftType) -> None:
     a whole truckload, so the remaining cargo is split into smaller pallets.
     """
     load = supply_of(transfer)
-    if load is None or len(transfer.units) != 1:
+    if load is None or len(transfer.units) != 1 or transfer.size <= 0:
         return
     capacity = cargo_tons(aircraft)
     if capacity <= 0 or load.tons_per_carrier <= capacity + 1e-6:
@@ -258,6 +258,28 @@ def fit_pallets(transfer: TransferOrder, aircraft: AircraftType) -> None:
     remaining.carriers = pallets
     transfer.supplies = remaining
     transfer.units[unit_type] = pallets
+
+
+def load_into_trucks(transfer: TransferOrder, settings: Settings) -> None:
+    """Repacks a supply load into full trucks before it goes by road.
+
+    Undoes `fit_pallets` when cargo flown in small pallets continues by convoy, so
+    the convoy isn't a long line of half-empty trucks.
+    """
+    load = supply_of(transfer)
+    if load is None or len(transfer.units) != 1 or transfer.size <= 0:
+        return
+    remaining = load.scaled(transfer.size / max(1, load.carriers))
+    trucks = min(
+        settings.logistics_max_trucks_per_shipment,
+        max(1, math.ceil(remaining.tons / max(0.1, settings.logistics_truck_tons))),
+    )
+    if trucks >= transfer.size:
+        return
+    (unit_type,) = transfer.units
+    remaining.carriers = trucks
+    transfer.supplies = remaining
+    transfer.units[unit_type] = trucks
 
 
 def deliver(transfer: TransferOrder, location: ControlPoint) -> None:

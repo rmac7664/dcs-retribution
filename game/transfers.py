@@ -125,7 +125,7 @@ class TransferOrder:
     def __str__(self) -> str:
         """Returns the text that should be displayed for the transfer."""
         if self.supplies is not None:
-            side = "Supply run" if self.player else "Enemy supply run"
+            side = "Supply run" if self.player.is_blue else "Enemy supply run"
             return (
                 f"{side} of {self.supplies.describe()} from {self.origin.name} to "
                 f"{self.destination.name}"
@@ -659,6 +659,10 @@ class PendingTransfers:
                 network.link_type(transfer.position, next_stop)
                 == TransitConnection.Road
             ):
+                from game.warehouse.supply import load_into_trucks
+
+                # Pallets repacked for a small aircraft go back into full trucks.
+                load_into_trucks(transfer, self.game.settings)
                 return self.convoys.add(transfer, next_stop)
             elif (
                 network.link_type(transfer.position, next_stop)
