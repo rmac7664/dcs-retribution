@@ -346,6 +346,8 @@ class PurchaseReport:
     ships_sent: int = 0
     #: Urgent top-ups flown out to carriers (onboard delivery).
     cod_runs: int = 0
+    #: Supply runs called off because nothing could carry them.
+    cancelled_runs: list[str] = field(default_factory=list)
     #: Bases that got less (or nothing) because of their cargo handling limit.
     throughput_limited: list[str] = field(default_factory=list)
     ships_arrived: int = 0
@@ -476,6 +478,39 @@ def airhead(game: Game, player: Any) -> Optional[ControlPoint]:
     return max(candidates, key=safety)
 
 
+#: Turns a supply run may wait with no transport able to carry it before it is
+#: called off and its cargo unloaded where it waits.
+STALL_LIMIT = 2
+
+
+def cancel_stalled_runs(coalition: Coalition) -> list[str]:
+    """Calls off supply runs nothing could carry for STALL_LIMIT turns.
+
+    E.g. an airlift-only leg with no transport aircraft in range. The cargo goes
+    back into stock where it waits, so it isn't locked away and doesn't count
+    against the destination's cargo handling forever; the planner sends it again
+    when it can.
+    """
+    transfers = coalition.transfers.pending_transfers
+    cancelled = []
+    for transfer in list(transfers):
+        if supply_of(transfer) is None:
+            continue
+        if getattr(transfer, "stalled_turns", 0) < STALL_LIMIT:
+            continue
+        deliver(transfer, transfer.position)
+        transfer.units.clear()
+        transfers.remove(transfer)
+        cancelled.append(f"{transfer.origin.name} to {transfer.destination.name}")
+        logging.info(
+            "Supply: run from %s to %s called off after %d turns without transport",
+            transfer.origin.name,
+            transfer.destination.name,
+            transfer.stalled_turns,
+        )
+    return cancelled
+
+
 #: A carrier holding less than this share of an item it should have is urgently
 #: short of it, and a land depot will fly some of its own stock out (see
 #: SupplyPlanner.airlift_to_carriers).
@@ -500,6 +535,7 @@ class SupplyPlanner:
         ]
         self.airhead = airhead(game, coalition.player)
         self._land_rear_area_runs()
+        self.cancelled_runs = cancel_stalled_runs(coalition)
         if game.settings.logistics_supply_lines:
             self.depots = [cp for cp in self.bases if self.is_depot(cp)]
             # Forward supply points: FOBs and other bases with a live ammo/fuel
@@ -1111,6 +1147,7 @@ class SupplyPlanner:
 
     def run(self) -> PurchaseReport:
         report = PurchaseReport()
+        report.cancelled_runs = list(getattr(self, "cancelled_runs", []))
         self.produce_fuel()
         if (
             self.settings.logistics_supply_lines
@@ -1147,6 +1184,11 @@ def report_lines(report: PurchaseReport, settings: Settings) -> list[str]:
         lines.append(f"Couldn't afford: {top}.")
     if report.shipments:
         lines.append(f"{report.shipments} supply shipment(s) dispatched.")
+    if report.cancelled_runs:
+        lines.append(
+            f"{len(report.cancelled_runs)} supply run(s) called off: no transport "
+            "could reach them. The cargo went back into stock."
+        )
     if report.throughput_limited:
         names = ", ".join(sorted(set(report.throughput_limited)))
         lines.append(f"At their cargo handling limit: {names}.")

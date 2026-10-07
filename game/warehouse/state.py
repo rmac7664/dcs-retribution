@@ -433,8 +433,10 @@ class WarehouseState:
             fuel_kg = self.fuel_capacity_kg(cp, game.settings)
         self.stocks[cp.id] = BaseStock(jet_fuel_kg=fuel_kg / 2, munitions={})
         logging.info(
-            "Supply: %s captured; munitions destroyed, %.1f t of fuel remain",
+            "Supply: %s (held by %s) captured; munitions destroyed, %.1f t of fuel "
+            "remain",
             cp.name,
+            cp.captured.name,
             fuel_kg / 2 / KG_PER_TON,
         )
 

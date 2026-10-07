@@ -122,6 +122,9 @@ class TransferOrder:
     #: The units of a supply order are its cargo trucks; they are never commissioned.
     supplies: Optional[SupplyLoad] = field(default=None)
 
+    #: Turns in a row this order found no transport (see game/warehouse/supply.py).
+    stalled_turns: int = field(default=0)
+
     def __str__(self) -> str:
         """Returns the text that should be displayed for the transfer."""
         if self.supplies is not None:
@@ -672,6 +675,22 @@ class PendingTransfers:
         else:
             next_stop = transfer.destination
         AirliftPlanner(self.game, transfer, next_stop).create_package_for_airlift(now)
+        if (
+            transfer.transport is None
+            and transfer.supplies is not None
+            and transfer.request_airflift
+        ):
+            # A supply run sent by air by preference, with no aircraft able to fly
+            # it: take the road or shipping lane instead, if there is one.
+            first_stop = path[0]
+            link = network.link_type(transfer.position, first_stop)
+            if link == TransitConnection.Road:
+                from game.warehouse.supply import load_into_trucks
+
+                load_into_trucks(transfer, self.game.settings)
+                self.convoys.add(transfer, first_stop)
+            elif link == TransitConnection.Shipping:
+                self.cargo_ships.add(transfer, first_stop)
 
     def new_transfer(self, transfer: TransferOrder, now: datetime) -> None:
         transfer.origin.base.commit_losses(transfer.units)
@@ -786,6 +805,11 @@ class PendingTransfers:
         for transfer in self.pending_transfers:
             if transfer.transport is None:
                 self.arrange_transport(transfer, now)
+            if transfer.supplies is not None:
+                if transfer.transport is None:
+                    transfer.stalled_turns = getattr(transfer, "stalled_turns", 0) + 1
+                else:
+                    transfer.stalled_turns = 0
 
     def disband_uncompletable_transfers(self) -> None:
         """
