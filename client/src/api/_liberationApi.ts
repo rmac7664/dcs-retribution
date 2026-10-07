@@ -401,6 +401,14 @@ export type LatLng = {
   lat: number;
   lng: number;
 };
+export type SupplyStatus = {
+  munitions_percent: number;
+  fuel_percent: number;
+  level: number;
+  depot: boolean;
+  inbound_runs: number;
+  lines: string[];
+};
 export type ControlPoint = {
   id: string;
   name: string;
@@ -409,6 +417,7 @@ export type ControlPoint = {
   mobile: boolean;
   destination?: LatLng;
   sidc: string;
+  supply?: SupplyStatus;
 };
 export type ValidationError = {
   loc: (string | number)[];

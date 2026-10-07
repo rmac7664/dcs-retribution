@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -12,6 +13,18 @@ if TYPE_CHECKING:
     from game.theater import ControlPoint
 
 
+class SupplyStatusJs(BaseModel):
+    munitions_percent: int
+    fuel_percent: int
+    level: int
+    depot: bool
+    inbound_runs: int
+    lines: list[str]
+
+    class Config:
+        title = "SupplyStatus"
+
+
 class ControlPointJs(BaseModel):
     id: UUID
     name: str
@@ -20,6 +33,7 @@ class ControlPointJs(BaseModel):
     mobile: bool
     destination: LeafletPoint | None
     sidc: str
+    supply: SupplyStatusJs | None = None
 
     class Config:
         title = "ControlPoint"
@@ -41,6 +55,31 @@ class ControlPointJs(BaseModel):
             mobile=control_point.moveable and control_point.captured.is_blue,
             destination=destination,
             sidc=str(control_point.sidc()),
+            supply=ControlPointJs.supply_for(control_point),
+        )
+
+    @staticmethod
+    def supply_for(control_point: ControlPoint) -> SupplyStatusJs | None:
+        from game.warehouse.status import supply_status
+
+        try:
+            game = control_point.coalition.game
+            if not game.settings.logistics_enabled:
+                return None
+            status = supply_status(game, control_point)
+        except Exception:
+            # The map must never fail to draw because of a logistics problem.
+            logging.exception("Could not summarize supply at %s", control_point)
+            return None
+        if status is None:
+            return None
+        return SupplyStatusJs(
+            munitions_percent=status.munitions_percent,
+            fuel_percent=status.fuel_percent,
+            level=status.level,
+            depot=status.depot,
+            inbound_runs=status.inbound_runs,
+            lines=status.lines,
         )
 
     @staticmethod

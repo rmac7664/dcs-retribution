@@ -53,11 +53,21 @@ class TransportFinder:
 
         descriptions = []
         for transport in transports:
-            units = "units" if transport.size > 1 else "unit"
-            descriptions.append(
-                f"{transport.size} {units} transferring from {transport.origin} to "
-                f"{transport.destination}"
-            )
+            supply = [t for t in transport.transfers if t.supplies is not None]
+            others = sum(t.size for t in transport.transfers if t.supplies is None)
+            for transfer in supply:
+                assert transfer.supplies is not None
+                descriptions.append(
+                    f"Supply run of {transfer.supplies.describe()} from "
+                    f"{transport.origin} to {transport.destination}"
+                )
+            if others or not supply:
+                count = others if supply else transport.size
+                units = "units" if count > 1 else "unit"
+                descriptions.append(
+                    f"{count} {units} transferring from {transport.origin} to "
+                    f"{transport.destination}"
+                )
         return descriptions
 
 
