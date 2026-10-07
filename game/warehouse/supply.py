@@ -476,6 +476,14 @@ def airhead(game: Game, player: Any) -> Optional[ControlPoint]:
     return max(candidates, key=safety)
 
 
+#: A carrier holding less than this share of an item it should have is urgently
+#: short of it, and a land depot will fly some of its own stock out (see
+#: SupplyPlanner.airlift_to_carriers).
+URGENT_SHARE = 0.5
+#: The least share of its own needs a land depot keeps when it does.
+DEPOT_RESERVE_SHARE = 0.5
+
+
 class SupplyPlanner:
     """Turn-end production and distribution for one side."""
 
@@ -981,13 +989,38 @@ class SupplyPlanner:
             and c.distance_to_point(a) <= reach
         )
 
+    def _onboard_load(
+        self, carrier: ControlPoint, depot: ControlPoint, shortfall: Counter[str]
+    ) -> dict[str, int]:
+        """What `depot` can fly out to `carrier` for its shortfall.
+
+        Spare stock (beyond the depot's own needs) can always go. For an urgent item,
+        one the carrier holds less than half of what it should, the depot also gives
+        up part of its own stock, keeping at least half of what it needs itself.
+        """
+        stock = self.state.stocks[depot.id].munitions
+        own = self.authorized.get(depot.id, {})
+        wanted = self.authorized.get(carrier.id, {})
+        load: dict[str, int] = {}
+        for name, gap in shortfall.items():
+            want = wanted.get(name, 0)
+            urgent = want - gap < want * URGENT_SHARE
+            keep = own.get(name, 0)
+            if urgent:
+                keep = math.ceil(keep * DEPOT_RESERVE_SHARE)
+            take = min(gap, stock.get(name, 0) - keep)
+            if take > 0:
+                load[name] = take
+        return load
+
     def airlift_to_carriers(self, report: PurchaseReport) -> None:
         """Urgent top-ups flown to carriers from land depots (C-2, helicopters).
 
-        Before anything is bought onto a carrier's next replenishment ship, spare stock
-        already ashore is flown out for what the carrier is short of: one aircraft load
-        per carrier per turn, most urgent and most valuable items first. The rest is
-        bought for the ship as usual.
+        Before anything is bought onto a carrier's next replenishment ship, stock
+        ashore is flown out for what the carrier is short of: spare stock, and for
+        items the carrier is badly short of, part of the depot's own (see
+        _onboard_load). One aircraft load per carrier per turn, most urgent and most
+        valuable items first. The rest is bought for the ship as usual.
         """
         from game.transfers import TransferOrder
 
@@ -1020,13 +1053,7 @@ class SupplyPlanner:
                 ]
                 if not reachable:
                     continue
-                stock = self.state.stocks[depot.id].munitions
-                own = self.authorized.get(depot.id, {})
-                load = {
-                    name: min(gap, stock.get(name, 0) - own.get(name, 0))
-                    for name, gap in shortfall.items()
-                }
-                load = {k: v for k, v in load.items() if v > 0}
+                load = self._onboard_load(carrier, depot, shortfall)
                 if not load:
                     continue
                 distance = depot.position.distance_to_point(carrier.position)

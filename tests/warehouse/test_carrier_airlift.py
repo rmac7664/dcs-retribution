@@ -148,3 +148,35 @@ def test_one_run_at_a_time() -> None:
     r = setup([(C2, land("Home", 0))])
     r.planner.airlift_to_carriers(r.report)
     assert len(r.transfers) == 1
+
+
+def test_urgent_items_come_out_of_the_depots_own_stock() -> None:
+    r = setup([(C2, land("Home", 0))])
+    planner = r.planner
+    planner.inbound[r.carrier.id].clear()  # forget setup's delivery
+    near = r.near
+    # Batumi holds exactly what it needs itself: nothing spare.
+    planner.state.stocks[near.id].munitions = {AIM_120C: 20, AIM_9X: 8}
+    planner.authorized[near.id] = {AIM_120C: 20, AIM_9X: 8}
+    planner.authorized[r.carrier.id] = {AIM_120C: 12, AIM_9X: 8}
+    # The carrier has 2 of 12 AMRAAMs (urgent) and 6 of 8 AIM-9X (not urgent).
+    planner.state.stocks[r.carrier.id].munitions = {AIM_120C: 2, AIM_9X: 6}
+
+    load = planner._onboard_load(r.carrier, near, planner._shortfall(r.carrier))
+
+    # Batumi keeps half its own AMRAAMs (10) and gives the carrier all 10 it lacks;
+    # it keeps all its AIM-9X, since the carrier isn't badly short of those.
+    assert load == {AIM_120C: 10}
+
+
+def test_a_depot_never_goes_below_half_its_own_needs() -> None:
+    r = setup([(C2, land("Home", 0))])
+    planner = r.planner
+    planner.inbound[r.carrier.id].clear()  # forget setup's delivery
+    planner.state.stocks[r.near.id].munitions = {AIM_120C: 14}
+    planner.authorized[r.near.id] = {AIM_120C: 20}
+    planner.state.stocks[r.carrier.id].munitions = {}
+
+    load = planner._onboard_load(r.carrier, r.near, planner._shortfall(r.carrier))
+
+    assert load == {AIM_120C: 4}  # 14 held, 10 kept

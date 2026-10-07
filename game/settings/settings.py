@@ -994,11 +994,13 @@ class Settings:
         LOGISTICS_SECTION,
         default=True,
         detail=(
-            "Carriers and LHAs short of munitions get an urgent top-up flown out from "
-            "the nearest land depot with spare stock, by a carrier-capable transport "
-            "(C-2 Greyhound, CH-47, CH-53, Mi-8, UH-60...), before the rest is ordered "
-            "onto the next replenishment ship. Needs a transport squadron that can "
-            "operate from the ship."
+            "Carriers and LHAs short of munitions get a top-up flown out from the "
+            "nearest land depot by a carrier-capable transport (C-2 Greyhound, CH-47, "
+            "CH-53, Mi-8, UH-60...), before the rest is ordered onto the next "
+            "replenishment ship. For items a carrier holds less than half of, the depot "
+            "gives up some of its own stock, keeping at least half of what it needs. "
+            "Needs a transport squadron that can operate from the ship; helicopters "
+            "only fly legs up to 100 nm."
         ),
     )
     logistics_player_supply_cargo: str = choices_option(
