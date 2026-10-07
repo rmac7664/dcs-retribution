@@ -50,6 +50,11 @@ class PersistentContext:
     tracer: MultiEventTracer
 
 
+#: Most strikes on enemy supply depots one turn's plan includes, so cutting supply
+#: lines doesn't crowd out everything else.
+MAX_SUPPLY_DEPOT_STRIKES = 2
+
+
 @dataclass
 class TheaterState(WorldState["TheaterState"]):
     context: PersistentContext
@@ -70,6 +75,10 @@ class TheaterState(WorldState["TheaterState"]):
     enemy_battle_positions: dict[ControlPoint, BattlePositions]
     oca_targets: list[ControlPoint]
     strike_targets: list[TheaterGroundObject]
+    #: Enemy supply depot buildings, most valuable first, and how many more strikes
+    #: on them this turn's plan may include (see CutSupplyLines).
+    enemy_supply_depots: list[BuildingGroundObject]
+    supply_strikes_left: int
     motorpool_targets: list[MotorpoolGroundObject]
     enemy_barcaps: list[ControlPoint]
     threat_zones: ThreatZones
@@ -140,6 +149,8 @@ class TheaterState(WorldState["TheaterState"]):
             },
             oca_targets=list(self.oca_targets),
             strike_targets=list(self.strike_targets),
+            enemy_supply_depots=list(self.enemy_supply_depots),
+            supply_strikes_left=self.supply_strikes_left,
             motorpool_targets=list(self.motorpool_targets),
             enemy_barcaps=list(self.enemy_barcaps),
             threat_zones=self.threat_zones,
@@ -193,14 +204,20 @@ class TheaterState(WorldState["TheaterState"]):
         ]
 
         aewc_targets = [cp for cp in finder.friendly_control_points() if cp.is_carrier]
+
+        barcaps_needed = {
+            cp: 2 * barcap_rounds if cp.is_fleet else barcap_rounds
+            for cp in finder.vulnerable_control_points()
+        }
+        # Bases receiving supply that enemy fighters can reach get cover for the
+        # arrival, even if they aren't otherwise thought vulnerable.
+        for cp in finder.threatened_supply_destinations():
+            barcaps_needed.setdefault(cp, 1)
         aewc_targets.append(finder.farthest_friendly_control_point())
 
         return TheaterState(
             context=context,
-            barcaps_needed={
-                cp: 2 * barcap_rounds if cp.is_fleet else barcap_rounds
-                for cp in finder.vulnerable_control_points()
-            },
+            barcaps_needed=barcaps_needed,
             active_front_lines=list(finder.front_lines()),
             front_line_stances={f: None for f in finder.front_lines()},
             vulnerable_front_lines=list(finder.front_lines()),
@@ -220,6 +237,8 @@ class TheaterState(WorldState["TheaterState"]):
                 )
             ),
             strike_targets=list(finder.strike_targets()),
+            enemy_supply_depots=list(finder.supply_depot_targets()),
+            supply_strikes_left=MAX_SUPPLY_DEPOT_STRIKES,
             motorpool_targets=list(finder.motorpool_targets()),
             enemy_barcaps=list(game.theater.control_points_for(player.opponent)),
             threat_zones=game.threat_zone_for(player.opponent),

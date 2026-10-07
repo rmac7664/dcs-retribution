@@ -12,6 +12,7 @@ from game.utils import nautical_miles
 
 if TYPE_CHECKING:
     from game import Game
+    from game.coalition import Coalition
     from game.ato import FlightType
     from game.theater.player import Player
     from .state import SupplyShip
@@ -30,6 +31,10 @@ class ReplenishmentShipTarget(MissionTarget):
         super().__init__(f"Replenishment ship for {carrier.name}", position)
         self.ship = ship
         self.carrier = carrier
+
+    @property
+    def coalition(self) -> Coalition:
+        return self.carrier.coalition
 
     @property
     def group_name(self) -> str:

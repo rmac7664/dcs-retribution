@@ -145,3 +145,28 @@ def test_anti_ship_flights_are_told_which_group_to_attack() -> None:
 
     attacks = [t for t in waypoint.tasks if isinstance(t, AttackGroup)]
     assert attacks and {t.params["groupId"] for t in attacks} == {ship_group.id}
+
+
+def test_ships_at_sea_in_older_saves_are_named_on_load() -> None:
+    import pickle
+
+    carrier = FakeCarrier("Lincoln", Player.BLUE)
+    state = WarehouseState()
+    old = SupplyShip(carrier.id, carrier.name, "BLUE", {"x": 1})
+    del old.__dict__["name"]
+    state.supply_ships.append(old)
+    del state.__dict__["ship_serial"]
+
+    loaded = pickle.loads(pickle.dumps(state))
+
+    assert [s.name for s in loaded.supply_ships] == ["Lincoln replenishment 1"]
+    assert loaded.ship_serial == 1
+
+
+def test_the_planner_knows_whose_ship_it_is() -> None:
+    kuznetsov: Any = FakeCarrier("Kuznetsov", Player.RED)
+    kuznetsov.coalition = "red coalition"
+    game = make_game(kuznetsov)
+    game.warehouse_logistics.supply_ships = [ship_for(kuznetsov)]
+    (target,) = enemy_replenishment_ships(game, Player.BLUE)
+    assert target.coalition == "red coalition"

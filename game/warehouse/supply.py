@@ -432,6 +432,19 @@ def short(resource: str) -> str:
     return resource.split(".", 2)[-1]
 
 
+def stock_value(state: WarehouseState, cp: ControlPoint, settings: Settings) -> float:
+    """What a base's stock is worth, in $M (fuel at a nominal $1M per 1,000 t)."""
+    stock = state.stocks.get(cp.id)
+    if stock is None:
+        return 0.0
+    value = sum(
+        MunitionPrices.price(name, settings) * count
+        for name, count in stock.munitions.items()
+        if count > 0
+    )
+    return value + stock.jet_fuel_kg / 1_000_000
+
+
 def airhead(game: Game, player: Any) -> Optional[ControlPoint]:
     """Where the side's off-map rear area delivers: its rear-most main airfield.
 
@@ -822,18 +835,19 @@ class SupplyPlanner:
                     depot, self.settings
                 )
                 fuel = max(0.0, min(gap_kg, spare_kg))
+            wanted = MunitionMasses.tons(*self._fit_to_shipment(cp, load, fuel))
             room = self.handling_room_kg(cp)
-            if room is not None and room < self.default_shipment_kg():
-                if room < 1 and (load or fuel >= 1):
-                    report.throughput_limited.append(cp.name)
-                    logging.info(
-                        "Supply: %s is at its cargo handling limit this turn", cp.name
-                    )
-                    continue
-                if load or fuel >= 1:
-                    report.throughput_limited.append(cp.name)
             load, fuel = self._fit_to_shipment(cp, load, fuel, room)
             tons = MunitionMasses.tons(load, fuel)
+            limited = room is not None and tons < wanted - 0.5
+            if limited:
+                report.throughput_limited.append(cp.name)
+                logging.info(
+                    "Supply: %s is at its cargo handling limit (%.0f of %.0f t)",
+                    cp.name,
+                    tons,
+                    wanted,
+                )
             if not load and fuel < 1:
                 continue
             if tons < self.settings.logistics_min_shipment_tons and not any(

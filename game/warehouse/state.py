@@ -114,6 +114,12 @@ class WarehouseState:
         fresh = WarehouseState().__dict__
         fresh.update(state)
         self.__dict__.update(fresh)
+        # Ships that sailed before they had names (older saves) get one now, so
+        # strikes planned against them can find them in the mission.
+        for ship in self.supply_ships:
+            if not getattr(ship, "name", ""):
+                self.ship_serial += 1
+                ship.name = f"{ship.carrier_name} replenishment {self.ship_serial}"
 
     @property
     def catalog(self) -> MunitionCatalog:

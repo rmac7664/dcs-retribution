@@ -143,6 +143,57 @@ class ObjectiveFinder:
         for target, _range in targets:
             yield target
 
+    def supply_depot_targets(self) -> Iterator[BuildingGroundObject]:
+        """Buildings that make enemy bases supply depots, most valuable stock first.
+
+        With supply lines, new munitions are only bought at depots: rear bases with a
+        live ammo depot, fuel depot, factory or warehouse. Destroying those buildings
+        stops the base buying, and what it holds no longer reaches the front.
+        """
+        settings = self.game.settings
+        if not (settings.logistics_enabled and settings.logistics_supply_lines):
+            return
+        from game.warehouse.supply import DEPOT_CATEGORIES, SupplyPlanner, stock_value
+
+        state = self.game.warehouse_logistics
+        ranked: list[tuple[float, str, BuildingGroundObject]] = []
+        for cp in self.enemy_control_points():
+            if isinstance(cp, (OffMapSpawn, NavalControlPoint)):
+                continue
+            if not SupplyPlanner.is_depot(cp):
+                continue
+            value = stock_value(state, cp, settings)
+            for tgo in cp.ground_objects:
+                if (
+                    isinstance(tgo, BuildingGroundObject)
+                    and tgo.category in DEPOT_CATEGORIES
+                    and not tgo.is_dead
+                ):
+                    ranked.append((value, tgo.name, tgo))
+        ranked.sort(key=lambda r: (-r[0], r[1]))
+        seen: set[str] = set()
+        for _value, name, tgo in ranked:
+            if name not in seen:
+                seen.add(name)
+                yield tgo
+
+    def threatened_supply_destinations(self) -> Iterator[ControlPoint]:
+        """Friendly bases receiving supply runs that enemy fighters can reach."""
+        if not self.game.settings.logistics_enabled:
+            return
+        from game.warehouse.supply import iter_supply_transfers
+
+        threats = self.game.threat_zone_for(self.is_player.opponent)
+        seen: set[ControlPoint] = set()
+        coalition = self.game.coalition_for(self.is_player)
+        for transfer in iter_supply_transfers(coalition):
+            cp = transfer.destination
+            if cp in seen or isinstance(cp, (OffMapSpawn, NavalControlPoint)):
+                continue
+            seen.add(cp)
+            if threats.threatened_by_aircraft(cp):
+                yield cp
+
     def motorpool_targets(self) -> Iterator[MotorpoolGroundObject]:
         """Iterates over enemy motorpool depots worth striking this turn.
 
