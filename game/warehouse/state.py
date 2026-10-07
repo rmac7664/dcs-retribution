@@ -436,7 +436,7 @@ class WarehouseState:
             "Supply: %s (held by %s) captured; munitions destroyed, %.1f t of fuel "
             "remain",
             cp.name,
-            cp.captured.name,
+            getattr(cp.captured, "name", "?"),
             fuel_kg / 2 / KG_PER_TON,
         )
 
