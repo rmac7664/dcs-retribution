@@ -988,6 +988,19 @@ class Settings:
             "runs that can only go by air are always airlifted."
         ),
     )
+    logistics_carrier_airlift: bool = boolean_option(
+        "Carrier onboard delivery (C-2, helicopters)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=True,
+        detail=(
+            "Carriers and LHAs short of munitions get an urgent top-up flown out from "
+            "the nearest land depot with spare stock, by a carrier-capable transport "
+            "(C-2 Greyhound, CH-47, CH-53, Mi-8, UH-60...), before the rest is ordered "
+            "onto the next replenishment ship. Needs a transport squadron that can "
+            "operate from the ship."
+        ),
+    )
     logistics_player_supply_cargo: str = choices_option(
         "Player supply airlift cargo",
         page=CAMPAIGN_MANAGEMENT_PAGE,

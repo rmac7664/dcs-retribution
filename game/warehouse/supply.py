@@ -344,6 +344,8 @@ class PurchaseReport:
     still_short: int = 0
     #: Replenishment ships sent to carriers, unloaded, and lost with their carrier.
     ships_sent: int = 0
+    #: Urgent top-ups flown out to carriers (onboard delivery).
+    cod_runs: int = 0
     ships_arrived: int = 0
     ships_lost: list[str] = field(default_factory=list)
 
@@ -838,18 +840,23 @@ class SupplyPlanner:
             )
 
     def _fit_to_shipment(
-        self, cp: ControlPoint, load: dict[str, int], fuel: float
+        self,
+        cp: ControlPoint,
+        load: dict[str, int],
+        fuel: float,
+        limit_kg: Optional[float] = None,
     ) -> tuple[dict[str, int], float]:
         """Trims a load to one supply run's capacity; the rest waits a turn.
 
         Items the base is shortest of (relative to its authorized level) go first, then
         fuel fills whatever weight is left.
         """
-        limit_kg = (
-            self.settings.logistics_max_trucks_per_shipment
-            * self.settings.logistics_truck_tons
-            * 1000
-        )
+        if limit_kg is None:
+            limit_kg = (
+                self.settings.logistics_max_trucks_per_shipment
+                * self.settings.logistics_truck_tons
+                * 1000
+            )
         authorized = self.authorized.get(cp.id, {})
         stock = self.state.stocks[cp.id].munitions
 
@@ -877,6 +884,125 @@ class SupplyPlanner:
                 used += take * mass
         return fitted, max(0.0, min(fuel, limit_kg - used))
 
+    # Carrier onboard delivery --------------------------------------------------------
+
+    def carrier_transports(
+        self, carrier: ControlPoint
+    ) -> list[tuple[AircraftType, ControlPoint]]:
+        """Transport squadrons (aircraft type, home) able to fly to `carrier`."""
+        from game.ato.flighttype import FlightType
+
+        found = []
+        for squadron in self.coalition.air_wing.iter_squadrons():
+            aircraft = squadron.aircraft
+            if (
+                squadron.can_auto_assign(FlightType.TRANSPORT)
+                and aircraft.capable_of(FlightType.TRANSPORT)
+                and carrier.can_operate(aircraft)
+            ):
+                found.append((aircraft, squadron.location))
+        return found
+
+    @staticmethod
+    def can_fly_leg(
+        aircraft: AircraftType,
+        home: ControlPoint,
+        depot: ControlPoint,
+        to: ControlPoint,
+    ) -> bool:
+        """Same reach rule as the airlift planner: helicopters, 100 nm per leg."""
+        from game.transfers import AirliftPlanner
+
+        if not depot.can_operate(aircraft):
+            return False
+        if not aircraft.dcs_unit_type.helicopter:
+            return True
+        reach = AirliftPlanner.HELO_MAX_RANGE.meters
+        a, b, c = home.position, depot.position, to.position
+        return (
+            a.distance_to_point(b) <= reach
+            and b.distance_to_point(c) <= reach
+            and c.distance_to_point(a) <= reach
+        )
+
+    def airlift_to_carriers(self, report: PurchaseReport) -> None:
+        """Urgent top-ups flown to carriers from land depots (C-2, helicopters).
+
+        Before anything is bought onto a carrier's next replenishment ship, spare stock
+        already ashore is flown out for what the carrier is short of: one aircraft load
+        per carrier per turn, most urgent and most valuable items first. The rest is
+        bought for the ship as usual.
+        """
+        from game.transfers import TransferOrder
+
+        truck = self.cargo_truck()
+        if truck is None:
+            return
+        land_depots = [
+            d
+            for d in self.depots
+            if not isinstance(d, (NavalControlPoint, OffMapSpawn))
+        ]
+        for carrier in self.bases:
+            if not isinstance(carrier, NavalControlPoint):
+                continue
+            if any(
+                t.destination is carrier and t.request_airflift
+                for t in iter_supply_transfers(self.coalition)
+            ):
+                continue  # one run at a time
+            shortfall = self._shortfall(carrier)
+            if not shortfall:
+                continue
+            transports = self.carrier_transports(carrier)
+            best: Optional[tuple[float, ControlPoint, float, dict[str, int]]] = None
+            for depot in land_depots:
+                reachable = [
+                    cargo_tons(aircraft)
+                    for aircraft, home in transports
+                    if self.can_fly_leg(aircraft, home, depot, carrier)
+                ]
+                if not reachable:
+                    continue
+                stock = self.state.stocks[depot.id].munitions
+                own = self.authorized.get(depot.id, {})
+                load = {
+                    name: min(gap, stock.get(name, 0) - own.get(name, 0))
+                    for name, gap in shortfall.items()
+                }
+                load = {k: v for k, v in load.items() if v > 0}
+                if not load:
+                    continue
+                distance = depot.position.distance_to_point(carrier.position)
+                if best is None or distance < best[0]:
+                    best = (distance, depot, max(reachable), load)
+            if best is None:
+                continue
+            _, depot, tons_each, load = best
+            load, _ = self._fit_to_shipment(carrier, load, 0.0, tons_each * 1000)
+            if not load:
+                continue
+            depot_stock = self.state.stocks[depot.id]
+            for name, count in load.items():
+                depot_stock.munitions[name] -= count
+            tons = MunitionMasses.tons(load)
+            transfer = TransferOrder(
+                depot,
+                carrier,
+                {truck: 1},
+                request_airflift=True,
+                supplies=SupplyLoad(munitions=load, tons=tons, carriers=1),
+            )
+            self.coalition.transfers.pending_transfers.append(transfer)
+            self.inbound[carrier.id].update(load)
+            report.cod_runs += 1
+            logging.info(
+                "Supply: onboard delivery of %s from %s to %s",
+                transfer.supplies.describe() if transfer.supplies else "",
+                depot.name,
+                carrier.name,
+            )
+
     def cargo_truck(self) -> Optional[GroundUnitType]:
         units = sorted(
             self.coalition.faction.logistics_units, key=lambda u: u.variant_id
@@ -903,6 +1029,11 @@ class SupplyPlanner:
     def run(self) -> PurchaseReport:
         report = PurchaseReport()
         self.produce_fuel()
+        if (
+            self.settings.logistics_supply_lines
+            and self.settings.logistics_carrier_airlift
+        ):
+            self.airlift_to_carriers(report)
         self.produce(report)
         self.dispatch_ships(report)
         if self.settings.logistics_supply_lines:
@@ -933,6 +1064,8 @@ def report_lines(report: PurchaseReport, settings: Settings) -> list[str]:
         lines.append(f"Couldn't afford: {top}.")
     if report.shipments:
         lines.append(f"{report.shipments} supply shipment(s) dispatched.")
+    if report.cod_runs:
+        lines.append(f"{report.cod_runs} onboard delivery run(s) sent to carriers.")
     if report.ships_sent:
         lines.append(f"{report.ships_sent} replenishment ship(s) sailed for carriers.")
     if report.ships_arrived:
