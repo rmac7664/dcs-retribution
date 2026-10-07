@@ -37,6 +37,8 @@ AMMO_PREFIXES = (
     "weapons.bombs.",
     "weapons.nurs.",
     "weapons.torpedoes.",
+    # SAM missiles (game/warehouse/sam.py), never in DCS airbase warehouses.
+    "sam.",
 )
 
 

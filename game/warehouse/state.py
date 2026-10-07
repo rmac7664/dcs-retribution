@@ -102,6 +102,10 @@ class WarehouseState:
         self.supply_ships: list[SupplyShip] = []
         #: Numbers replenishment ships, for unique mission group names.
         self.ship_serial = 0
+        #: DCS SAM launcher type -> missiles it carries (learned; see sam.py).
+        self.sam_loads: dict[str, dict[str, int]] = {}
+        #: "cp id|SAM missile" already given starting stock (see sam.py).
+        self.sam_seeded: set[str] = set()
         #: Not persisted: (aircraft, date, faction, learned count) -> max load.
         self._load_cache: dict[tuple[str, Any, str, int], dict[str, int]] = {}
 
@@ -185,6 +189,9 @@ class WarehouseState:
             for name, per_aircraft in loads.items():
                 if name.startswith(prefixes):
                     authorized[name] += per_aircraft * count * sorties
+        from .sam import authorized_sam
+
+        authorized.update(authorized_sam(game, cp))
         return dict(authorized)
 
     def _task_loads(
@@ -594,6 +601,11 @@ class WarehouseState:
             self.last_result = summary
             return
 
+        from .sam import apply_results as apply_sam_results
+
+        for cp_name, sam_used in apply_sam_results(game, data).items():
+            summary.munitions_used.setdefault(cp_name, {}).update(sam_used)
+
         by_id = {str(cp.id): cp for cp in game.theater.controlpoints}
         prefixes = metered_prefixes(game.settings)
         for cp_id, delta in _as_dict(data.get("bases")).items():
@@ -616,7 +628,7 @@ class WarehouseState:
                 if change < 0:
                     used[name] = -change
             if used:
-                summary.munitions_used[cp.name] = used
+                summary.munitions_used.setdefault(cp.name, {}).update(used)
         self.last_result = summary
         for cp_name, used in summary.munitions_used.items():
             logging.info("Warehouse logistics: %s expended %s", cp_name, used)

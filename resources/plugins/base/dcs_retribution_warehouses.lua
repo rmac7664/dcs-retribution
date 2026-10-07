@@ -535,6 +535,185 @@ if next(crateRuns) then
     timer.scheduleFunction(checkCratesSafely, nil, timer.getTime() + 20)
 end
 
+-- SAM missiles ------------------------------------------------------------------------
+--
+-- With "Limited SAM missiles", each land SAM site may fire only its allowance of
+-- missiles this mission (its share of its base's stock; see game/warehouse/sam.py).
+-- Launches are charged to the base. A group with nothing left to fire is set to hold
+-- fire (re-applied every few seconds in case an IADS script turns it back on), and a
+-- missile fired past the allowance is destroyed at launch. Launcher loads are reported
+-- so Retribution learns what each SAM type carries.
+
+local sam = data.sam or {}
+local samSites = sam.sites or {}  -- site key -> { cp, allow = { missile = n }, groups }
+local samUnits = sam.units or {}  -- unit name -> site key
+local samFired = {}               -- site key -> { missile = launches }
+local samHolding = {}             -- group name -> true while held
+W.sam_used = {}                   -- control point id -> { missile = launches }
+W.sam_loads = {}                  -- DCS unit type -> { missile = count when full }
+
+local function isMissile(name)
+    return startsWith(name, "weapons.missiles.")
+end
+
+local function weaponName(weapon)
+    local ok, name = pcall(weapon.getTypeName, weapon)
+    if not ok or type(name) ~= "string" then
+        return nil
+    end
+    if not startsWith(name, "weapons.") then
+        name = "weapons.missiles." .. name
+    end
+    return name
+end
+
+local function holdFire(groupName)
+    local ok, group = pcall(Group.getByName, groupName)
+    if not ok or not group then
+        return
+    end
+    local controller = group:getController()
+    if controller then
+        pcall(controller.setOption, controller, AI.Option.Ground.id.ROE,
+            AI.Option.Ground.val.ROE.WEAPON_HOLD)
+    end
+    if not samHolding[groupName] then
+        samHolding[groupName] = true
+        log("SAM group " .. groupName .. " is out of missiles and holds fire")
+    end
+end
+
+local function samLeft(key, missile)
+    local site = samSites[key]
+    local limit = site and site.allow and site.allow[missile]
+    if limit == nil then
+        return nil -- not limited (not learned yet)
+    end
+    local fired = (samFired[key] and samFired[key][missile]) or 0
+    return limit - fired
+end
+
+local function groupOutOfMissiles(key, group)
+    -- True if every missile this group's launchers carry has no allowance left.
+    local any = false
+    local okUnits, units = pcall(group.getUnits, group)
+    if not okUnits or type(units) ~= "table" then
+        return false
+    end
+    for _, unit in ipairs(units) do
+        for missile, count in pairs(ammoOf(unit, isMissile)) do
+            if count > 0 then
+                any = true
+                local left = samLeft(key, missile)
+                if left == nil or left > 0 then
+                    return false
+                end
+            end
+        end
+    end
+    return any
+end
+
+local function onSamShot(event)
+    local shooter, weapon = event.initiator, event.weapon
+    if not shooter or not weapon or not shooter.getName then
+        return
+    end
+    local okName, unitName = pcall(shooter.getName, shooter)
+    local key = okName and samUnits[unitName]
+    if not key then
+        return
+    end
+    local site = samSites[key]
+    local missile = weaponName(weapon)
+    if not site or not missile then
+        return
+    end
+    local left = samLeft(key, missile)
+    local okGroup, group = pcall(shooter.getGroup, shooter)
+    if left ~= nil and left <= 0 then
+        -- Past the allowance: this missile was never there.
+        pcall(weapon.destroy, weapon)
+        if okGroup and group then
+            holdFire(group:getName())
+        end
+        return
+    end
+    samFired[key] = samFired[key] or {}
+    samFired[key][missile] = (samFired[key][missile] or 0) + 1
+    local used = W.sam_used[site.cp] or {}
+    used[missile] = (used[missile] or 0) + 1
+    W.sam_used[site.cp] = used
+    dirty_state = true
+    if okGroup and group and groupOutOfMissiles(key, group) then
+        holdFire(group:getName())
+    end
+end
+
+local samEvents = {}
+function samEvents:onEvent(event)
+    if event.id ~= world.event.S_EVENT_SHOT then
+        return
+    end
+    local ok, err = pcall(onSamShot, event)
+    if not ok then
+        log("SAM shot handling failed: " .. tostring(err))
+    end
+end
+
+local function samStart()
+    for unitName, key in pairs(samUnits) do
+        local unit = aliveUnit(unitName)
+        if unit then
+            local missiles = ammoOf(unit, isMissile)
+            if next(missiles) then
+                local okType, unitType = pcall(unit.getTypeName, unit)
+                if okType and unitType then
+                    local known = W.sam_loads[unitType] or {}
+                    for missile, count in pairs(missiles) do
+                        known[missile] = math.max(known[missile] or 0, count)
+                    end
+                    W.sam_loads[unitType] = known
+                end
+            end
+        end
+    end
+    for key, site in pairs(samSites) do
+        for _, groupName in ipairs(site.groups or {}) do
+            local ok, group = pcall(Group.getByName, groupName)
+            if ok and group and groupOutOfMissiles(key, group) then
+                holdFire(groupName)
+            end
+        end
+    end
+    dirty_state = true
+end
+
+local function samKeepHolding()
+    for groupName, _ in pairs(samHolding) do
+        holdFire(groupName)
+    end
+    return timer.getTime() + 5
+end
+
+if next(samUnits) then
+    world.addEventHandler(samEvents)
+    timer.scheduleFunction(function()
+        local ok, err = pcall(samStart)
+        if not ok then
+            log("SAM setup failed: " .. tostring(err))
+        end
+        return nil
+    end, nil, timer.getTime() + 6)
+    timer.scheduleFunction(function()
+        local ok, result = pcall(samKeepHolding)
+        if not ok then
+            log("SAM hold check failed: " .. tostring(result))
+        end
+        return timer.getTime() + 5
+    end, nil, timer.getTime() + 10)
+end
+
 local function snapshot(dcsName, base)
     local warehouse = warehouseFor(dcsName)
     if not warehouse then
@@ -644,6 +823,8 @@ function W.export(missionEnded)
         delivered = W.delivered,
         replenished = W.replenished,
         crates_delivered = W.crates_delivered,
+        sam_used = W.sam_used,
+        sam_loads = W.sam_loads,
         stale = W.stale,
     }
     if missionEnded then

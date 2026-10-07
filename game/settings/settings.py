@@ -988,6 +988,19 @@ class Settings:
             "runs that can only go by air are always airlifted."
         ),
     )
+    logistics_limited_sam_missiles: bool = boolean_option(
+        "Limited SAM missiles",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=False,
+        detail=(
+            "SAM sites draw their missiles from the munitions of the base they belong "
+            "to, which buys and ships them like any other munition. Each mission a "
+            "site gets its full load, or its share of what the base holds, and holds "
+            "fire once it has used that. A new SAM type fires freely for one mission "
+            "while its load is learned from DCS. Ships aren't limited."
+        ),
+    )
     logistics_carrier_airlift: bool = boolean_option(
         "Carrier onboard delivery (C-2, helicopters)",
         CAMPAIGN_MANAGEMENT_PAGE,

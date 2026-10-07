@@ -179,6 +179,10 @@ class MunitionPrices:
 
     @classmethod
     def price(cls, resource: str, settings: Settings) -> float:
+        from .sam import is_sam, sam_price
+
+        if is_sam(resource):
+            return sam_price(resource) * settings.logistics_munition_price_percent / 100
         rules = cls._load()
         short = resource.split(".", 2)[-1]
         base = None
@@ -200,6 +204,10 @@ class MunitionMasses:
 
     @classmethod
     def mass_kg(cls, resource: str) -> float:
+        from .sam import is_sam, sam_mass_kg
+
+        if is_sam(resource):
+            return sam_mass_kg(resource)
         if cls._masses is None:
             from dcs.weapons_data import weapon_ids
 

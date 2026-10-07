@@ -81,6 +81,10 @@ class MissionWarehousePlan:
         #: Player supply airlifts carried as CTLD crates: lead unit name -> run.
         self.crate_runs: dict[str, dict[str, Any]] = {}
         no_wstypes = not self.state.resource_map
+        from .sam import allowances, enabled as sam_enabled, seed_new_missiles
+
+        if sam_enabled(game):
+            seed_new_missiles(game)
         for cp in self.state.managed_points(game):
             stock = self.state.ensure_stock(game, cp)
             self.bases[cp.id] = BasePlan(
@@ -90,6 +94,10 @@ class MissionWarehousePlan:
                 available=Counter(stock.munitions),
                 calibrate=no_wstypes,
             )
+        #: SAM sites, their missile allowances and unit lookup (see sam.py).
+        self.sam: dict[str, Any] = (
+            allowances(game) if sam_enabled(game) else {"sites": {}, "units": {}}
+        )
 
     def __getstate__(self) -> dict[str, Any]:
         # Only what's needed to learn from the mission results survives a save.
@@ -383,6 +391,7 @@ class MissionWarehousePlan:
             },
             "ws": ws,
             "wantResourceMap": True,
+            "sam": getattr(self, "sam", None) or {"sites": {}, "units": {}},
             # Replenishment ship unit name -> the carrier it sails to and its cargo.
             "replenishment": {
                 info.unit_name: {

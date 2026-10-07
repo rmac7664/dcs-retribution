@@ -500,3 +500,123 @@ def test_unpacked_supply_crates_count_and_leave_no_truck(crate_lua: Any) -> None
     result = to_py(crate_lua.eval("retributionWarehouses.export(false)"))
     assert result["crates_delivered"] == {"Hip 1": 1}
     assert crate_lua.eval("unpacked.gone") is True
+
+
+SAM_MOCK = """
+local queue = {}
+timer.scheduleFunction = function(f, arg, t) queue[#queue + 1] = {f = f, arg = arg} end
+function run_scheduled()
+    local due = queue
+    queue = {}
+    for _, s in ipairs(due) do
+        if s.f(s.arg, 0) then queue[#queue + 1] = s end
+    end
+end
+world.event.S_EVENT_SHOT = 1
+AI = { Option = { Ground = { id = { ROE = 0 }, val = { ROE = { WEAPON_HOLD = 4 } } } } }
+held = {}
+local groups = {}
+function make_group(name, members)
+    local controller = { setOption = function(self, id, value) held[name] = value end }
+    local g = { _name = name, _units = members }
+    function g:getName() return self._name end
+    function g:getUnits() return self._units end
+    function g:getController() return controller end
+    for _, u in ipairs(members) do
+        u.getGroup = function() return g end
+        u.getTypeName = function() return u._type end
+    end
+    groups[name] = g
+    return g
+end
+Group = { getByName = function(name) return groups[name] end }
+function launch(unit, missile)
+    local weapon = { _type = missile, destroyed = false }
+    function weapon:getTypeName() return self._type end
+    function weapon:destroy() self.destroyed = true end
+    unit._ammo[missile] = unit._ammo[missile] - 1
+    for _, h in ipairs(world.handlers) do
+        h:onEvent({ id = world.event.S_EVENT_SHOT, initiator = unit, weapon = weapon })
+    end
+    return weapon
+end
+"""
+
+SAM_DATA = """
+dcsRetributionWarehouses.sam = {
+    sites = {
+        ["SNAKE"] = { cp = "cpA", allow = { ["weapons.missiles.SA9M38M1"] = 3 },
+                      groups = { "0101 | SNAKE" } },
+        ["NEWBIE"] = { cp = "cpA", allow = {}, groups = { "0102 | NEWBIE" } },
+    },
+    units = { ["L1"] = "SNAKE", ["L2"] = "SNAKE", ["N1"] = "NEWBIE" },
+}
+"""
+
+
+@pytest.fixture
+def sam_lua() -> Any:
+    runtime = lupa.LuaRuntime(unpack_returned_tuples=True)
+    runtime.execute(MOCK_DCS)
+    runtime.execute(SAM_MOCK)
+    runtime.execute(DATA)
+    runtime.execute(SAM_DATA)
+    runtime.execute(SCRIPT.read_text(encoding="utf-8"))
+    runtime.execute("""
+        l1 = make_unit("L1", { ["weapons.missiles.SA9M38M1"] = 4 }, 0, false)
+        l1._type = "SA-11 Buk LN 9A310M1"
+        l2 = make_unit("L2", { ["weapons.missiles.SA9M38M1"] = 4 }, 0, false)
+        l2._type = "SA-11 Buk LN 9A310M1"
+        n1 = make_unit("N1", { ["weapons.missiles.5V55R"] = 4 }, 0, false)
+        n1._type = "S-300PS 5P85C ln"
+        make_group("0101 | SNAKE", { l1, l2 })
+        make_group("0102 | NEWBIE", { n1 })
+        run_scheduled()
+        """)
+    return runtime
+
+
+def test_sam_launcher_loads_are_learned(sam_lua: Any) -> None:
+    result = to_py(sam_lua.eval("retributionWarehouses.export(false)"))
+    assert result["sam_loads"] == {
+        "SA-11 Buk LN 9A310M1": {"weapons.missiles.SA9M38M1": 4},
+        "S-300PS 5P85C ln": {"weapons.missiles.5V55R": 4},
+    }
+
+
+def test_a_site_fires_its_allowance_then_holds_fire(sam_lua: Any) -> None:
+    sam_lua.execute("""
+        w1 = launch(l1, "weapons.missiles.SA9M38M1")
+        w2 = launch(l2, "weapons.missiles.SA9M38M1")
+        """)
+    assert sam_lua.eval('held["0101 | SNAKE"]') is None
+    sam_lua.execute('w3 = launch(l1, "weapons.missiles.SA9M38M1")')
+    # Third of three: the site is out and holds fire.
+    assert sam_lua.eval('held["0101 | SNAKE"]') == 4
+    assert sam_lua.eval("w3.destroyed") is False
+    # A fourth launch (an IADS script turned it back on) never happens.
+    sam_lua.execute('w4 = launch(l2, "weapons.missiles.SA9M38M1")')
+    assert sam_lua.eval("w4.destroyed") is True
+    # Unlearned sites fire freely and are charged; nothing else is.
+    sam_lua.execute('launch(n1, "weapons.missiles.5V55R")')
+    result = to_py(sam_lua.eval("retributionWarehouses.export(false)"))
+    assert result["sam_used"] == {
+        "cpA": {"weapons.missiles.SA9M38M1": 3, "weapons.missiles.5V55R": 1}
+    }
+    assert sam_lua.eval('held["0102 | NEWBIE"]') is None
+
+
+def test_a_site_with_nothing_allowed_holds_fire_from_the_start() -> None:
+    runtime = lupa.LuaRuntime(unpack_returned_tuples=True)
+    runtime.execute(MOCK_DCS)
+    runtime.execute(SAM_MOCK)
+    runtime.execute(DATA)
+    runtime.execute(SAM_DATA.replace("= 3 }", "= 0 }"))
+    runtime.execute(SCRIPT.read_text(encoding="utf-8"))
+    runtime.execute("""
+        l1 = make_unit("L1", { ["weapons.missiles.SA9M38M1"] = 4 }, 0, false)
+        l2 = make_unit("L2", { ["weapons.missiles.SA9M38M1"] = 4 }, 0, false)
+        make_group("0101 | SNAKE", { l1, l2 })
+        run_scheduled()
+        """)
+    assert runtime.eval('held["0101 | SNAKE"]') == 4
