@@ -540,6 +540,8 @@ class SupplyPlanner:
         for ship in self.ship_cargo.values():
             if ship.is_empty():
                 continue
+            self.state.ship_serial += 1
+            ship.name = f"{ship.carrier_name} replenishment {self.state.ship_serial}"
             self.state.supply_ships.append(ship)
             report.ships_sent += 1
             logging.info(

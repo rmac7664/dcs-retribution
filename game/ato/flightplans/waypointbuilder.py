@@ -33,13 +33,20 @@ AGL_TRANSITION_ALT = 5000
 
 if TYPE_CHECKING:
     from game.transfers import MultiGroupTransport
+    from game.warehouse.targets import ReplenishmentShipTarget
     from game.ato.flight import Flight
 
 
 @dataclass(frozen=True)
 class StrikeTarget:
     name: str
-    target: Union[TheaterGroundObject, TheaterGroup, TheaterUnit, MultiGroupTransport]
+    target: Union[
+        TheaterGroundObject,
+        TheaterGroup,
+        TheaterUnit,
+        MultiGroupTransport,
+        ReplenishmentShipTarget,
+    ]
 
 
 class WaypointBuilder:

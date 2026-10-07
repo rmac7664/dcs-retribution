@@ -25,12 +25,13 @@ class Builder(FormationAttackBuilder[AntiShipFlightPlan, FormationAttackLayout])
         location = self.package.target
 
         from game.transfers import CargoShip
+        from game.warehouse.targets import ReplenishmentShipTarget
 
         if isinstance(location, NavalControlPoint):
             targets = self.anti_ship_targets_for_tgo(location.find_main_tgo())
         elif isinstance(location, NavalGroundObject):
             targets = self.anti_ship_targets_for_tgo(location)
-        elif isinstance(location, CargoShip):
+        elif isinstance(location, (CargoShip, ReplenishmentShipTarget)):
             targets = [StrikeTarget(location.name, location)]
         else:
             raise InvalidObjectiveLocation(self.flight.flight_type, location)

@@ -155,7 +155,9 @@ class ReplenishmentShipGenerator:
 
         coalition = cp.coalition
         country = self.mission.country(coalition.faction.country.name)
-        name = f"{cp.name} replenishment {next(self.count)}"
+        name = (
+            getattr(ship, "name", "") or f"{cp.name} replenishment {next(self.count)}"
+        )
         group = self.mission.ship_group(
             country,
             name,

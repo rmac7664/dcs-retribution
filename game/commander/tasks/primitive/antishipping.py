@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Union
 
 from game.ato.flighttype import FlightType
 from game.commander.missionproposals import EscortType
 from game.commander.tasks.packageplanningtask import PackagePlanningTask
 from game.commander.theaterstate import TheaterState
 from game.transfers import CargoShip
+from game.warehouse.targets import ReplenishmentShipTarget
 
 
 @dataclass
-class PlanAntiShipping(PackagePlanningTask[CargoShip]):
+class PlanAntiShipping(PackagePlanningTask[Union[CargoShip, ReplenishmentShipTarget]]):
+    """Strikes a cargo ship or a replenishment ship sailing to its carrier."""
+
     def preconditions_met(self, state: TheaterState) -> bool:
         if self.target not in state.enemy_shipping:
             return False

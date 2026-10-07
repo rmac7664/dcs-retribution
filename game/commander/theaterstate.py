@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from game import Game
     from game.coalition import Coalition
     from game.transfers import Convoy, CargoShip
+    from game.warehouse.targets import ReplenishmentShipTarget
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,8 @@ class TheaterState(WorldState["TheaterState"]):
     threatening_air_defenses: list[Union[IadsGroundObject, NavalGroundObject]]
     detecting_air_defenses: list[Union[IadsGroundObject, NavalGroundObject]]
     enemy_convoys: list[Convoy]
-    enemy_shipping: list[CargoShip]
+    #: Cargo ships, and replenishment ships sailing to carriers.
+    enemy_shipping: list[Union[CargoShip, ReplenishmentShipTarget]]
     enemy_ships: list[NavalGroundObject]
     enemy_battle_positions: dict[ControlPoint, BattlePositions]
     oca_targets: list[ControlPoint]
@@ -209,7 +211,7 @@ class TheaterState(WorldState["TheaterState"]):
             threatening_air_defenses=[],
             detecting_air_defenses=[],
             enemy_convoys=list(finder.convoys()),
-            enemy_shipping=list(finder.cargo_ships()),
+            enemy_shipping=[*finder.cargo_ships(), *finder.replenishment_ships()],
             enemy_ships=list(finder.enemy_ships()),
             enemy_battle_positions=battle_postitions,
             oca_targets=list(

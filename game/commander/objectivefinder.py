@@ -32,6 +32,7 @@ from game.utils import meters, nautical_miles
 if TYPE_CHECKING:
     from game import Game
     from game.transfers import CargoShip, Convoy, MultiGroupTransport, TransportMap
+    from game.warehouse.targets import ReplenishmentShipTarget
 
 MissionTargetType = TypeVar("MissionTargetType", bound=MissionTarget)
 TransportT = TypeVar("TransportT", bound="MultiGroupTransport")
@@ -237,6 +238,11 @@ class ObjectiveFinder:
         yield from self._enemy_transports(
             self.game.coalition_for(self.is_player.opponent).transfers.cargo_ships
         )
+
+    def replenishment_ships(self) -> Iterator[ReplenishmentShipTarget]:
+        from game.warehouse.targets import enemy_replenishment_ships
+
+        yield from enemy_replenishment_ships(self.game, self.is_player)
 
     def _enemy_transports(
         self, transports: TransportMap[TransportT]

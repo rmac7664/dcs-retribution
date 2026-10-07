@@ -53,6 +53,8 @@ class SupplyShip:
     munitions: dict[str, int] = field(default_factory=dict)
     fuel_kg: float = 0.0
     turns_left: int = SUPPLY_SHIP_TRANSIT_TURNS
+    #: Its group name in the mission, so strikes planned against it can find it.
+    name: str = ""
 
     def is_empty(self) -> bool:
         return not any(self.munitions.values()) and self.fuel_kg < 1
@@ -98,6 +100,8 @@ class WarehouseState:
         self.orders: dict[UUID, dict[str, MunitionOrder]] = {}
         #: Replenishment ships at sea, bound for carriers and LHAs.
         self.supply_ships: list[SupplyShip] = []
+        #: Numbers replenishment ships, for unique mission group names.
+        self.ship_serial = 0
         #: Not persisted: (aircraft, date, faction, learned count) -> max load.
         self._load_cache: dict[tuple[str, Any, str, int], dict[str, int]] = {}
 
