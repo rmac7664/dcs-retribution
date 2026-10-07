@@ -620,3 +620,27 @@ def test_a_site_with_nothing_allowed_holds_fire_from_the_start() -> None:
         run_scheduled()
         """)
     assert runtime.eval('held["0101 | SNAKE"]') == 4
+
+
+def test_sam_missiles_reported_without_a_prefix_are_learned() -> None:
+    runtime = lupa.LuaRuntime(unpack_returned_tuples=True)
+    runtime.execute(MOCK_DCS)
+    runtime.execute(SAM_MOCK)
+    runtime.execute(DATA)
+    runtime.execute(SAM_DATA)
+    runtime.execute(SCRIPT.read_text(encoding="utf-8"))
+    runtime.execute("""
+        Weapon = { Category = { SHELL = 0, MISSILE = 1 } }
+        l1 = make_unit("L1", {}, 0, false)
+        l1._type = "SA-11 Buk LN 9A310M1"
+        function l1:getAmmo()
+            return { { count = 4, desc = { typeName = "SA9M38M1", category = 1 } },
+                     { count = 500, desc = { typeName = "23mm_HE", category = 0 } } }
+        end
+        make_group("0101 | SNAKE", { l1 })
+        run_scheduled()
+        """)
+    result = to_py(runtime.eval("retributionWarehouses.export(false)"))
+    assert result["sam_loads"]["SA-11 Buk LN 9A310M1"] == {
+        "weapons.missiles.SA9M38M1": 4
+    }

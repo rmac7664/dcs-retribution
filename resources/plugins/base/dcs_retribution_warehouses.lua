@@ -556,15 +556,42 @@ local function isMissile(name)
     return startsWith(name, "weapons.missiles.")
 end
 
-local function weaponName(weapon)
-    local ok, name = pcall(weapon.getTypeName, weapon)
-    if not ok or type(name) ~= "string" then
+local function normalizedMissile(name)
+    if type(name) ~= "string" then
         return nil
     end
     if not startsWith(name, "weapons.") then
         name = "weapons.missiles." .. name
     end
     return name
+end
+
+local function weaponName(weapon)
+    local ok, name = pcall(weapon.getTypeName, weapon)
+    if not ok then
+        return nil
+    end
+    return normalizedMissile(name)
+end
+
+local MISSILE = (Weapon and Weapon.Category and Weapon.Category.MISSILE) or 1
+
+local function samMissilesOf(unit)
+    -- A SAM's missiles, by name. Unlike aircraft weapons, ground units' missiles are
+    -- often reported without the "weapons.missiles." prefix, so go by category.
+    local result = {}
+    local ok, ammo = pcall(unit.getAmmo, unit)
+    if ok and type(ammo) == "table" then
+        for _, entry in ipairs(ammo) do
+            local desc = entry.desc or {}
+            local raw = desc.typeName
+            if raw and (desc.category == MISSILE or isMissile(raw)) then
+                local name = normalizedMissile(raw)
+                result[name] = (result[name] or 0) + (entry.count or 0)
+            end
+        end
+    end
+    return result
 end
 
 local function holdFire(groupName)
@@ -601,7 +628,7 @@ local function groupOutOfMissiles(key, group)
         return false
     end
     for _, unit in ipairs(units) do
-        for missile, count in pairs(ammoOf(unit, isMissile)) do
+        for missile, count in pairs(samMissilesOf(unit)) do
             if count > 0 then
                 any = true
                 local left = samLeft(key, missile)
@@ -661,11 +688,32 @@ function samEvents:onEvent(event)
     end
 end
 
+local function describeAmmo(unit)
+    local parts = {}
+    local ok, ammo = pcall(unit.getAmmo, unit)
+    if ok and type(ammo) == "table" then
+        for _, entry in ipairs(ammo) do
+            local desc = entry.desc or {}
+            parts[#parts + 1] = string.format("%s(cat %s) x%s", tostring(desc.typeName),
+                tostring(desc.category), tostring(entry.count))
+        end
+    end
+    return table.concat(parts, ", ")
+end
+
 local function samStart()
+    local described = {}
+    local present = 0
     for unitName, key in pairs(samUnits) do
         local unit = aliveUnit(unitName)
         if unit then
-            local missiles = ammoOf(unit, isMissile)
+            present = present + 1
+            local okT, typeName = pcall(unit.getTypeName, unit)
+            if okT and typeName and not described[typeName] then
+                described[typeName] = true
+                log("SAM unit type " .. tostring(typeName) .. " carries: " .. describeAmmo(unit))
+            end
+            local missiles = samMissilesOf(unit)
             if next(missiles) then
                 local okType, unitType = pcall(unit.getTypeName, unit)
                 if okType and unitType then
@@ -678,6 +726,7 @@ local function samStart()
             end
         end
     end
+    log(string.format("SAM tracking: %d of the tracked SAM units are in this mission", present))
     for key, site in pairs(samSites) do
         for _, groupName in ipairs(site.groups or {}) do
             local ok, group = pcall(Group.getByName, groupName)
