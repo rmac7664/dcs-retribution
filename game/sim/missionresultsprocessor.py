@@ -177,6 +177,10 @@ class MissionResultsProcessor:
                     transfer.kill_unit(unit_type)
                     logging.info(f"{unit_type} destroyed in {airlift_name}")
                 except KeyError:
+                    if getattr(transfer, "supplies", None) is not None:
+                        # A supply run settled already (e.g. CTLD crates): its
+                        # cargo was delivered or returned before the loss.
+                        continue
                     logging.exception(
                         f"Found killed {unit_type} in {airlift_name} but that airlift "
                         "has none available."

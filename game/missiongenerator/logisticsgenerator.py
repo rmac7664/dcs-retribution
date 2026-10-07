@@ -23,7 +23,11 @@ class LogisticsGenerator:
         mission: Mission,
         settings: Settings,
         transfer: Optional[TransferOrder] = None,
+        supply_crates: Optional[tuple[int, int]] = None,
     ) -> None:
+        """`supply_crates` is (crate weight in kg, crates) for a player supply airlift
+        carried as CTLD crates (game/warehouse/supply.py)."""
+        self.supply_crates = supply_crates
         self.flight = flight
         self.group = group
         self.transfer = transfer
@@ -84,10 +88,17 @@ class LogisticsGenerator:
             self.mission.triggers.add_triggerzone(
                 crate_location, CRATE_ZONE_RADIUS, False, crate_zone
             )
-            logistics_info.cargo = [
-                CargoInfo(cargo_unit_type.dcs_id, crate_zone, amount)
-                for cargo_unit_type, amount in self.transfer.units.items()
-            ]
+            if self.supply_crates is not None:
+                weight, crates = self.supply_crates
+                (truck,) = self.transfer.units
+                logistics_info.cargo = [
+                    CargoInfo(truck.dcs_id, crate_zone, crates, supply_weight=weight)
+                ]
+            else:
+                logistics_info.cargo = [
+                    CargoInfo(cargo_unit_type.dcs_id, crate_zone, amount)
+                    for cargo_unit_type, amount in self.transfer.units.items()
+                ]
 
         if pickup_point is not None and self.settings.plugin_option(
             "ctld.logisticunit"

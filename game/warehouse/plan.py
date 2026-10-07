@@ -78,6 +78,8 @@ class MissionWarehousePlan:
         self.units: dict[str, dict[str, str]] = {}
         #: Supply airlift unit name -> destination control point id.
         self.cargo_units: dict[str, str] = {}
+        #: Player supply airlifts carried as CTLD crates: lead unit name -> run.
+        self.crate_runs: dict[str, dict[str, Any]] = {}
         no_wstypes = not self.state.resource_map
         for cp in self.state.managed_points(game):
             stock = self.state.ensure_stock(game, cp)
@@ -95,11 +97,13 @@ class MissionWarehousePlan:
             "loadout_keys": self.loadout_keys,
             "learn_keys": self.learn_keys,
             "cargo_units": self.cargo_units,
+            "crate_runs": getattr(self, "crate_runs", {}),
         }
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
         self.cargo_units = state.get("cargo_units", {})
+        self.crate_runs = state.get("crate_runs", {})
         self.bases = {}
         self.units = {}
 
@@ -228,6 +232,37 @@ class MissionWarehousePlan:
                 self.learn_keys.add(key)
         self.units[str(unit.name)] = entry
 
+    def register_crate_run(
+        self,
+        unit_names: list[str],
+        destination: ControlPoint,
+        crates: int,
+        weight_kg: int,
+        spawn_zone: str,
+        side: str,
+        unit_type: str,
+        description: str,
+    ) -> None:
+        """A player supply airlift whose cargo is CTLD crates instead of a landing.
+
+        Delivery is counted per crate set down near `destination`, so the landing of
+        its aircraft no longer decides it.
+        """
+        for name in unit_names:
+            self.cargo_units.pop(name, None)
+        self.crate_runs[unit_names[0]] = {
+            "dest": str(destination.id),
+            "dest_name": destination.name,
+            "x": round(destination.position.x, 1),
+            "z": round(destination.position.y, 1),
+            "crates": crates,
+            "weight": weight_kg,
+            "zone": spawn_zone,
+            "side": side,
+            "unit": unit_type,
+            "desc": description,
+        }
+
     # Mission file ---------------------------------------------------------------------
 
     def apply_to_mission(self, mission: Mission, mission_data: MissionData) -> None:
@@ -341,6 +376,11 @@ class MissionWarehousePlan:
             "units": self.units,
             "learn": {key: True for key in sorted(self.learn_keys)},
             "cargo": self.cargo_units,
+            # CTLD supply crates: crate weight (identifies the crate type) -> run.
+            "crates": {
+                str(run["weight"]): dict(run, key=key)
+                for key, run in getattr(self, "crate_runs", {}).items()
+            },
             "ws": ws,
             "wantResourceMap": True,
             # Replenishment ship unit name -> the carrier it sails to and its cargo.

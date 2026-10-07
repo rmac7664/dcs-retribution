@@ -131,6 +131,10 @@ class LuaGenerator:
                 "preload", "true" if logistic_info.preload else "false"
             )
             for cargo in logistic_info.cargo:
+                if cargo.supply_weight:
+                    # Supply pallets are spawned and tracked by the warehouse script,
+                    # and kept off CTLD's crate menu so they cannot be conjured up.
+                    continue
                 if cargo.unit_type not in spawnable_crates:
                     spawnable_crates[cargo.unit_type] = str(200 + len(spawnable_crates))
                 crate_weight = spawnable_crates[cargo.unit_type]

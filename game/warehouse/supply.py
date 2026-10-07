@@ -244,6 +244,16 @@ def carriers_per_aircraft(transfer: TransferOrder, aircraft: AircraftType) -> in
     return max(1, int(cargo_tons(aircraft) / max(0.1, load.tons_per_carrier) + 1e-6))
 
 
+def uses_ctld_crates(settings: Settings, flight: Any) -> bool:
+    """True if this supply airlift's cargo is carried as CTLD crates by a player."""
+    return (
+        settings.logistics_player_supply_cargo == "ctld"
+        and bool(settings.plugins.get(settings.plugin_settings_key("ctld"), False))
+        and flight.client_count > 0
+        and flight.is_helo
+    )
+
+
 def fit_pallets(transfer: TransferOrder, aircraft: AircraftType) -> None:
     """Repacks a supply load into pallets no heavier than `aircraft` can lift.
 

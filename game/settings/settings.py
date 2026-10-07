@@ -988,6 +988,24 @@ class Settings:
             "runs that can only go by air are always airlifted."
         ),
     )
+    logistics_player_supply_cargo: str = choices_option(
+        "Player supply airlift cargo",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=LOGISTICS_SECTION,
+        default="landing",
+        choices={
+            "Delivered on landing": "landing",
+            "CTLD crates (player helicopters)": "ctld",
+        },
+        detail=(
+            "How a supply airlift flown by a player delivers. On landing: the cargo "
+            "counts as aboard and is delivered by landing at the destination. CTLD "
+            "crates: player-flown helicopters get the cargo as CTLD pallet crates at "
+            "the pickup zone; each crate set down near the destination is delivered "
+            "and the rest returns. Needs the CTLD plugin; AI and fixed-wing "
+            "transports still deliver on landing."
+        ),
+    )
     logistics_truck_tons: int = bounded_int_option(
         "Cargo per truck (tons)",
         CAMPAIGN_MANAGEMENT_PAGE,

@@ -383,6 +383,158 @@ if next(replenishment) then
     timer.scheduleFunction(checkReplenishmentSafely, nil, timer.getTime() + 30)
 end
 
+-- CTLD supply crates ------------------------------------------------------------------
+--
+-- A player-flown supply helicopter carries its cargo as CTLD crates. Each run has its
+-- own crate weight, which is how CTLD tells crate types apart. The crates are spawned
+-- at the run's crate zone and kept off CTLD's request menu, so they cannot be conjured
+-- up. A crate set down within DELIVERY_METERS of the destination is delivered: it is
+-- counted, removed, and Retribution credits its share of the cargo after the mission.
+
+local crateRuns = data.crates or {} -- crate weight (string) -> run
+local DELIVERY_METERS = 3000
+local CRATE_SPACING = 12
+W.crates_delivered = {} -- run key (lead unit name) -> crates delivered
+
+local function runForWeight(weight)
+    if weight == nil then
+        return nil
+    end
+    return crateRuns[tostring(math.floor(weight + 0.5))]
+end
+
+local function nearDestination(run, point)
+    local dx, dz = point.x - run.x, point.z - run.z
+    return dx * dx + dz * dz <= DELIVERY_METERS * DELIVERY_METERS
+end
+
+local function countCrate(run)
+    local done = W.crates_delivered[run.key] or 0
+    if done >= (run.crates or 0) then
+        return false -- never more than the run carried
+    end
+    W.crates_delivered[run.key] = done + 1
+    dirty_state = true
+    local side = run.side == "red" and coalition.side.RED or coalition.side.BLUE
+    trigger.action.outTextForCoalition(side, string.format(
+        "Supply crate delivered to %s (%d of %d)",
+        tostring(run.dest_name), done + 1, run.crates or 0), 10)
+    log(string.format("%s: supply crate %d of %d delivered to %s",
+        tostring(run.key), done + 1, run.crates or 0, tostring(run.dest_name)))
+    return true
+end
+
+local function spawnSupplyCrates()
+    if type(ctld) ~= "table" or type(ctld.spawnCrateStatic) ~= "function" then
+        log("CTLD is not loaded; supply crates were not spawned")
+        return nil
+    end
+    for weight, run in pairs(crateRuns) do
+        ctld.crateLookupTable[weight] = {
+            weight = tonumber(weight), desc = run.desc, unit = run.unit,
+        }
+        local zone = trigger.misc.getZone(run.zone)
+        if zone then
+            local red = run.side == "red"
+            local country = red and 0 or 2
+            local sideId = red and 1 or 2
+            local perRow = math.max(1, math.ceil(math.sqrt(run.crates or 1)))
+            for i = 0, (run.crates or 0) - 1 do
+                -- Laid out in a grid: CTLD's own spawner stacks every crate on the
+                -- zone centre.
+                local x = zone.point.x + (i % perRow) * CRATE_SPACING
+                local z = zone.point.z + math.floor(i / perRow) * CRATE_SPACING
+                local point = { x = x, y = land.getHeight({ x = x, y = z }), z = z }
+                local id = ctld.getNextUnitId()
+                local name = string.format("%s #%i", tostring(run.desc), id)
+                ctld.spawnCrateStatic(country, id, point, name, tonumber(weight), sideId)
+            end
+            log(string.format("spawned %d supply crates for %s at %s",
+                run.crates or 0, tostring(run.dest_name), tostring(run.zone)))
+        else
+            log("supply crate zone not found: " .. tostring(run.zone))
+        end
+    end
+    if type(ctld.addCallback) == "function" then
+        ctld.addCallback(function(args)
+            -- Unpacked instead of just set down: the cargo is supplies, not a vehicle.
+            if type(args) ~= "table" or args.action ~= "unpack" then
+                return
+            end
+            local details = args.crate and args.crate.details
+            local run = runForWeight(details and details.weight)
+            if not run then
+                return
+            end
+            local point = args.unit and args.unit:isExist() and args.unit:getPoint()
+            local group = args.spawnedGroup
+            if group and group.isExist and group:isExist() then
+                local first = group:getUnit(1)
+                if first then
+                    point = first:getPoint()
+                end
+                group:destroy()
+            end
+            if point and nearDestination(run, point) then
+                countCrate(run)
+            end
+        end)
+    end
+    return nil
+end
+
+local function onTheGround(object)
+    local point = object:getPoint()
+    return point.y - land.getHeight({ x = point.x, y = point.z }) < 2
+end
+
+local function checkCrates()
+    if type(ctld) ~= "table" then
+        return nil
+    end
+    for _, crates in ipairs({ ctld.spawnedCratesBLUE or {}, ctld.spawnedCratesRED or {} }) do
+        local arrived = {}
+        for name, crateType in pairs(crates) do
+            local run = runForWeight(type(crateType) == "table" and crateType.weight)
+            if run then
+                local object = ctld.getCrateObject(name)
+                if object and object:isExist() and onTheGround(object)
+                    and nearDestination(run, object:getPoint()) then
+                    arrived[name] = { run = run, object = object }
+                end
+            end
+        end
+        for name, crate in pairs(arrived) do
+            if countCrate(crate.run) then
+                crates[name] = nil
+                pcall(crate.object.destroy, crate.object)
+            end
+        end
+    end
+    return timer.getTime() + 15
+end
+
+local function checkCratesSafely()
+    local ok, result = pcall(checkCrates)
+    if not ok then
+        log("supply crate check failed: " .. tostring(result))
+        return timer.getTime() + 15
+    end
+    return result
+end
+
+if next(crateRuns) then
+    -- CTLD sets itself up a couple of seconds into the mission.
+    timer.scheduleFunction(function()
+        local ok, err = pcall(spawnSupplyCrates)
+        if not ok then
+            log("spawning supply crates failed: " .. tostring(err))
+        end
+        return nil
+    end, nil, timer.getTime() + 4)
+    timer.scheduleFunction(checkCratesSafely, nil, timer.getTime() + 20)
+end
+
 local function snapshot(dcsName, base)
     local warehouse = warehouseFor(dcsName)
     if not warehouse then
@@ -491,6 +643,7 @@ function W.export(missionEnded)
         learned = W.learned,
         delivered = W.delivered,
         replenished = W.replenished,
+        crates_delivered = W.crates_delivered,
         stale = W.stale,
     }
     if missionEnded then

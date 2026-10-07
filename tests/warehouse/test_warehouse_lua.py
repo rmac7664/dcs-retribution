@@ -376,3 +376,127 @@ def test_sunk_replenishment_ship_unloads_nothing(lua_with_ship: Any) -> None:
     g = lua_with_ship.globals()
     assert to_py(g.result)["replenished"] == {}
     assert to_py(g.carrier_base._wh["items"]) == {}
+
+
+CTLD_MOCK = """
+-- Repeating tasks run again on the next run_scheduled(), like DCS' timer.
+local queue = {}
+timer.scheduleFunction = function(f, arg, t) queue[#queue + 1] = {f = f, arg = arg} end
+function run_scheduled()
+    local due = queue
+    queue = {}
+    for _, s in ipairs(due) do
+        if s.f(s.arg, 0) then queue[#queue + 1] = s end
+    end
+end
+coalition = { side = { RED = 1, BLUE = 2 } }
+messages = {}
+trigger = {
+    misc = { getZone = function(name)
+        if name == "Hip 1crate_spawn" then return { point = { x = 0, y = 0, z = 0 } } end
+    end },
+    action = { outTextForCoalition = function(side, text) messages[#messages + 1] = text end },
+}
+land = { getHeight = function() return 0 end }
+local statics = {}
+local nextId = 100
+local CrateMT = {}
+CrateMT.__index = CrateMT
+function CrateMT:getPoint() return self.p end
+function CrateMT:isExist() return not self.gone end
+function CrateMT:destroy() self.gone = true end
+callbacks = {}
+ctld = {
+    crateLookupTable = { ["200"] = { weight = 200, desc = "Troop truck", unit = "M818" } },
+    spawnedCratesBLUE = {},
+    spawnedCratesRED = {},
+    getNextUnitId = function() nextId = nextId + 1; return nextId end,
+    getCrateObject = function(name) return statics[name] end,
+    addCallback = function(f) callbacks[#callbacks + 1] = f end,
+}
+function ctld.spawnCrateStatic(country, id, point, name, weight, side)
+    statics[name] = setmetatable({ p = point }, CrateMT)
+    local t = ctld.crateLookupTable[tostring(weight)]
+    if side == 1 then ctld.spawnedCratesRED[name] = t else ctld.spawnedCratesBLUE[name] = t end
+    return statics[name]
+end
+function crate_names()
+    local out = {}
+    for name, _ in pairs(ctld.spawnedCratesBLUE) do out[#out + 1] = name end
+    table.sort(out)
+    return out
+end
+function move(name, x, z, y) statics[name].p = { x = x, y = y or 0, z = z } end
+"""
+
+CRATE_DATA = """
+dcsRetributionWarehouses.crates = {
+    ["1500"] = { key = "Hip 1", dest = "cpB", dest_name = "Senaki", x = 50000, z = 0,
+                 crates = 2, weight = 1500, zone = "Hip 1crate_spawn", side = "blue",
+                 unit = "M818", desc = "Supply pallet for Senaki" },
+}
+"""
+
+
+@pytest.fixture
+def crate_lua() -> Any:
+    runtime = lupa.LuaRuntime(unpack_returned_tuples=True)
+    runtime.execute(MOCK_DCS)
+    runtime.execute(CTLD_MOCK)
+    runtime.execute(DATA)
+    runtime.execute(CRATE_DATA)
+    runtime.execute(SCRIPT.read_text(encoding="utf-8"))
+    runtime.execute("run_scheduled()")
+    return runtime
+
+
+def test_supply_crates_spawn_spread_out_and_off_the_ctld_menu(crate_lua: Any) -> None:
+    names = list(to_py(crate_lua.eval("crate_names()")).values())
+    assert len(names) == 2 and all("Supply pallet for Senaki" in n for n in names)
+    points = [
+        to_py(crate_lua.eval(f'ctld.getCrateObject("{n}"):getPoint()')) for n in names
+    ]
+    assert points[0] != points[1]
+    # Known to CTLD by weight, so it can be loaded, but not on the request menu.
+    assert to_py(crate_lua.eval('ctld.crateLookupTable["1500"]'))["unit"] == "M818"
+    assert crate_lua.eval("ctld.spawnableCrates") is None
+
+
+def test_crates_set_down_at_the_destination_are_delivered(crate_lua: Any) -> None:
+    first, second = to_py(crate_lua.eval("crate_names()")).values()
+    crate_lua.execute(f"""
+        move("{first}", 50500, 300)        -- set down at Senaki
+        move("{second}", 50500, 300, 40)   -- still hanging under the helicopter
+        run_scheduled()
+        """)
+    crate_lua.execute("run_scheduled(); run_scheduled()")  # counted only once
+    result = to_py(crate_lua.eval("retributionWarehouses.export(false)"))
+    assert result["crates_delivered"] == {"Hip 1": 1}
+    assert crate_lua.eval(f'ctld.spawnedCratesBLUE["{first}"]') is None
+    assert crate_lua.eval(f'ctld.getCrateObject("{first}"):isExist()') is False
+    assert crate_lua.eval(f'ctld.spawnedCratesBLUE["{second}"]') is not None
+    assert list(to_py(crate_lua.globals().messages).values()) == [
+        "Supply crate delivered to Senaki (1 of 2)"
+    ]
+
+
+def test_unpacked_supply_crates_count_and_leave_no_truck(crate_lua: Any) -> None:
+    crate_lua.execute("""
+        local group = { gone = false }
+        function group:isExist() return not self.gone end
+        function group:getUnit() return { getPoint = function() return { x = 50100, y = 0, z = 0 } end } end
+        function group:destroy() self.gone = true end
+        unpacked = group
+        local heli = { isExist = function() return true end,
+                       getPoint = function() return { x = 50100, y = 0, z = 0 } end }
+        for _, cb in ipairs(callbacks) do
+            cb({ action = "unpack", unit = heli, spawnedGroup = group,
+                 crate = { details = { weight = 1500, unit = "M818" } } })
+            -- An ordinary CTLD crate is left alone.
+            cb({ action = "unpack", unit = heli, spawnedGroup = { isExist = function() return true end },
+                 crate = { details = { weight = 200, unit = "M818" } } })
+        end
+        """)
+    result = to_py(crate_lua.eval("retributionWarehouses.export(false)"))
+    assert result["crates_delivered"] == {"Hip 1": 1}
+    assert crate_lua.eval("unpacked.gone") is True

@@ -102,6 +102,9 @@ class CargoInfo:
     unit_type: str = field(default_factory=str)
     spawn_zone: str = field(default_factory=str)
     amount: int = field(default=1)
+    #: Supply pallets (game/warehouse): their own crate weight; spawned and tracked
+    #: by the warehouse script rather than CTLD's airlift crates.
+    supply_weight: int = field(default=0)
 
 
 @dataclass

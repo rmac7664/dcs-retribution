@@ -52,6 +52,7 @@ from ...radio.datalink import (
 from ...theater import Fob
 
 if TYPE_CHECKING:
+    from game.transfers import TransferOrder
     from game import Game
 
 
@@ -116,7 +117,6 @@ class FlightGroupConfigurator:
             if self.flight.flight_type == FlightType.TRANSPORT:
                 coalition = self.game.coalition_for(player=self.flight.blue)
                 transfer = coalition.transfers.transfer_for_flight(self.flight)
-            # Supply runs deliver by landing at the destination, not by CTLD crates.
             if transfer is None or getattr(transfer, "supplies", None) is None:
                 self.mission_data.logistics.append(
                     LogisticsGenerator(
@@ -127,6 +127,10 @@ class FlightGroupConfigurator:
                         transfer,
                     ).generate_logistics()
                 )
+            else:
+                # Supply runs deliver by landing at the destination, unless a player
+                # flies them as CTLD crates (see game/warehouse/supply.py).
+                self.setup_supply_crates(transfer)
 
         mission_start_time, waypoints = WaypointGenerator(
             self.flight,
@@ -218,6 +222,49 @@ class FlightGroupConfigurator:
                 escorted_group_id=escorted_group_id,
                 engagement_range_meters=int(engagement_range),
             )
+        )
+
+    def setup_supply_crates(self, transfer: TransferOrder) -> None:
+        from game.warehouse.supply import uses_ctld_crates
+
+        plan = self.mission_data.warehouse_plan
+        load = transfer.supplies
+        if (
+            plan is None
+            or load is None
+            or transfer.transport is None
+            or not uses_ctld_crates(self.game.settings, self.flight)
+            or len(transfer.units) != 1
+            or transfer.size <= 0
+        ):
+            return
+        destination = transfer.transport.destination
+        # CTLD tells crate types apart by weight, so each run gets its own.
+        used = {int(run["weight"]) for run in plan.crate_runs.values()}
+        weight = max(300, round(load.tons_per_carrier * 1000))
+        while weight in used:
+            weight += 1
+        description = f"Supply pallet for {destination.name}"
+        info = LogisticsGenerator(
+            self.flight,
+            self.group,
+            self.mission,
+            self.game.settings,
+            transfer,
+            supply_crates=(weight, transfer.size),
+        ).generate_logistics()
+        self.mission_data.logistics.append(info)
+        if not info.cargo:
+            return
+        plan.register_crate_run(
+            [str(u.name) for u in self.group.units],
+            destination,
+            crates=transfer.size,
+            weight_kg=weight,
+            spawn_zone=info.cargo[0].spawn_zone,
+            side="blue" if self.flight.blue.is_blue else "red",
+            unit_type=info.cargo[0].unit_type,
+            description=description,
         )
 
     def configure_flight_member(

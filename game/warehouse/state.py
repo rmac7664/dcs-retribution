@@ -444,7 +444,10 @@ class WarehouseState:
         from .supply import return_to, supply_of
 
         plan = self.pending_plan
-        if plan is None or not data or not getattr(plan, "cargo_units", None):
+        if plan is None or not data:
+            return
+        self._apply_crate_deliveries(game, debriefing, data)
+        if not getattr(plan, "cargo_units", None):
             return
         delivered = _as_dict(data.get("delivered"))
         killed = set(debriefing.state_data.killed_aircraft)
@@ -469,6 +472,56 @@ class WarehouseState:
                 "Supply: %s did not land at %s; its cargo stays at %s",
                 name,
                 transfer.destination.name,
+                transfer.position.name,
+            )
+
+    def _apply_crate_deliveries(
+        self, game: Game, debriefing: Debriefing, data: dict[str, Any]
+    ) -> None:
+        """Player supply airlifts carried as CTLD crates: count what was set down.
+
+        Each crate the mission script saw set down near the destination unloads there
+        now; the rest (left at the pickup, still slung, or lost) go back to where the
+        run started. The order is then empty, so nothing else delivers it again.
+        """
+        from .supply import return_to, supply_of
+
+        plan = self.pending_plan
+        runs = getattr(plan, "crate_runs", None) or {}
+        reported = _as_dict(data.get("crates_delivered"))
+        for key, run in runs.items():
+            airlift = debriefing.unit_map.airlift_unit(key)
+            if airlift is None:
+                continue
+            transfer = airlift.transfer
+            load = supply_of(transfer)
+            if load is None or transfer.size <= 0 or len(transfer.units) != 1:
+                continue
+            (truck,) = transfer.units
+            crates = min(int(run.get("crates", 0)), transfer.size)
+            delivered = max(0, min(int(reported.get(key, 0) or 0), crates))
+            try:
+                destination: Optional[ControlPoint] = (
+                    game.theater.find_control_point_by_id(UUID(str(run["dest"])))
+                )
+            except (KeyError, ValueError):
+                destination = None
+            if delivered and destination is not None:
+                cargo = load.split_off(delivered)
+                for _ in range(delivered):
+                    transfer.kill_unit(truck)
+                self.receive(game, destination, cargo.munitions, cargo.fuel_kg)
+            back = transfer.size
+            for _ in range(back):
+                transfer.kill_unit(truck)
+            if back:
+                return_to(transfer, transfer.position, back)
+            logging.info(
+                "Supply: %d of %d CTLD supply crates delivered to %s; %d returned to %s",
+                delivered,
+                crates,
+                run.get("dest_name", "?"),
+                back,
                 transfer.position.name,
             )
 
