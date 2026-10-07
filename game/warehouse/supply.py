@@ -346,6 +346,8 @@ class PurchaseReport:
     ships_sent: int = 0
     #: Urgent top-ups flown out to carriers (onboard delivery).
     cod_runs: int = 0
+    #: Bases that got less (or nothing) because of their cargo handling limit.
+    throughput_limited: list[str] = field(default_factory=list)
     ships_arrived: int = 0
     ships_lost: list[str] = field(default_factory=list)
 
@@ -502,6 +504,8 @@ class SupplyPlanner:
             self.state.ensure_stock(game, cp)
         self.inbound: dict[Any, Counter[str]] = {cp.id: Counter() for cp in self.bases}
         self.inbound_fuel: dict[Any, float] = {cp.id: 0.0 for cp in self.bases}
+        #: Supply still on its way to each base, in tons (for cargo handling limits).
+        self.inbound_tons: dict[Any, float] = {cp.id: 0.0 for cp in self.bases}
         for transfer in coalition.transfers.pending_transfers:
             load = supply_of(transfer)
             if load is None or transfer.destination.id not in self.inbound:
@@ -509,6 +513,7 @@ class SupplyPlanner:
             share = load.scaled(transfer.size / max(1, load.carriers))
             self.inbound[transfer.destination.id].update(share.munitions)
             self.inbound_fuel[transfer.destination.id] += share.fuel_kg
+            self.inbound_tons[transfer.destination.id] += share.tons
         # Ships already at sea count too, so a carrier is never ordered for twice.
         for cp in self.bases:
             for ship in self.state.ships_bound_for(cp):
@@ -771,6 +776,23 @@ class SupplyPlanner:
 
     # Distribution ---------------------------------------------------------------------
 
+    def throughput_tons(self, cp: ControlPoint) -> Optional[float]:
+        """Most supply `cp` can take in per turn (None: no limit)."""
+        limit = self.settings.logistics_base_throughput_tons
+        if limit <= 0 or isinstance(cp, (NavalControlPoint, OffMapSpawn)):
+            return None
+        if isinstance(cp, Airfield):
+            return float(limit)
+        return limit / 3
+
+    def handling_room_kg(self, cp: ControlPoint) -> Optional[float]:
+        """Cargo `cp` can still accept this turn, after what's already inbound."""
+        limit = self.throughput_tons(cp)
+        if limit is None:
+            return None
+        inbound = getattr(self, "inbound_tons", {}).get(cp.id, 0.0)
+        return max(0.0, (limit - inbound) * 1000)
+
     def distribute(self, report: PurchaseReport) -> None:
         from game.transfers import TransferOrder
 
@@ -800,7 +822,17 @@ class SupplyPlanner:
                     depot, self.settings
                 )
                 fuel = max(0.0, min(gap_kg, spare_kg))
-            load, fuel = self._fit_to_shipment(cp, load, fuel)
+            room = self.handling_room_kg(cp)
+            if room is not None and room < self.default_shipment_kg():
+                if room < 1 and (load or fuel >= 1):
+                    report.throughput_limited.append(cp.name)
+                    logging.info(
+                        "Supply: %s is at its cargo handling limit this turn", cp.name
+                    )
+                    continue
+                if load or fuel >= 1:
+                    report.throughput_limited.append(cp.name)
+            load, fuel = self._fit_to_shipment(cp, load, fuel, room)
             tons = MunitionMasses.tons(load, fuel)
             if not load and fuel < 1:
                 continue
@@ -833,6 +865,8 @@ class SupplyPlanner:
             self.coalition.transfers.pending_transfers.append(transfer)
             self.inbound[cp.id].update(load)
             self.inbound_fuel[cp.id] += fuel
+            if hasattr(self, "inbound_tons"):
+                self.inbound_tons[cp.id] = self.inbound_tons.get(cp.id, 0.0) + tons
             report.shipments += 1
             logging.info(
                 "Supply: %s from %s to %s",
@@ -840,6 +874,14 @@ class SupplyPlanner:
                 depot.name,
                 cp.name,
             )
+
+    def default_shipment_kg(self) -> float:
+        """Heaviest single supply run: a full convoy."""
+        return (
+            self.settings.logistics_max_trucks_per_shipment
+            * self.settings.logistics_truck_tons
+            * 1000
+        )
 
     def _fit_to_shipment(
         self,
@@ -854,11 +896,9 @@ class SupplyPlanner:
         fuel fills whatever weight is left.
         """
         if limit_kg is None:
-            limit_kg = (
-                self.settings.logistics_max_trucks_per_shipment
-                * self.settings.logistics_truck_tons
-                * 1000
-            )
+            limit_kg = self.default_shipment_kg()
+        else:
+            limit_kg = min(limit_kg, self.default_shipment_kg())
         authorized = self.authorized.get(cp.id, {})
         stock = self.state.stocks[cp.id].munitions
 
@@ -1066,6 +1106,9 @@ def report_lines(report: PurchaseReport, settings: Settings) -> list[str]:
         lines.append(f"Couldn't afford: {top}.")
     if report.shipments:
         lines.append(f"{report.shipments} supply shipment(s) dispatched.")
+    if report.throughput_limited:
+        names = ", ".join(sorted(set(report.throughput_limited)))
+        lines.append(f"At their cargo handling limit: {names}.")
     if report.cod_runs:
         lines.append(f"{report.cod_runs} onboard delivery run(s) sent to carriers.")
     if report.ships_sent:

@@ -1040,6 +1040,20 @@ class Settings:
             "Keeps convoy unit counts, and frame rates, reasonable."
         ),
     )
+    logistics_base_throughput_tons: int = bounded_int_option(
+        "Cargo handling per airfield (tons per turn)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=60,
+        min=0,
+        max=1000,
+        detail=(
+            "How much supply an airfield can take in per turn, counting supply runs "
+            "still on their way. FOBs, FARPs and other small bases handle a third of "
+            "this. A base at its limit gets nothing new until cargo arrives, so a "
+            "front-line base can't be flooded. 0 means no limit."
+        ),
+    )
     logistics_min_shipment_tons: int = bounded_int_option(
         "Smallest supply run worth sending (tons)",
         CAMPAIGN_MANAGEMENT_PAGE,
