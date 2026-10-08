@@ -42,25 +42,27 @@ SAM_LOADS_STOCKED = 2
 SAM_MISSILES: list[tuple[re.Pattern[str], float, float]] = [
     (re.compile(p, re.IGNORECASE), price, mass)
     for p, price, mass in [
-        (r"MIM_?104|PAC|patriot", 4.0, 900),
-        (r"48N6|5V55|S-?300|S_300", 1.5, 1800),
-        (r"5V28|S-?200", 0.8, 7000),
+        # DCS names SAM missiles by their Russian/US designators, e.g. "SA5B55"
+        # (S-300's 5V55), "SA9M38M1" (Buk), "MIM_104" (Patriot). The "SA" there is
+        # not a NATO SA-number, so those aren't matched.
+        (r"MIM_?104|PAC-?\d|patriot", 4.0, 900),
+        (r"48N6|5[VB]55|S-?300|S_300", 1.5, 1800),
+        (r"5[VB]28|S-?200", 0.8, 7000),
         (r"AIM_?120|AMRAAM|NASAMS", 1.0, 160),
         (r"MIM_?23|hawk", 0.8, 600),
-        (r"V-?75|V_?750|SA-?2|S-?75", 0.3, 2300),
-        (r"5V27|V-?600|SA-?3|S-?125", 0.3, 950),
-        (r"3M9|SA-?6|kub", 0.4, 600),
-        (r"9M38|9M317|SA-?11|SA-?17|buk", 0.6, 700),
-        (r"9M33[01]|SA-?15|tor", 0.4, 170),
+        (r"V-?75\d|V_?750|5[VB]27|V-?600|S-?75\b|S-?125", 0.3, 950),
+        (r"9M38|9M317|buk", 0.6, 700),
+        (r"3M9|kub", 0.4, 600),
+        (r"9M33[01]|\btor\b", 0.4, 170),
         (r"9M311|57E6|tunguska|pantsir", 0.1, 60),
-        (r"9M33|SA-?8|osa", 0.2, 130),
-        (r"9M37|SA-?13|strela-?10", 0.08, 40),
-        (r"9M31|SA-?9|strela", 0.05, 30),
+        (r"9M333|9M37|strela-?10", 0.08, 40),
+        (r"9M33|\bosa\b", 0.2, 130),
+        (r"9M31|strela", 0.05, 30),
         (r"roland", 0.15, 70),
         (r"rapier", 0.15, 45),
         (r"HQ-?7|crotale", 0.2, 85),
-        (r"MIM_?72|chaparral|M48", 0.1, 90),
-        (r"FIM_?92|stinger|igla|9M39|9M313|SA-?18|SA-?24|mistral|starstreak", 0.04, 15),
+        (r"MIM_?72|chaparral", 0.1, 90),
+        (r"FIM_?92|stinger|igla|9M39|9M313|mistral|starstreak", 0.04, 15),
     ]
 ]
 DEFAULT_SAM_PRICE = 0.5

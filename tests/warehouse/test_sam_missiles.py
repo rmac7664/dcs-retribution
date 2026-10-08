@@ -130,3 +130,25 @@ def test_launches_are_charged_and_loads_learned() -> None:
     assert game.warehouse_logistics.sam_loads["S-300PS 5P85C ln"] == {
         "weapons.missiles.5V55R": 4
     }
+
+
+@pytest.mark.parametrize(
+    "dcs_name,price",
+    [
+        ("SA5B55", 1.5),  # S-300PS
+        ("SA9M38M1", 0.6),  # Buk
+        ("SA3M9M", 0.4),  # Kub
+        ("SA9M330", 0.4),  # Tor
+        ("SA9M311", 0.1),  # Tunguska
+        ("SA9M333", 0.08),  # Strela-10
+        ("SA9M33", 0.2),  # Osa
+        ("SA9M31", 0.05),  # Strela-1
+        ("MIM_104", 4.0),  # Patriot
+        ("weapons.missiles.AIM_120C", 1.0),  # NASAMS
+        ("weapons.missiles.FIM_92C", 0.04),  # Avenger, Linebacker
+    ],
+)
+def test_names_dcs_reports_are_priced_by_type(dcs_name: str, price: float) -> None:
+    assert MunitionPrices.price(sam.sam_key(dcs_name), Settings()) == pytest.approx(
+        price
+    )
