@@ -665,3 +665,21 @@ def test_ships_out_of_missiles_hold_fire_with_naval_options() -> None:
         run_scheduled()
         """)
     assert runtime.eval('held["0101 | SNAKE"]') == 4
+
+
+def test_loads_are_learned_under_retributions_unit_type() -> None:
+    runtime = lupa.LuaRuntime(unpack_returned_tuples=True)
+    runtime.execute(MOCK_DCS)
+    runtime.execute(SAM_MOCK)
+    runtime.execute(DATA)
+    runtime.execute(SAM_DATA)
+    runtime.execute('dcsRetributionWarehouses.sam.types = { ["L1"] = "Stennis" }')
+    runtime.execute(SCRIPT.read_text(encoding="utf-8"))
+    runtime.execute("""
+        l1 = make_unit("L1", { ["weapons.missiles.RIM_116A"] = 42 }, 0, false)
+        l1._type = "CVN_71"
+        make_group("0101 | SNAKE", { l1 })
+        run_scheduled()
+        """)
+    result = to_py(runtime.eval("retributionWarehouses.export(false)"))
+    assert result["sam_loads"] == {"Stennis": {"weapons.missiles.RIM_116A": 42}}

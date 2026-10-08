@@ -266,3 +266,26 @@ def test_manual_purchasing_is_player_only() -> None:
     assert manual_purchasing(game, FakeCoalition(0))  # type: ignore[arg-type]
     red: Any = SimpleNamespace(player=SimpleNamespace(is_blue=False))
     assert not manual_purchasing(game, red)
+
+
+def test_ships_restock_interceptors_before_strike_missiles() -> None:
+    from collections import Counter
+
+    from game.warehouse.supply import SupplyPlanner
+
+    settings = Settings()
+    settings.logistics_munitions_resupply_percent = 25
+    carrier: Any = SimpleNamespace(id="cv", name="CVN-74")
+    planner = SupplyPlanner.__new__(SupplyPlanner)
+    planner.settings = settings
+    planner.depots = [carrier]
+    planner.bases = [carrier]
+    planner.served_by = {"cv": carrier}
+    authorized: Any = {"cv": {"sam.missiles.SM_2": 100, "sam.missiles.BGM_109B": 100}}
+    planner.authorized = authorized
+    planner.inbound = {"cv": Counter()}
+    planner.state = SimpleNamespace(  # type: ignore[assignment]
+        stocks={"cv": SimpleNamespace(munitions={})}, orders={}
+    )
+    order = [s.resource for s in planner.suggestions()]
+    assert order == ["sam.missiles.SM_2", "sam.missiles.BGM_109B"]

@@ -550,6 +550,7 @@ end
 local sam = data.sam or {}
 local samSites = sam.sites or {}  -- site key -> { cp, allow = { missile = n }, groups }
 local samUnits = sam.units or {}  -- unit name -> site key
+local samTypes = sam.types or {}  -- unit name -> unit type as Retribution knows it
 local samFired = {}               -- site key -> { missile = launches }
 local samHolding = {}             -- group name -> true while held
 W.sam_used = {}                   -- control point id -> { missile = launches }
@@ -721,8 +722,12 @@ local function samStart()
             end
             local missiles = samMissilesOf(unit)
             if next(missiles) then
-                local okType, unitType = pcall(unit.getTypeName, unit)
-                if okType and unitType then
+                local unitType = samTypes[unitName]
+                if not unitType then
+                    local okType, dcsType = pcall(unit.getTypeName, unit)
+                    unitType = okType and dcsType or nil
+                end
+                if unitType then
                     local known = W.sam_loads[unitType] or {}
                     for missile, count in pairs(missiles) do
                         known[missile] = math.max(known[missile] or 0, count)

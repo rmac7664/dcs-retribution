@@ -486,6 +486,14 @@ def airhead(game: Game, player: Any) -> Optional[ControlPoint]:
     return max(candidates, key=safety)
 
 
+#: Ship-launched strike missiles: bought after a ship's interceptors.
+STRIKE_SAM_PREFIXES = (
+    "sam.missiles.BGM_109",
+    "sam.missiles.AGM_84",
+    "sam.missiles.RGM_84",
+    "sam.missiles.TOMAHAWK",
+)
+
 #: Turns a supply run may wait with no transport able to carry it before it is
 #: called off and its cargo unloaded where it waits.
 STALL_LIMIT = 2
@@ -759,6 +767,10 @@ class SupplyPlanner:
                 share = count / max(1, total_need[name])
                 quantity = min(count, max(1, math.floor(cap.get(name, 1) * share)))
                 urgency = count / max(1, total_authorized[name])
+                if name.startswith(STRIKE_SAM_PREFIXES):
+                    # Ships restock interceptors before land-attack and anti-ship
+                    # missiles.
+                    urgency /= 2
                 orders.append(Suggestion(urgency, depot, name, quantity))
         orders.sort(key=lambda o: (-o.urgency, short(o.resource)))
         return orders

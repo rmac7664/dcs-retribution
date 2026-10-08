@@ -191,5 +191,17 @@ def test_warships_draw_on_their_base(monkeypatch: pytest.MonkeyPatch) -> None:
     sites = {s.key: s.cp for s in sam.sam_sites(game)}
 
     assert sites == {"SNAKE": land, "KINGFISHER": land, "KOMODO": carrier}
-    assert sam.authorized_sam(game, carrier) == {"sam.missiles.SM_2": 244}
+    # Ships are stocked for one load (their magazines), land sites for two.
+    assert sam.authorized_sam(game, carrier) == {"sam.missiles.SM_2": 122}
     assert MunitionPrices.price("sam.missiles.SM_2", Settings()) == pytest.approx(2.0)
+    assert MunitionPrices.price("sam.missiles.SM_1", Settings()) == pytest.approx(0.6)
+
+    # Warships sail with full magazines, whatever the starting supply setting.
+    game.settings.logistics_player_starting_supply = 0.3
+    sam.seed_new_missiles(game)
+    assert game.warehouse_logistics.stocks[carrier.id].munitions == {
+        "sam.missiles.SM_2": 122
+    }
+    data = sam.allowances(game)
+    assert data["sites"]["KOMODO"]["allow"] == {"SM_2": 122}
+    assert data["types"]["KOMODO Tico"] == "TICONDEROG"

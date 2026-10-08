@@ -34,9 +34,12 @@ if TYPE_CHECKING:
 
 SAM_PREFIX = "sam."
 
-#: A base is stocked for this many full loads of each of its SAM sites: what's in the
-#: launchers plus one reload.
+#: A base is stocked for this many full loads of each of its land SAM sites: what's
+#: in the launchers plus one reload.
 SAM_LOADS_STOCKED = 2
+#: Warships are stocked for one load: their magazines (VLS cells can't be reloaded
+#: from a reserve at sea). What they fire is replaced by replenishment ship.
+SHIP_LOADS_STOCKED = 1
 
 #: (pattern on the DCS missile name, price in $M, mass in kg). First match wins.
 SAM_MISSILES: list[tuple[re.Pattern[str], float, float]] = [
@@ -47,6 +50,7 @@ SAM_MISSILES: list[tuple[re.Pattern[str], float, float]] = [
         # not a NATO SA-number, so those aren't matched.
         # Ships
         (r"SM_?[236]|RIM_?6[67]|RIM_?156|RIM_?174|standard", 2.0, 700),
+        (r"SM_?1(?!\d)|RIM_?24", 0.6, 600),
         (r"RIM_?162|ESSM", 1.0, 280),
         (r"RIM_?116|\bRAM\b", 0.9, 75),
         (r"RIM_?7|sea_?sparrow", 0.4, 230),
@@ -140,6 +144,16 @@ class SamSite:
     def key(self) -> str:
         return str(self.tgo.name)
 
+    @property
+    def naval(self) -> bool:
+        from game.theater.theatergroundobject import NavalGroundObject
+
+        return isinstance(self.tgo, NavalGroundObject)
+
+    @property
+    def loads_stocked(self) -> int:
+        return SHIP_LOADS_STOCKED if self.naval else SAM_LOADS_STOCKED
+
     def full_load(self, loads: dict[str, dict[str, int]]) -> Counter[str]:
         """Missiles (DCS names) its live launchers carry when full, where known."""
         total: Counter[str] = Counter()
@@ -190,14 +204,15 @@ def sam_sites(game: Game, cp: Optional[ControlPoint] = None) -> Iterator[SamSite
 
 
 def authorized_sam(game: Game, cp: ControlPoint) -> dict[str, int]:
-    """SAM missiles a base is stocked for: SAM_LOADS_STOCKED loads of its sites."""
+    """SAM missiles a base is stocked for: two loads of its land sites, one of its
+    ships."""
     if not enabled(game):
         return {}
     loads = sam_loads(game.warehouse_logistics)
     total: Counter[str] = Counter()
     for site in sam_sites(game, cp):
         for name, count in site.full_load(loads).items():
-            total[sam_key(name)] += count * SAM_LOADS_STOCKED
+            total[sam_key(name)] += count * site.loads_stocked
     return dict(total)
 
 
@@ -205,13 +220,17 @@ def seed_new_missiles(game: Game) -> None:
     """Fills stock for SAM missiles a base has never held (just learned or enabled).
 
     Without this, turning the option on mid-campaign, or learning a new SAM type,
-    would leave those sites with nothing to fire. They start at the side's starting
-    supply level, as a base did when the campaign began.
+    would leave those sites with nothing to fire. Land sites start at the side's
+    starting supply level, as a base did when the campaign began; warships start
+    with full magazines, since navies don't sail half loaded.
     """
     state = game.warehouse_logistics
     seeded: set[str] = getattr(state, "sam_seeded", None) or set()
     state.sam_seeded = seeded
+    if not enabled(game):
+        return
     settings = game.settings
+    loads = sam_loads(state)
     for cp in game.theater.controlpoints:
         stock = state.stocks.get(cp.id)
         if stock is None:
@@ -221,12 +240,17 @@ def seed_new_missiles(game: Game) -> None:
             if cp.captured.is_blue
             else settings.logistics_enemy_starting_supply
         )
-        for name, count in authorized_sam(game, cp).items():
+        amounts: Counter[str] = Counter()
+        for site in sam_sites(game, cp):
+            share = 1.0 if site.naval else fill
+            for name, count in site.full_load(loads).items():
+                amounts[sam_key(name)] += int(count * site.loads_stocked * share)
+        for name, count in amounts.items():
             mark = f"{cp.id}|{name}"
             if mark in seeded:
                 continue
             seeded.add(mark)
-            stock.munitions[name] = stock.munitions.get(name, 0) + int(count * fill)
+            stock.munitions[name] = stock.munitions.get(name, 0) + count
 
 
 def allowances(game: Game) -> dict[str, Any]:
@@ -239,6 +263,7 @@ def allowances(game: Game) -> dict[str, Any]:
     loads = sam_loads(state)
     sites: dict[str, Any] = {}
     units: dict[str, str] = {}
+    types: dict[str, str] = {}
     by_cp: dict[Any, list[SamSite]] = {}
     for site in sam_sites(game):
         by_cp.setdefault(site.cp.id, []).append(site)
@@ -276,9 +301,12 @@ def allowances(game: Game) -> dict[str, Any]:
                 "allow": allow[site.key],
                 "groups": site.groups,
             }
-            for unit_name in site.units:
+            for unit_name, unit_type in site.units.items():
                 units[unit_name] = site.key
-    return {"sites": sites, "units": units}
+                types[unit_name] = unit_type
+    # Unit types as Retribution knows them, so learned loads match what it looks
+    # up (a unit's DCS type name can differ, e.g. a renamed carrier).
+    return {"sites": sites, "units": units, "types": types}
 
 
 def apply_results(game: Game, data: dict[str, Any]) -> dict[str, dict[str, int]]:
