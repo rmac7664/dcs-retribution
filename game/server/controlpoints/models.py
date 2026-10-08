@@ -4,7 +4,7 @@ import logging
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from game.server.leaflet import LeafletPoint
 
@@ -21,8 +21,7 @@ class SupplyStatusJs(BaseModel):
     inbound_runs: int
     lines: list[str]
 
-    class Config:
-        title = "SupplyStatus"
+    model_config = ConfigDict(title="SupplyStatus")
 
 
 class ControlPointJs(BaseModel):
