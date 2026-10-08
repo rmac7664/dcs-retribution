@@ -644,3 +644,24 @@ def test_sam_missiles_reported_without_a_prefix_are_learned() -> None:
     assert result["sam_loads"]["SA-11 Buk LN 9A310M1"] == {
         "weapons.missiles.SA9M38M1": 4
     }
+
+
+def test_ships_out_of_missiles_hold_fire_with_naval_options() -> None:
+    runtime = lupa.LuaRuntime(unpack_returned_tuples=True)
+    runtime.execute(MOCK_DCS)
+    runtime.execute(SAM_MOCK)
+    runtime.execute("""
+        AI.Option.Naval = { id = { ROE = 0 }, val = { ROE = { WEAPON_HOLD = 4 } } }
+        AI.Option.Ground.val.ROE.WEAPON_HOLD = 99
+        Group.Category = { GROUND = 2, SHIP = 3 }
+        """)
+    runtime.execute(DATA)
+    runtime.execute(SAM_DATA.replace("= 3 }", "= 0 }"))
+    runtime.execute(SCRIPT.read_text(encoding="utf-8"))
+    runtime.execute("""
+        l1 = make_unit("L1", { ["weapons.missiles.SA9M38M1"] = 4 }, 0, false)
+        g = make_group("0101 | SNAKE", { l1 })
+        function g:getCategory() return Group.Category.SHIP end
+        run_scheduled()
+        """)
+    assert runtime.eval('held["0101 | SNAKE"]') == 4

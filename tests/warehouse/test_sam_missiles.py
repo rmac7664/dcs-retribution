@@ -24,6 +24,7 @@ class FakeSam:
             SimpleNamespace(
                 alive=i >= dead,
                 is_vehicle=True,
+                is_ship=False,
                 unit_name=f"{name} L{i}",
                 type=SimpleNamespace(id=LAUNCHER),
             )
@@ -32,7 +33,7 @@ class FakeSam:
         self.groups = [SimpleNamespace(group_name=f"0001 | {name}", units=units)]
 
 
-def world(stock: int, *sites: FakeSam, enabled: bool = True) -> Any:
+def world(stock: int, *sites: Any, enabled: bool = True) -> Any:
     settings = Settings()
     settings.logistics_enabled = True
     settings.logistics_limited_sam_missiles = enabled
@@ -152,3 +153,43 @@ def test_names_dcs_reports_are_priced_by_type(dcs_name: str, price: float) -> No
     assert MunitionPrices.price(sam.sam_key(dcs_name), Settings()) == pytest.approx(
         price
     )
+
+
+class FakeShips:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.is_dead = False
+        ship = SimpleNamespace(
+            alive=True,
+            is_vehicle=False,
+            is_ship=True,
+            unit_name=f"{name} Tico",
+            type=SimpleNamespace(id="TICONDEROG"),
+        )
+        self.groups = [SimpleNamespace(group_name=f"0002 | {name}", units=[ship])]
+
+
+def test_warships_draw_on_their_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    import game.warehouse.sam as sam_module
+
+    class FakeCarrierCp:
+        pass
+
+    monkeypatch.setattr(tgo_module, "NavalGroundObject", FakeShips)
+    monkeypatch.setattr(sam_module, "NavalControlPoint", FakeCarrierCp)
+    game, land = world(100, FakeSam("SNAKE", 1), FakeShips("KINGFISHER"))
+    carrier: Any = FakeCarrierCp()
+    carrier.id = uuid.uuid4()
+    carrier.name = "CVN-74"
+    carrier.captured = SimpleNamespace(is_neutral=False, is_blue=True)
+    # A carrier group's escorts count; a land SAM type listed under it would not.
+    carrier.ground_objects = [FakeShips("KOMODO"), FakeSam("STRAY", 1)]
+    game.theater.controlpoints.append(carrier)
+    game.warehouse_logistics.stocks[carrier.id] = BaseStock(0.0)
+    game.warehouse_logistics.sam_loads["TICONDEROG"] = {"SM_2": 122}
+
+    sites = {s.key: s.cp for s in sam.sam_sites(game)}
+
+    assert sites == {"SNAKE": land, "KINGFISHER": land, "KOMODO": carrier}
+    assert sam.authorized_sam(game, carrier) == {"sam.missiles.SM_2": 244}
+    assert MunitionPrices.price("sam.missiles.SM_2", Settings()) == pytest.approx(2.0)

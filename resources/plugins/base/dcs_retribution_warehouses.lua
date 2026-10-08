@@ -332,7 +332,10 @@ local function unload(shipName, ship)
     local warehouse = warehouseFor(ship.carrier)
     if warehouse then
         for item, count in pairs(ship.mun or {}) do
-            pcall(warehouse.addItem, warehouse, item, count)
+            -- Ships' own missiles ("sam.") aren't DCS warehouse items.
+            if not startsWith(item, "sam.") then
+                pcall(warehouse.addItem, warehouse, item, count)
+            end
         end
         if (ship.fuel or 0) > 0 then
             pcall(warehouse.addLiquid, warehouse, 0, ship.fuel)
@@ -601,8 +604,11 @@ local function holdFire(groupName)
     end
     local controller = group:getController()
     if controller then
-        pcall(controller.setOption, controller, AI.Option.Ground.id.ROE,
-            AI.Option.Ground.val.ROE.WEAPON_HOLD)
+        local okCat, category = pcall(group.getCategory, group)
+        local naval = okCat and Group.Category and category == Group.Category.SHIP
+        local options = naval and AI.Option.Naval or AI.Option.Ground
+        pcall(controller.setOption, controller, options.id.ROE,
+            options.val.ROE.WEAPON_HOLD)
     end
     if not samHolding[groupName] then
         samHolding[groupName] = true

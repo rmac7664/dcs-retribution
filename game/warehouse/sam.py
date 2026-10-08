@@ -1,4 +1,4 @@
-"""SAM missiles drawn from their base's munitions.
+"""SAM missiles (and ships' missiles) drawn from their base's munitions.
 
 With "Limited SAM missiles" on, each land SAM site's missiles come out of the stock of
 the base it belongs to (its control point), and are bought and shipped like any other
@@ -45,6 +45,14 @@ SAM_MISSILES: list[tuple[re.Pattern[str], float, float]] = [
         # DCS names SAM missiles by their Russian/US designators, e.g. "SA5B55"
         # (S-300's 5V55), "SA9M38M1" (Buk), "MIM_104" (Patriot). The "SA" there is
         # not a NATO SA-number, so those aren't matched.
+        # Ships
+        (r"SM_?[236]|RIM_?6[67]|RIM_?156|RIM_?174|standard", 2.0, 700),
+        (r"RIM_?162|ESSM", 1.0, 280),
+        (r"RIM_?116|\bRAM\b", 0.9, 75),
+        (r"RIM_?7|sea_?sparrow", 0.4, 230),
+        (r"BGM_?109|tomahawk", 1.5, 1300),
+        (r"RGM_?84|AGM_?84|harpoon", 1.2, 690),
+        # Land
         (r"MIM_?104|PAC-?\d|patriot", 4.0, 900),
         (r"48N6|5[VB]55|S-?300|S_300", 1.5, 1800),
         (r"5[VB]28|S-?200", 0.8, 7000),
@@ -144,22 +152,34 @@ class SamSite:
 
 
 def sam_sites(game: Game, cp: Optional[ControlPoint] = None) -> Iterator[SamSite]:
-    """Land SAM sites at managed bases (all bases, or just `cp`)."""
-    from game.theater.theatergroundobject import SamGroundObject
+    """SAM sites and missile-armed ships at managed bases (all bases, or just `cp`).
+
+    Land SAM sites draw on their base. Ships draw on the base they belong to: a
+    carrier or LHA group (escorts included) on that carrier's stock, which its
+    replenishment ships refill; other naval groups on their control point's stock.
+    """
+    from game.theater.theatergroundobject import NavalGroundObject, SamGroundObject
 
     state = game.warehouse_logistics
     points = [cp] if cp is not None else list(game.theater.controlpoints)
     for point in points:
-        if isinstance(point, (NavalControlPoint, OffMapSpawn)):
+        if isinstance(point, OffMapSpawn):
             continue
         if point.captured.is_neutral or not state.is_managed(point, game.settings):
             continue
+        naval_base = isinstance(point, NavalControlPoint)
         for tgo in point.ground_objects:
-            if not isinstance(tgo, SamGroundObject) or tgo.is_dead:
+            if tgo.is_dead:
+                continue
+            if isinstance(tgo, NavalGroundObject):
+                pass
+            elif naval_base or not isinstance(tgo, SamGroundObject):
                 continue
             site = SamSite(point, tgo)
             for group in tgo.groups:
-                live = [u for u in group.units if u.alive and u.is_vehicle]
+                live = [
+                    u for u in group.units if u.alive and (u.is_vehicle or u.is_ship)
+                ]
                 if not live:
                     continue
                 site.groups.append(group.group_name)

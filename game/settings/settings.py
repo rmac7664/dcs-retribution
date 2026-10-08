@@ -994,11 +994,12 @@ class Settings:
         LOGISTICS_SECTION,
         default=False,
         detail=(
-            "SAM sites draw their missiles from the munitions of the base they belong "
-            "to, which buys and ships them like any other munition. Each mission a "
-            "site gets its full load, or its share of what the base holds, and holds "
-            "fire once it has used that. A new SAM type fires freely for one mission "
-            "while its load is learned from DCS. Ships aren't limited."
+            "SAM sites and warships draw their missiles from the munitions of the base "
+            "they belong to (a carrier group from its carrier, refilled by its "
+            "replenishment ships), which buys and ships them like any other munition. "
+            "Each mission a site or ship gets its full load, or its share of what the "
+            "base holds, and holds fire once it has used that. A new SAM or ship type "
+            "fires freely for one mission while its load is learned from DCS."
         ),
     )
     logistics_carrier_airlift: bool = boolean_option(
