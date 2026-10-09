@@ -40,11 +40,15 @@ class QCallsignWidget(QWidget):
         self.reset_callsign_btn.clicked.connect(self.reset_callsign)
 
     def _get_label_text(self) -> str:
-        cs = (
-            "AUTO"
-            if self.ct.callsign is None
-            else f"{self.ct.callsign.name} {self.ct.callsign.nr}"
-        )
+        if self.ct.callsign is None:
+            # Flights of a squadron with its own callsign (e.g. VF-143 "Dog") use it.
+            squadron_callsign = getattr(
+                getattr(self.ct, "squadron", None), "callsign", None
+            )
+            cs = f"AUTO ({squadron_callsign})" if squadron_callsign else "AUTO"
+        else:
+            cs = f"{self.ct.callsign.name} {self.ct.callsign.nr}"
+
         return f"<b>Callsign: {cs}</b>"
 
     def open_callsign_dialog(self) -> None:

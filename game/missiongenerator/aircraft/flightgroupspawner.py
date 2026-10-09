@@ -33,6 +33,7 @@ from game.ato import Flight
 from game.ato.flightstate import InFlight
 from game.ato.starttype import StartType
 from game.ato.traveltime import GroundSpeed
+from game.callsigns import MAX_CALLSIGN_NUMBER, apply_custom_callsign, dcs_callnames
 from game.missiongenerator.missiondata import MissionData
 from game.naming import namegen
 from game.theater import Airfield, ControlPoint, Fob, NavalControlPoint, OffMapSpawn
@@ -79,6 +80,48 @@ class FlightGroupSpawner:
         self.ground_spawns_large = ground_spawns_large
         self.ground_spawns = ground_spawns
         self.mission_data = mission_data
+        self._callsigns: Optional[
+            tuple[tuple[Optional[str], Optional[int]], Optional[tuple[str, int]]]
+        ] = None
+
+    def _resolve_callsigns(
+        self,
+    ) -> tuple[tuple[Optional[str], Optional[int]], Optional[tuple[str, int]]]:
+        """(name, number) to give pydcs, and a custom (name, number) if any.
+
+        A flight's own callsign wins; otherwise its squadron's (e.g. VF-143 flies as
+        "Dog"), numbered in turn across the mission. Names DCS doesn't know (see
+        game.callsigns.EXTRA_CALLNAMES) are applied after the group is made.
+        """
+        if self._callsigns is not None:
+            return self._callsigns
+        known = dcs_callnames(self.country, self.flight.unit_type.dcs_unit_type)
+        name: Optional[str] = None
+        number: Optional[int] = None
+        if self.flight.callsign is not None and self.flight.callsign.name:
+            name, number = self.flight.callsign.name, self.flight.callsign.nr
+        else:
+            name = getattr(self.flight.squadron, "callsign", None)
+            if name:
+                numbers = self.mission_data.callsign_numbers
+                number = numbers.get(name, 0) % MAX_CALLSIGN_NUMBER + 1
+                numbers[name] = number
+        if name and name not in known:
+            self._callsigns = ((None, None), (name, number or 1))
+        elif name and number:
+            self._callsigns = ((name, number), None)
+        else:
+            self._callsigns = ((None, None), None)
+        return self._callsigns
+
+    @property
+    def dcs_callsign(self) -> tuple[Optional[str], Optional[int]]:
+        return self._resolve_callsigns()[0]
+
+    def _apply_custom_callsign(self, group: FlyingGroup[Any]) -> None:
+        custom = self._resolve_callsigns()[1]
+        if custom is not None:
+            apply_custom_callsign(group, *custom)
 
     def create_flight_group(self) -> FlyingGroup[Any]:
         """Creates the group for the flight and adds it to the mission.
@@ -106,9 +149,11 @@ class FlightGroupSpawner:
         ):
             grp = self.generate_flight_at_departure()
             self.flight.group_id = grp.id
+            self._apply_custom_callsign(grp)
             return grp
         grp = self.generate_mid_mission()
         self.flight.group_id = grp.id
+        self._apply_custom_callsign(grp)
         return grp
 
     def create_idle_aircraft(self) -> Optional[FlyingGroup[Any]]:
@@ -355,8 +400,8 @@ class FlightGroupSpawner:
             speed=speed.kph,
             maintask=None,
             group_size=self.flight.count,
-            callsign_name=self.flight.callsign.name if self.flight.callsign else None,
-            callsign_nr=self.flight.callsign.nr if self.flight.callsign else None,
+            callsign_name=self.dcs_callsign[0],
+            callsign_nr=self.dcs_callsign[1],
         )
 
         group.points[0].alt_type = alt_type
@@ -385,8 +430,8 @@ class FlightGroupSpawner:
             start_type=self._start_type_at_airfield(airfield),
             group_size=self.flight.count,
             parking_slots=parking_slots,
-            callsign_name=self.flight.callsign.name if self.flight.callsign else None,
-            callsign_nr=self.flight.callsign.nr if self.flight.callsign else None,
+            callsign_name=self.dcs_callsign[0],
+            callsign_nr=self.dcs_callsign[1],
         )
 
     def _generate_over_departure(
@@ -420,8 +465,8 @@ class FlightGroupSpawner:
             speed=speed.kph,
             maintask=None,
             group_size=self.flight.count,
-            callsign_name=self.flight.callsign.name if self.flight.callsign else None,
-            callsign_nr=self.flight.callsign.nr if self.flight.callsign else None,
+            callsign_name=self.dcs_callsign[0],
+            callsign_nr=self.dcs_callsign[1],
         )
 
         group.points[0].alt_type = alt_type
@@ -438,8 +483,8 @@ class FlightGroupSpawner:
             maintask=None,
             start_type=self._start_type_at_group(at),
             group_size=self.flight.count,
-            callsign_name=self.flight.callsign.name if self.flight.callsign else None,
-            callsign_nr=self.flight.callsign.nr if self.flight.callsign else None,
+            callsign_name=self.dcs_callsign[0],
+            callsign_nr=self.dcs_callsign[1],
         )
 
     def _generate_at_cp_helipad(

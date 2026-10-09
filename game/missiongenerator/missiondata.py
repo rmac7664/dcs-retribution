@@ -123,5 +123,7 @@ class MissionData:
     logistics: list[LogisticsInfo] = field(default_factory=list)
     escorts: list[EscortInfo] = field(default_factory=list)
     cp_stack: dict[UUID, Distance] = field(default_factory=dict)
+    #: Last number given to each squadron callsign this mission (Dog 1, Dog 2...).
+    callsign_numbers: dict[str, int] = field(default_factory=dict)
     player_frontline_groups: list[FrontlineUnitGroupsInfo] = field(default_factory=list)
     enemy_frontline_groups: list[FrontlineUnitGroupsInfo] = field(default_factory=list)

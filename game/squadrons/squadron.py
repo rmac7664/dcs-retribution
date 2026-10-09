@@ -73,6 +73,10 @@ class Squadron:
     untasked_aircraft: int = field(init=False, hash=False, compare=False, default=0)
     pending_deliveries: int = field(init=False, hash=False, compare=False, default=0)
 
+    #: The squadron's radio callsign (e.g. "Dog"), used for its flights unless a
+    #: flight is given another. None uses DCS's generic callsigns.
+    callsign: Optional[str] = field(hash=False, compare=False, default=None)
+
     #: Aircraft the squadron started the campaign with (set at turn 0).
     initial_aircraft: int = field(init=False, hash=False, compare=False, default=0)
     #: Cumulative aircraft lost in combat over the whole campaign.
@@ -595,7 +599,7 @@ class Squadron:
         game: Game,
     ) -> Squadron:
         squadron_def.claimed = True
-        return Squadron(
+        squadron = Squadron(
             squadron_def.name,
             squadron_def.nickname,
             squadron_def.country,
@@ -615,3 +619,5 @@ class Squadron:
             game.settings,
             base,
         )
+        squadron.callsign = squadron_def.callsign
+        return squadron

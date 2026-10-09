@@ -34,6 +34,9 @@ class SquadronDef:
     female_pilot_percentage: int
     pilot_pool: list[Pilot]
     claimed: bool = False
+    #: The squadron's radio callsign (e.g. "Dog" for VF-143), used for its flights
+    #: unless a flight is given another.
+    callsign: Optional[str] = None
 
     def __str__(self) -> str:
         if self.nickname is None:
@@ -110,4 +113,5 @@ class SquadronDef:
             operating_bases=OperatingBases.from_yaml(unit_type, data.get("bases", {})),
             female_pilot_percentage=female_pilot_percentage,
             pilot_pool=pilots,
+            callsign=data.get("callsign"),
         )

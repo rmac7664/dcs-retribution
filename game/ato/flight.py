@@ -18,6 +18,7 @@ from .flightstate import FlightState, Navigating, Uninitialized
 from .flightstate.killed import Killed
 from .flighttype import FlightType
 from .loadouts import Weapon
+from ..callsigns import extra_callnames
 from ..radio.CallsignContainer import CallsignContainer
 from ..radio.RadioFrequencyContainer import RadioFrequencyContainer
 from ..radio.TacanContainer import TacanContainer
@@ -139,12 +140,16 @@ class Flight(
         category = "Air" if category == "Interceptor" else category
         for name in self.squadron.coalition.faction.country.callsign[category]:
             callsigns.add(name)
+        country_name = self.squadron.coalition.faction.country.name
         if hasattr(dcs_unit, "callnames"):
-            country_name = self.squadron.coalition.faction.country.name
             for c in dcs_unit.callnames:
                 if "Combined Joint Task Forces" in country_name or c == country_name:
                     for name in dcs_unit.callnames[c]:
                         callsigns.add(name)
+        callsigns.update(extra_callnames(dcs_unit.id, country_name))
+        squadron_callsign = getattr(self.squadron, "callsign", None)
+        if squadron_callsign:
+            callsigns.add(squadron_callsign)
         return sorted(callsigns)
 
     @property
