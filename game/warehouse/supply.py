@@ -319,6 +319,16 @@ def deliver(transfer: TransferOrder, location: ControlPoint) -> None:
     cargo = load.scaled(remaining)
     state.receive(game, location, cargo.munitions, cargo.fuel_kg)
     lost = 1 - remaining
+    from .report import record_delivery
+
+    side = getattr(getattr(transfer, "player", None), "name", None)
+    record_delivery(
+        game,
+        str(side or getattr(location.captured, "name", "")),
+        location.name,
+        cargo.tons,
+        load.tons * max(0.0, lost),
+    )
     logging.info(
         "Supply: %s delivered to %s%s",
         cargo.describe(),
@@ -891,11 +901,17 @@ class SupplyPlanner:
         or warehouse, has been held since the campaign began, and isn't on a front
         line. Front-line and captured bases are always supplied by supply run.
         """
-        if isinstance(cp, (OffMapSpawn, NavalControlPoint)):
-            return True
         if cp.captured.is_neutral:
             return False
-        if main_base(cp.coalition.game, cp.captured) is cp:
+        game = cp.coalition.game
+        hub = main_base(game, cp.captured)
+        settings = getattr(game, "settings", None)
+        if getattr(settings, "logistics_main_base_only", False) and hub:
+            # Only the main base buys; everything else is supplied from it.
+            return hub is cp
+        if isinstance(cp, (OffMapSpawn, NavalControlPoint)):
+            return True
+        if hub is cp:
             return True
         if cp.captured != cp.starting_coalition or cp.has_frontline:
             return False
@@ -934,9 +950,14 @@ class SupplyPlanner:
     def _assign_depots(self) -> dict[Any, ControlPoint]:
         network = self.coalition.transit_network
         served: dict[Any, ControlPoint] = {}
+        hub = self.main_base_only_hub()
         for cp in self.bases:
             if cp in self.depots:
                 served[cp.id] = cp
+                continue
+            if hub is not None and isinstance(cp, NavalControlPoint):
+                # Its replenishment ship is loaded at the main base.
+                served[cp.id] = hub
                 continue
             best: Optional[tuple[float, ControlPoint]] = None
             for depot in self.depots:
@@ -961,6 +982,16 @@ class SupplyPlanner:
                 logging.info("Supply: %s has no route from a depot", cp.name)
         return served
 
+    def main_base_only_hub(self) -> Optional[ControlPoint]:
+        """The main base, if it is the side's only source of supply."""
+        settings = getattr(self, "settings", None)
+        if not getattr(settings, "logistics_main_base_only", False):
+            return None
+        game = getattr(self, "game", None)
+        if game is None:
+            return None
+        return main_base(game, self.coalition.player)
+
     def _shortfall(self, cp: ControlPoint) -> Counter[str]:
         stock = self.state.stocks[cp.id].munitions
         short: Counter[str] = Counter()
@@ -983,12 +1014,19 @@ class SupplyPlanner:
         rate = self.settings.logistics_munitions_resupply_percent / 100
         if rate <= 0:
             return []
+        from .priority import is_priority
+
         need: dict[Any, Counter[str]] = {d.id: Counter() for d in self.depots}
+        #: Items a priority base served by the depot is short of: bought first.
+        urgent: dict[Any, set[str]] = {d.id: set() for d in self.depots}
         for cp in self.bases:
             depot = self.served_by.get(cp.id)
             if depot is None:
                 continue
-            need[depot.id].update(self._shortfall(cp))
+            shortfall = self._shortfall(cp)
+            need[depot.id].update(shortfall)
+            if is_priority(getattr(self, "game", None), cp):
+                urgent[depot.id].update(shortfall)
         for depot in self.depots:
             # Spare stock already at the depot covers part of what it serves.
             stock = self.state.stocks[depot.id].munitions
@@ -1011,12 +1049,22 @@ class SupplyPlanner:
         for depot_need in need.values():
             total_need.update(depot_need)
 
+        from .usage import is_dormant, usage_of
+
+        coalition = getattr(self, "coalition", None)
+        side = coalition.player.name if coalition is not None else ""
+        game = getattr(self, "game", None)
+        used = usage_of(game, side)
+        sorties = max(1, int(getattr(self.settings, "logistics_munitions_sorties", 1)))
         # Most-needed first (relative to what the side is authorized to hold).
         orders: list[Suggestion] = []
         for depot in self.depots:
             for name, count in need[depot.id].items():
                 if count <= 0:
                     continue
+                if is_dormant(game, side, name):
+                    # Not fired for a while: stock one sortie's worth, not N.
+                    count = max(1, math.ceil(count / sorties))
                 share = count / max(1, total_need[name])
                 quantity = min(count, max(1, math.floor(cap.get(name, 1) * share)))
                 urgency = count / max(1, total_authorized[name])
@@ -1024,6 +1072,12 @@ class SupplyPlanner:
                     # Ships restock interceptors before land-attack and anti-ship
                     # missiles.
                     urgency /= 2
+                if used.get(name, 0.0) >= 0.5:
+                    # What the side has actually been firing comes first.
+                    urgency += 0.5
+                if name in urgent[depot.id]:
+                    # Priority bases' shortfalls come before everything else.
+                    urgency += 1.0
                 orders.append(Suggestion(urgency, depot, name, quantity))
         orders.sort(key=lambda o: (-o.urgency, short(o.resource)))
         return orders
@@ -1057,26 +1111,34 @@ class SupplyPlanner:
         budget = self.coalition.budget * (
             self.settings.logistics_munitions_budget_percent / 100
         )
-        for suggestion in self.suggestions():
-            depot, name, quantity = (
-                suggestion.depot,
-                suggestion.resource,
-                suggestion.quantity,
-            )
-            if pay:
-                price = MunitionPrices.price(name, self.settings)
-                affordable = (
-                    quantity if price <= 0 else int((budget - report.spent) // price)
+        suggestions = self.suggestions()
+        # Two passes: first up to half of each item, most urgent first, so one
+        # expensive item can't use up the whole budget; then the rest.
+        remaining = {id(s): s.quantity for s in suggestions}
+        for share in (0.5, 1.0):
+            for suggestion in suggestions:
+                depot, name = suggestion.depot, suggestion.resource
+                want = math.ceil(suggestion.quantity * share) - (
+                    suggestion.quantity - remaining[id(suggestion)]
                 )
-                bought = max(0, min(quantity, affordable))
-                if bought < quantity:
-                    report.unaffordable[name] += quantity - bought
-                report.spent += bought * price
-            else:
-                bought = quantity
-            if bought:
-                self._stock_or_ship(depot, {name: bought})
-                report.bought[name] += bought
+                if want <= 0:
+                    continue
+                if pay:
+                    price = MunitionPrices.price(name, self.settings)
+                    affordable = (
+                        want if price <= 0 else int((budget - report.spent) // price)
+                    )
+                    bought = max(0, min(want, affordable))
+                    report.spent += bought * price
+                else:
+                    bought = want
+                remaining[id(suggestion)] -= bought
+                if bought:
+                    self._stock_or_ship(depot, {name: bought})
+                    report.bought[name] += bought
+        for suggestion in suggestions:
+            if remaining[id(suggestion)] > 0:
+                report.unaffordable[suggestion.resource] += remaining[id(suggestion)]
         if pay and report.spent:
             self.coalition.adjust_budget(-report.spent)
 
@@ -1091,6 +1153,8 @@ class SupplyPlanner:
             stock = self.state.stocks[cp.id]
             capacity = self.state.fuel_capacity_kg(cp, self.settings)
             if isinstance(cp, NavalControlPoint):
+                if by_supply_lines and cp not in self.depots:
+                    continue  # its ship is fuelled from the main base's stock
                 # Ships are refuelled by their replenishment ship, not at sea.
                 gap = capacity - stock.jet_fuel_kg - self.inbound_fuel[cp.id]
                 if gap >= 1:
@@ -1111,6 +1175,8 @@ class SupplyPlanner:
         limit = self.settings.logistics_base_throughput_tons
         if limit <= 0 or isinstance(cp, (NavalControlPoint, OffMapSpawn)):
             return None
+        if self.main_base_only_hub() is cp:
+            return None  # all the side's supply passes through it
         if isinstance(cp, Airfield):
             return float(limit)
         return limit / 3
@@ -1126,17 +1192,28 @@ class SupplyPlanner:
     def distribute(self, report: PurchaseReport) -> None:
         from game.transfers import TransferOrder
 
+        from .priority import is_priority
+
         truck = self.cargo_truck()
         fuel_by_supply_lines = self.settings.logistics_fuel_by_supply_lines
-        for cp in self.bases:
+        # Priority bases are first in line for their depot's spare stock.
+        game = getattr(self, "game", None)
+        hub = self.main_base_only_hub()
+        ordered = sorted(self.bases, key=lambda b: not is_priority(game, b))
+        for cp in ordered:
             depot = self.served_by.get(cp.id)
             if depot is None or depot is cp:
                 continue
             depot_stock = self.state.stocks[depot.id]
             depot_auth = self.authorized[depot.id]
+            # As the only source, the main base shares: it keeps half of its own
+            # needs and sends the rest where it's short.
+            keep = DEPOT_RESERVE_SHARE if depot is hub else 1.0
             load: dict[str, int] = {}
             for name, gap in self._shortfall(cp).items():
-                spare = depot_stock.munitions.get(name, 0) - depot_auth.get(name, 0)
+                spare = depot_stock.munitions.get(name, 0) - math.ceil(
+                    depot_auth.get(name, 0) * keep
+                )
                 take = min(gap, spare)
                 if take > 0:
                     load[name] = take
@@ -1167,6 +1244,14 @@ class SupplyPlanner:
                 )
             if not load and fuel < 1:
                 continue
+            if isinstance(cp, NavalControlPoint):
+                # Main base only: the carrier's replenishment ship is loaded here.
+                for name, count in load.items():
+                    depot_stock.munitions[name] -= count
+                depot_stock.jet_fuel_kg -= fuel
+                self._stock_or_ship(cp, load, fuel)
+                report.shipments += 1
+                continue
             if tons < self.settings.logistics_min_shipment_tons and not any(
                 k.startswith("weapons.missiles.") for k in load
             ):
@@ -1180,31 +1265,69 @@ class SupplyPlanner:
             for name, count in load.items():
                 depot_stock.munitions[name] -= count
             depot_stock.jet_fuel_kg -= fuel
-            carriers = min(
-                self.settings.logistics_max_trucks_per_shipment,
-                max(1, math.ceil(tons / self.settings.logistics_truck_tons)),
-            )
-            transfer = TransferOrder(
-                depot,
-                cp,
-                {truck: carriers},
-                request_airflift=self.settings.logistics_prefer_airlift,
-                supplies=SupplyLoad(
-                    munitions=load, fuel_kg=fuel, tons=tons, carriers=carriers
-                ),
-            )
-            self.coalition.transfers.pending_transfers.append(transfer)
+            # Fuel goes in its own convoy of tanker trucks (a separate target);
+            # munitions in cargo trucks.
+            tanker = self.fuel_truck() if load and fuel >= 1 else None
+            if load and fuel >= 1 and tanker is not None:
+                parts = [(load, 0.0, truck), ({}, fuel, tanker)]
+            elif not load and fuel >= 1:
+                parts = [({}, fuel, self.fuel_truck() or truck)]
+            else:
+                parts = [(load, fuel, truck)]
+            for munitions, fuel_kg, vehicle in parts:
+                part_tons = MunitionMasses.tons(munitions, fuel_kg)
+                carriers = min(
+                    self.settings.logistics_max_trucks_per_shipment,
+                    max(1, math.ceil(part_tons / self.settings.logistics_truck_tons)),
+                )
+                transfer = TransferOrder(
+                    depot,
+                    cp,
+                    {vehicle: carriers},
+                    # Fuel isn't flown: hundreds of tonnes don't fit in transports.
+                    request_airflift=(
+                        self.settings.logistics_prefer_airlift and bool(munitions)
+                    ),
+                    supplies=SupplyLoad(
+                        munitions=munitions,
+                        fuel_kg=fuel_kg,
+                        tons=part_tons,
+                        carriers=carriers,
+                    ),
+                )
+                self.coalition.transfers.pending_transfers.append(transfer)
+                report.shipments += 1
+                logging.info(
+                    "Supply: %s from %s to %s",
+                    transfer.supplies.describe() if transfer.supplies else "",
+                    depot.name,
+                    cp.name,
+                )
             self.inbound[cp.id].update(load)
             self.inbound_fuel[cp.id] += fuel
             if hasattr(self, "inbound_tons"):
                 self.inbound_tons[cp.id] = self.inbound_tons.get(cp.id, 0.0) + tons
-            report.shipments += 1
-            logging.info(
-                "Supply: %s from %s to %s",
-                transfer.supplies.describe() if transfer.supplies else "",
-                depot.name,
-                cp.name,
-            )
+
+    def fuel_truck(self) -> Optional[GroundUnitType]:
+        """The side's fuel tanker truck: HEMTT for the west, ATZ-10 otherwise."""
+        from game.dcs.groundunittype import GroundUnitType
+
+        units = getattr(getattr(self.coalition, "faction", None), "logistics_units", ())
+        for unit in units:
+            if (
+                "refueler" in unit.variant_id.lower()
+                or "atz" in unit.variant_id.lower()
+            ):
+                return unit
+        name = (
+            "Refueler M978 HEMTT"
+            if self.coalition.player.is_blue
+            else "Refueler ATZ-10"
+        )
+        try:
+            return GroundUnitType.named(name)
+        except KeyError:
+            return None
 
     def default_shipment_kg(self) -> float:
         """Heaviest single supply run: a full convoy."""
@@ -1428,9 +1551,10 @@ class SupplyPlanner:
         ):
             self.airlift_to_carriers(report)
         self.produce(report)
-        self.dispatch_ships(report)
         if self.settings.logistics_supply_lines:
+            # Before the ships sail: with main base only, they're loaded here.
             self.distribute(report)
+        self.dispatch_ships(report)
         return report
 
 

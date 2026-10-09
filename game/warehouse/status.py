@@ -67,6 +67,10 @@ def supply_status(game: Game, cp: ControlPoint) -> Optional[SupplyStatus]:
         lines.insert(0, "Main supply base")
     elif depot:
         lines.append("Supply depot")
+    from .priority import is_priority
+
+    if is_priority(game, cp):
+        lines.append("Priority base: resupplied first")
     for transfer in runs:
         load = supply_of(transfer)
         what = load.describe() if load is not None else "supplies"

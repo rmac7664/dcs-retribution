@@ -189,10 +189,13 @@ class Coalition:
         with logged_duration("Transport planning"):
             self.transfers.plan_transports(self.game.conditions.start_time)
         if self.player.is_red and self.game.settings.logistics_enabled:
-            # The AI flies urgent or threatened ship and convoy cargo instead.
+            # The AI flies urgent or threatened ship and convoy cargo instead, and
+            # keeps a transport squadron so its supply can go by air.
+            from game.warehouse.aitransport import ensure_transport_squadron
             from game.warehouse.airswitch import ai_send_by_air
 
             ai_send_by_air(self.game, self)
+            ensure_transport_squadron(self.game, self)
 
         if not is_turn_0:
             self.plan_missions(self.game.conditions.start_time)

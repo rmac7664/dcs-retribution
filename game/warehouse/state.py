@@ -102,8 +102,20 @@ class WarehouseState:
         self.supply_ships: list[SupplyShip] = []
         #: Player-picked main supply base by side name (see supply.main_base).
         self.main_bases: dict[str, UUID] = {}
+        #: Fuel depots known destroyed (fuel.py); None until first checked.
+        self.dead_fuel_depots: Optional[set[UUID]] = None
+        #: Decaying average of what each side fires, and missions seen (usage.py).
+        self.usage: dict[str, dict[str, float]] = {}
+        self.usage_missions: dict[str, int] = {}
+        #: This turn's and last turn's supply deliveries and losses (see report.py).
+        self.turn_log: dict[str, Any] = {}
+        self.last_turn_log: dict[str, Any] = {}
+        #: Bases the player marked as priority: resupplied first (see priority.py).
+        self.priority_bases: set[UUID] = set()
         #: Carriers each side lost a replenishment ship to in the last mission.
         self.ships_sunk: dict[str, list[str]] = {}
+        #: The same, kept after the turn report for the AI and the overview.
+        self.last_ships_sunk: dict[str, list[str]] = {}
         #: Enemy main bases the player has found by striking or scouting them.
         self.revealed_main_bases: set[UUID] = set()
         #: Numbers replenishment ships, for unique mission group names.
@@ -311,10 +323,24 @@ class WarehouseState:
 
     def resupply(self, game: Game) -> None:
         """Turn end: each side buys munitions at its depots and ships them forward."""
-        from .supply import SupplyPlanner, report_lines, update_main_bases
+        from .supply import SupplyPlanner, update_main_bases
 
         for line in update_main_bases(game):
             game.message("Logistics: main supply base", line)
+        from .fuel import fuel_depot_losses
+
+        for side, base, tons in fuel_depot_losses(game):
+            if side == game.blue.player.name:
+                game.message(
+                    "Logistics: fuel depot destroyed",
+                    f"A fuel depot at {base} was destroyed: {tons:,.0f} t of fuel "
+                    "burned.",
+                )
+            elif side == game.red.player.name:
+                game.message(
+                    "Logistics: enemy fuel depot destroyed",
+                    f"We destroyed a fuel depot at {base}; its fuel burned.",
+                )
         for coalition in (game.blue, game.red):
             if coalition.player.is_red and not game.settings.logistics_apply_to_opfor:
                 continue
@@ -325,16 +351,17 @@ class WarehouseState:
             report.ships_arrived += arrived
             report.ships_lost.extend(lost)
             self.last_purchase[coalition.player.name] = report
-            if coalition.player.is_blue:
-                lines = report_lines(report, game.settings)
-                if lines:
-                    game.message("Logistics: supply", " ".join(lines))
-            elif report.bought:
+            if coalition.player.is_red and report.bought:
                 logging.info(
                     "Supply: OPFOR bought %d munitions for %.1f",
                     sum(report.bought.values()),
                     report.spent,
                 )
+        from .report import end_turn, turn_messages
+
+        for title, text in turn_messages(game):
+            game.message(title, text)
+        end_turn(game)
 
     def arrive_supply_ships(self, game: Game, side: str) -> tuple[int, list[str]]:
         """Advances one side's supply ships; those due unload at their carrier.
@@ -641,6 +668,9 @@ class WarehouseState:
             if used:
                 summary.munitions_used.setdefault(cp.name, {}).update(used)
         self.last_result = summary
+        from .usage import record_usage
+
+        record_usage(self, game, summary.munitions_used)
         for cp_name, used in summary.munitions_used.items():
             logging.info("Warehouse logistics: %s expended %s", cp_name, used)
 

@@ -575,7 +575,7 @@ def _route_threatened(game: Game, coalition: Coalition, shipment: Shipment) -> b
     lost trucks on the way.
     """
     destination = destination_of(game, shipment)
-    sunk = getattr(game.warehouse_logistics, "ships_sunk", {}) or {}
+    sunk = getattr(game.warehouse_logistics, "last_ships_sunk", {}) or {}
     if destination is not None and destination.name in sunk.get(
         coalition.player.name, []
     ):

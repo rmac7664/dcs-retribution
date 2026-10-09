@@ -213,6 +213,10 @@ class TheaterState(WorldState["TheaterState"]):
         # arrival, even if they aren't otherwise thought vulnerable.
         for cp in finder.threatened_supply_destinations():
             barcaps_needed.setdefault(cp, 1)
+        # The main supply base, and carriers expecting a replenishment ship, get
+        # extra cover when enemy fighters can reach them.
+        for cp, extra in finder.logistics_needing_cover():
+            barcaps_needed[cp] = barcaps_needed.get(cp, 0) + extra
         aewc_targets.append(finder.farthest_friendly_control_point())
 
         return TheaterState(

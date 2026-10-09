@@ -76,12 +76,19 @@ class QTopPanel(QFrame):
         self.transfers.setProperty("style", "btn-primary")
         self.transfers.clicked.connect(self.open_transfers)
 
+        self.logistics = QPushButton("Logistics")
+        self.logistics.setDisabled(True)
+        self.logistics.setProperty("style", "btn-primary")
+        self.logistics.setToolTip("Every base's supply situation on one page")
+        self.logistics.clicked.connect(self.open_logistics)
+
         self.intel_box = QIntelBox(self.game)
 
         self.buttonBox = QGroupBox("Misc")
         self.buttonBoxLayout = QHBoxLayout()
         self.buttonBoxLayout.addWidget(self.air_wing)
         self.buttonBoxLayout.addWidget(self.transfers)
+        self.buttonBoxLayout.addWidget(self.logistics)
         self.buttonBox.setLayout(self.buttonBoxLayout)
 
         self.simSpeedControls = SimSpeedControls(sim_controller)
@@ -130,6 +137,7 @@ class QTopPanel(QFrame):
 
         self.air_wing.setEnabled(True)
         self.transfers.setEnabled(True)
+        self.logistics.setEnabled(game.settings.logistics_enabled)
 
         self.conditionsWidget.setCurrentTurn(game.turn, game.conditions)
 
@@ -157,6 +165,14 @@ class QTopPanel(QFrame):
 
     def open_air_wing(self):
         self.dialog = AirWingDialog(self.game_model, self.window())
+        self.dialog.show()
+
+    def open_logistics(self):
+        from qt_ui.windows.QLogisticsOverview import QLogisticsOverview
+
+        if self.game is None:
+            return
+        self.dialog = QLogisticsOverview(self.game, self.window())
         self.dialog.show()
 
     def open_transfers(self):

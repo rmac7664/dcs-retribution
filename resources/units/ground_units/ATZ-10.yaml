@@ -1,0 +1,5 @@
+class: Logistics
+price: 1
+role: Fuel tanker truck
+variants:
+  Refueler ATZ-10: null

@@ -1,0 +1,5 @@
+class: Logistics
+price: 1
+role: Fuel tanker truck
+variants:
+  Refueler M978 HEMTT: null

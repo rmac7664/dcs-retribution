@@ -967,6 +967,19 @@ class Settings:
             "every base is restocked where it stands."
         ),
     )
+    logistics_main_base_only: bool = boolean_option(
+        "Main supply base is the only source of supply",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=False,
+        detail=(
+            "New munitions (and, with fuel by supply runs, fuel) arrive only at each "
+            "side's main supply base. Every other base, even one with its own ammo "
+            "or fuel depot, is supplied from there, and replenishment ships are "
+            "loaded from its stock. The main base has no cargo handling limit. If "
+            "off, every base with a live depot buys its own."
+        ),
+    )
     logistics_fuel_by_supply_lines: bool = boolean_option(
         "Ship fuel on supply runs too",
         CAMPAIGN_MANAGEMENT_PAGE,

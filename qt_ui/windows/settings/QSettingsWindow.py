@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QListView,
     QPushButton,
@@ -39,6 +40,7 @@ from game.settings import (
     Settings,
 )
 from game.settings.ISettingsContainer import SettingsContainer
+from game.settings.settings import LOGISTICS_SECTION
 from game.sim import GameUpdateEvents
 from pydcs_extensions import BanditClouds
 from qt_ui.widgets.QLabeledWidget import QLabeledWidget
@@ -315,7 +317,44 @@ class AutoSettingsGroup(QGroupBox):
     ) -> None:
         super().__init__(section)
         self.layout = AutoSettingsLayout(page, section, sc, write_full_settings)
-        self.setLayout(self.layout)
+        if section == LOGISTICS_SECTION:
+            outer = QVBoxLayout()
+            outer.addLayout(self._preset_row(sc, write_full_settings))
+            outer.addLayout(self.layout)
+            self.setLayout(outer)
+        else:
+            self.setLayout(self.layout)
+
+    @staticmethod
+    def _preset_row(
+        sc: SettingsContainer, write_full_settings: Callable[[], None]
+    ) -> QHBoxLayout:
+        """Light / Realistic / Hardcore logistics presets."""
+        from game.warehouse.presets import DESCRIPTIONS, PRESETS, apply_preset
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Preset:"))
+        choice = QComboBox()
+        for name in PRESETS:
+            choice.addItem(name)
+            choice.setItemData(
+                choice.count() - 1, DESCRIPTIONS[name], Qt.ItemDataRole.ToolTipRole
+            )
+        choice.setCurrentText("Realistic")
+        row.addWidget(choice)
+        apply = QPushButton("Apply preset")
+
+        def on_apply() -> None:
+            apply_preset(sc.settings, choice.currentText())
+            updater = getattr(sc, "update_from_settings", None)
+            if updater is not None:
+                updater()
+            write_full_settings()
+
+        apply.clicked.connect(on_apply)
+        row.addWidget(apply)
+        row.addStretch()
+        return row
 
     def update_from_settings(self) -> None:
         self.layout.update_from_settings()

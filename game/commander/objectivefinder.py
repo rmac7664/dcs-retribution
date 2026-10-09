@@ -194,6 +194,34 @@ class ObjectiveFinder:
             if threats.threatened_by_aircraft(cp):
                 yield cp
 
+    def logistics_needing_cover(self) -> Iterator[tuple[ControlPoint, int]]:
+        """Own logistics enemy fighters can reach: (base, extra BARCAPs).
+
+        The main supply base gets cover if enemy aircraft can reach it, and a carrier
+        or LHA with a replenishment ship on its way gets an extra BARCAP so the ship
+        is covered on its approach.
+        """
+        if not self.game.settings.logistics_enabled:
+            return
+        from game.warehouse.supply import main_base
+
+        threats = self.game.threat_zone_for(self.is_player.opponent)
+        hub = main_base(self.game, self.is_player)
+        if (
+            hub is not None
+            and not isinstance(hub, OffMapSpawn)
+            and threats.threatened_by_aircraft(hub)
+        ):
+            yield hub, 1
+        state = self.game.warehouse_logistics
+        for cp in self.friendly_control_points():
+            if not isinstance(cp, NavalControlPoint):
+                continue
+            if any(True for _ in state.ships_bound_for(cp)) and (
+                threats.threatened_by_aircraft(cp)
+            ):
+                yield cp, 1
+
     def motorpool_targets(self) -> Iterator[MotorpoolGroundObject]:
         """Iterates over enemy motorpool depots worth striking this turn.
 
