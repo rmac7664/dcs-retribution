@@ -349,6 +349,10 @@ class Game:
             control_point.process_turn(self)
 
         if self.settings.logistics_enabled:
+            if not skipped:
+                from game.warehouse.supply import reveal_enemy_main_base
+
+                reveal_enemy_main_base(self)
             self.warehouse_logistics.resupply(self)
 
         # Movable ship TGOs snap to their destination and re-parent to the

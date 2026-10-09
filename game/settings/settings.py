@@ -1788,6 +1788,7 @@ class Settings:
     enable_base_capture_cheat: bool = False
     enable_transfer_cheat: bool = False
     enable_runway_state_cheat: bool = False
+    enable_main_base_cheat: bool = False
     enable_air_wing_adjustments: bool = False
     enable_enemy_buy_sell: bool = False
 

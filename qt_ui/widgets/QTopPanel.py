@@ -164,6 +164,11 @@ class QTopPanel(QFrame):
         self.dialog.show()
 
     def passTurn(self):
+        from qt_ui.windows.QMainBaseDialog import QMainBaseDialog
+
+        if QMainBaseDialog.needed(self.game):
+            if QMainBaseDialog(self.game, self).exec() != QDialog.DialogCode.Accepted:
+                return
         with logged_duration("Skipping turn"):
             self.game.pass_turn(no_action=True)
             GameUpdateSignal.get_instance().updateGame(self.game)

@@ -419,6 +419,7 @@ export type ControlPoint = {
   destination?: LatLng;
   sidc: string;
   supply?: SupplyStatus;
+  main_base?: boolean;
 };
 export type ValidationError = {
   loc: (string | number)[];

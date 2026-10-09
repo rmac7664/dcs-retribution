@@ -102,6 +102,8 @@ class WarehouseState:
         self.supply_ships: list[SupplyShip] = []
         #: Player-picked main supply base by side name (see supply.main_base).
         self.main_bases: dict[str, UUID] = {}
+        #: Enemy main bases the player has found by striking or scouting them.
+        self.revealed_main_bases: set[UUID] = set()
         #: Numbers replenishment ships, for unique mission group names.
         self.ship_serial = 0
         #: DCS SAM launcher type -> missiles it carries (learned; see sam.py).
@@ -307,8 +309,10 @@ class WarehouseState:
 
     def resupply(self, game: Game) -> None:
         """Turn end: each side buys munitions at its depots and ships them forward."""
-        from .supply import SupplyPlanner, report_lines
+        from .supply import SupplyPlanner, report_lines, update_main_bases
 
+        for line in update_main_bases(game):
+            game.message("Logistics: main supply base", line)
         for coalition in (game.blue, game.red):
             if coalition.player.is_red and not game.settings.logistics_apply_to_opfor:
                 continue

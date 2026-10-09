@@ -2,6 +2,7 @@ import { ControlPoint } from "../../api/_liberationApi";
 import { makeLocationMarkerEventHandlers } from "./EventHandlers";
 import { iconForControlPoint } from "./Icons";
 import LocationTooltipText from "./LocationTooltipText";
+import MainBaseStar from "./MainBaseStar";
 import SupplyRing from "./SupplyRing";
 import { Marker, Tooltip } from "react-leaflet";
 
@@ -13,6 +14,7 @@ export const StaticControlPoint = (props: StaticControlPointProps) => {
   return (
     <>
       <SupplyRing controlPoint={props.controlPoint} />
+      <MainBaseStar controlPoint={props.controlPoint} />
       <Marker
         position={props.controlPoint.position}
         icon={iconForControlPoint(props.controlPoint)}

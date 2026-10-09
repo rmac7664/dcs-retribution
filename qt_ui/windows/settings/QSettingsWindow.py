@@ -87,6 +87,16 @@ class CheatSettingsBox(QGroupBox):
             )
         )
 
+        # Main supply base
+        self.main_base_cheat_checkbox = QCheckBox()
+        self.main_base_cheat_checkbox.setChecked(sc.settings.enable_main_base_cheat)
+        self.main_base_cheat_checkbox.toggled.connect(apply_settings)
+        self.main_layout.addLayout(
+            QLabeledWidget(
+                "Enable Main Supply Base Change Cheat:", self.main_base_cheat_checkbox
+            )
+        )
+
         # Instant transfer
         self.transfer_cheat_checkbox = QCheckBox()
         self.transfer_cheat_checkbox.setChecked(sc.settings.enable_transfer_cheat)
@@ -131,6 +141,10 @@ class CheatSettingsBox(QGroupBox):
     @property
     def enable_runway_state_cheat(self) -> bool:
         return self.base_runway_state_cheat_checkbox.isChecked()
+
+    @property
+    def enable_main_base_cheat(self) -> bool:
+        return self.main_base_cheat_checkbox.isChecked()
 
     @property
     def enable_air_wing_cheats(self) -> bool:
@@ -504,6 +518,7 @@ class QSettingsWidget(QtWidgets.QWizardPage, SettingsContainer):
         self.settings.enable_runway_state_cheat = (
             self.cheat_options.enable_runway_state_cheat
         )
+        self.settings.enable_main_base_cheat = self.cheat_options.enable_main_base_cheat
         self.settings.enable_air_wing_adjustments = (
             self.cheat_options.enable_air_wing_cheats
         )
@@ -535,6 +550,9 @@ class QSettingsWidget(QtWidgets.QWizardPage, SettingsContainer):
         )
         self.cheat_options.base_runway_state_cheat_checkbox.setChecked(
             self.settings.enable_runway_state_cheat
+        )
+        self.cheat_options.main_base_cheat_checkbox.setChecked(
+            self.settings.enable_main_base_cheat
         )
         self.cheat_options.air_wing_adjustments_checkbox.setChecked(
             self.settings.enable_air_wing_adjustments

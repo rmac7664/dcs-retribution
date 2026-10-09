@@ -34,6 +34,8 @@ class ControlPointJs(BaseModel):
     destination: LeafletPoint | None
     sidc: str
     supply: SupplyStatusJs | None = None
+    #: The side's main supply base (enemy ones only once found).
+    main_base: bool = False
 
     class Config:
         title = "ControlPoint"
@@ -56,7 +58,21 @@ class ControlPointJs(BaseModel):
             destination=destination,
             sidc=str(control_point.sidc()),
             supply=ControlPointJs.supply_for(control_point),
+            main_base=ControlPointJs.main_base_for(control_point),
         )
+
+    @staticmethod
+    def main_base_for(control_point: ControlPoint) -> bool:
+        from game.warehouse.supply import main_base_known
+
+        try:
+            game = control_point.coalition.game
+            return game.settings.logistics_enabled and main_base_known(
+                game, control_point
+            )
+        except Exception:
+            logging.exception("Could not check the main base at %s", control_point)
+            return False
 
     @staticmethod
     def supply_for(control_point: ControlPoint) -> SupplyStatusJs | None:

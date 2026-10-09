@@ -159,15 +159,14 @@ def test_rear_area_supplies_arrive_at_the_rear_most_airfield(
     assert supply_module.main_base(game, blue) is rear
     assert supply_module.airhead(game, blue) is rear
 
-    # The player can pick another; an ineligible pick falls back to automatic.
-    supply_module.set_main_base(game, blue, forward)
-    assert supply_module.main_base(game, blue) is forward
+    # Only the safer half can be picked: here just the rear airfield.
+    with pytest.raises(ValueError):
+        supply_module.set_main_base(game, blue, forward)
     with pytest.raises(ValueError):
         supply_module.set_main_base(game, blue, enemy)
+    # A stored base the side no longer holds is replaced by the automatic choice.
     game.warehouse_logistics.main_bases[blue.name] = enemy.id
     assert supply_module.main_base(game, blue) is rear
-    supply_module.set_main_base(game, blue, None)
-    assert game.warehouse_logistics.main_bases == {}
 
     # Without an off-map rear area there is still a main base, but no airhead.
     game.theater.controlpoints = points

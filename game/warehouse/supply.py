@@ -31,6 +31,7 @@ import yaml
 from game.theater.controlpoint import (
     Airfield,
     ControlPoint,
+    Fob,
     NavalControlPoint,
     OffMapSpawn,
 )
@@ -455,61 +456,215 @@ def stock_value(state: WarehouseState, cp: ControlPoint, settings: Settings) -> 
     return value + stock.jet_fuel_kg / 1_000_000
 
 
-def _main_base_eligible(cp: ControlPoint, player: Any) -> bool:
-    return (
-        isinstance(cp, Airfield)
-        and cp.captured == player
-        and cp.runway_is_operational()
-    )
+#: A main base this close to an enemy airfield gets a warning (not a block).
+MAIN_BASE_WARNING_NM = 50
+METERS_PER_NM = 1852.0
+
+
+def _base_tier(cp: ControlPoint) -> Optional[int]:
+    """What kind of main base `cp` could be: 0 airfield, 1 carrier/LHA, 2 FOB.
+
+    None if it can't be one at all (off-map spawns, a sunk ship, a closed runway).
+    """
+    if isinstance(cp, OffMapSpawn):
+        return None
+    if isinstance(cp, Airfield):
+        return 0 if cp.runway_is_operational() else None
+    if isinstance(cp, NavalControlPoint):
+        return 1 if cp.runway_is_operational() else None
+    if isinstance(cp, Fob):
+        return 2
+    return None
+
+
+def enemy_positions(game: Game, player: Any) -> list[Any]:
+    return [
+        cp.position
+        for cp in game.theater.controlpoints
+        if cp.captured == player.opponent and not isinstance(cp, OffMapSpawn)
+    ]
+
+
+def distance_to_enemy(cp: ControlPoint, enemy: list[Any]) -> float:
+    return min((cp.position.distance_to_point(e) for e in enemy), default=0.0)
+
+
+def main_base_options(game: Game, player: Any) -> list[ControlPoint]:
+    """The bases the side may pick as its main supply base, safest first.
+
+    Rules: friendly and held since the campaign started, not off the map; an airfield
+    with a working runway, or if the side has none its carrier/LHA, or if none of those
+    a FOB; and in the rear half of those, ranked by distance to the nearest enemy base.
+    The first entry is the automatic choice: the base farthest from the enemy.
+    """
+    points = list(game.theater.controlpoints)
+    friendly = [cp for cp in points if cp.captured == player]
+    held = [
+        cp for cp in friendly if getattr(cp, "starting_coalition", player) == player
+    ]
+    # A side that has lost every base it started with can still have a main base.
+    pool = [cp for cp in held if _base_tier(cp) is not None] or [
+        cp for cp in friendly if _base_tier(cp) is not None
+    ]
+    if not pool:
+        return []
+    best = min(_base_tier(cp) for cp in pool)  # type: ignore[type-var]
+    pool = [cp for cp in pool if _base_tier(cp) == best]
+    enemy = enemy_positions(game, player)
+    pool.sort(key=lambda cp: (-distance_to_enemy(cp, enemy), cp.name))
+    return pool[: math.ceil(len(pool) / 2)]
+
+
+def main_base_warnings(game: Game, cp: ControlPoint) -> list[str]:
+    """Reasons `cp` is a risky main base. These warn; they don't block the pick."""
+    warnings = []
+    if cp.has_active_frontline:
+        warnings.append("it is on a front line")
+    limit = MAIN_BASE_WARNING_NM * METERS_PER_NM
+    near = [
+        other
+        for other in game.theater.controlpoints
+        if isinstance(other, Airfield)
+        and other.captured == cp.captured.opponent
+        and other.position.distance_to_point(cp.position) <= limit
+    ]
+    if near:
+        closest = min(near, key=lambda o: o.position.distance_to_point(cp.position))
+        miles = closest.position.distance_to_point(cp.position) / METERS_PER_NM
+        warnings.append(f"it is {miles:.0f} nm from the enemy airfield {closest.name}")
+    return warnings
+
+
+def _still_main_base(cp: ControlPoint, player: Any) -> bool:
+    """A locked main base stays until it is lost: captured, or the ship is sunk.
+
+    A damaged runway doesn't count; it gets repaired.
+    """
+    if cp.captured != player or isinstance(cp, OffMapSpawn):
+        return False
+    if isinstance(cp, NavalControlPoint):
+        return cp.runway_is_operational()
+    return True
+
+
+def _stored_main_base(game: Game, player: Any) -> Optional[ControlPoint]:
+    state = getattr(game, "warehouse_logistics", None)
+    chosen = (getattr(state, "main_bases", None) or {}).get(player.name)
+    if chosen is None:
+        return None
+    for cp in game.theater.controlpoints:
+        if cp.id == chosen:
+            return cp
+    return None
 
 
 def main_base(game: Game, player: Any) -> Optional[ControlPoint]:
     """The side's main supply base: where its supplies originate.
 
-    The player can pick it (a friendly airfield, from its Logistics tab). Otherwise,
-    and always for the AI, it is the side's airfield with a working runway that is
-    farthest from any enemy base, ignoring bases off the map. Stock from an off-map
-    rear area arrives here by strategic airlift, it always buys munitions like a
-    depot, and replenishment ships sail from its direction.
+    The player picks it before the campaign begins (see main_base_options); the AI's
+    is picked automatically. Once picked it stays until lost, then a new one is picked
+    (update_main_bases). Stock from an off-map rear area arrives here by strategic
+    airlift, it always buys munitions like a depot, and replenishment ships sail from
+    its direction.
     """
-    points = list(game.theater.controlpoints)
-    state = getattr(game, "warehouse_logistics", None)
-    chosen = (getattr(state, "main_bases", None) or {}).get(player.name)
-    if chosen is not None:
-        for cp in points:
-            if cp.id == chosen and _main_base_eligible(cp, player):
-                return cp
-    candidates = [cp for cp in points if _main_base_eligible(cp, player)]
-    if not candidates:
-        return None
-    enemy = [
-        cp.position
-        for cp in points
-        if cp.captured == player.opponent and not isinstance(cp, OffMapSpawn)
-    ]
-
-    def safety(cp: ControlPoint) -> tuple[float, str]:
-        nearest = min((cp.position.distance_to_point(e) for e in enemy), default=0.0)
-        return nearest, cp.name
-
-    return max(candidates, key=safety)
+    stored = _stored_main_base(game, player)
+    if stored is not None and _still_main_base(stored, player):
+        return stored
+    options = main_base_options(game, player)
+    return options[0] if options else None
 
 
-def main_base_is_chosen(game: Game, cp: ControlPoint) -> bool:
-    """True if the player picked `cp` as main base (rather than it being automatic)."""
-    chosen = game.warehouse_logistics.main_bases.get(cp.captured.name)
-    return chosen == cp.id and main_base(game, cp.captured) is cp
+def main_base_is_locked(game: Game, player: Any) -> bool:
+    """True once the side's main base has been picked for good."""
+    stored = _stored_main_base(game, player)
+    return stored is not None and _still_main_base(stored, player)
 
 
-def set_main_base(game: Game, player: Any, cp: Optional[ControlPoint]) -> None:
-    """Picks `cp` as the side's main supply base, or goes back to automatic (None)."""
-    bases = game.warehouse_logistics.main_bases
-    if cp is None:
-        bases.pop(player.name, None)
-    elif _main_base_eligible(cp, player):
-        bases[player.name] = cp.id
-    else:
+def set_main_base(game: Game, player: Any, cp: ControlPoint) -> None:
+    """Picks `cp` as the side's main supply base. It must be one of the options."""
+    if cp not in main_base_options(game, player):
         raise ValueError(f"{cp.name} can't be a main supply base")
+    game.warehouse_logistics.main_bases[player.name] = cp.id
+
+
+def update_main_bases(game: Game) -> list[str]:
+    """Locks in each side's main base, picking a new one if it was lost.
+
+    Returns messages about the player's side for the turn report.
+    """
+    messages = []
+    bases = game.warehouse_logistics.main_bases
+    for coalition in (game.blue, game.red):
+        player = coalition.player
+        stored = _stored_main_base(game, player)
+        if stored is not None and _still_main_base(stored, player):
+            continue
+        options = main_base_options(game, player)
+        if not options:
+            bases.pop(player.name, None)
+            continue
+        bases[player.name] = options[0].id
+        if stored is not None:
+            logging.info(
+                "Supply: %s lost its main base %s; now %s",
+                player.name,
+                stored.name,
+                options[0].name,
+            )
+            if player.is_blue:
+                messages.append(
+                    f"{stored.name} was lost, so {options[0].name} is now our main "
+                    "supply base."
+                )
+            elif stored.captured == game.blue.player:
+                messages.append(
+                    f"We captured the enemy's main supply base, {stored.name}."
+                )
+    return messages
+
+
+#: A player flight with a waypoint this close to the enemy main base scouts it.
+SCOUT_RANGE_NM = 10
+
+
+def reveal_enemy_main_base(game: Game) -> bool:
+    """Marks the enemy's main base as found if this turn's flights struck or scouted it.
+
+    Struck: a package targeted the base or something at it. Scouted: a flight's route
+    passed within SCOUT_RANGE_NM of it. Called at the end of a turn that was flown.
+    """
+    enemy_base = main_base(game, game.red.player)
+    state = game.warehouse_logistics
+    if enemy_base is None or enemy_base.id in state.revealed_main_bases:
+        return False
+    limit = SCOUT_RANGE_NM * METERS_PER_NM
+    for package in game.blue.ato.packages:
+        target = package.target
+        if target is enemy_base or getattr(target, "control_point", None) is enemy_base:
+            found = True
+        else:
+            found = any(
+                point.position.distance_to_point(enemy_base.position) <= limit
+                for flight in package.flights
+                for point in flight.points
+            )
+        if found:
+            state.revealed_main_bases.add(enemy_base.id)
+            game.message(
+                "Logistics: enemy main supply base found",
+                f"{enemy_base.name} is the enemy's main supply base.",
+            )
+            return True
+    return False
+
+
+def main_base_known(game: Game, cp: ControlPoint) -> bool:
+    """True if `cp` is a main base the player should see marked on the map."""
+    if main_base(game, cp.captured) is not cp:
+        return False
+    if cp.captured.is_blue:
+        return True
+    return cp.id in game.warehouse_logistics.revealed_main_bases
 
 
 def airhead(game: Game, player: Any) -> Optional[ControlPoint]:

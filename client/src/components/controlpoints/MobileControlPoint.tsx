@@ -7,6 +7,7 @@ import {
 import { makeLocationMarkerEventHandlers } from "./EventHandlers";
 import { iconForControlPoint } from "./Icons";
 import LocationTooltipText from "./LocationTooltipText";
+import MainBaseStar from "./MainBaseStar";
 import { MovementPath, MovementPathHandle } from "./MovementPath";
 import { StaticControlPoint } from "./StaticControlPoint";
 import SupplyRing from "./SupplyRing";
@@ -221,6 +222,9 @@ export const MobileControlPoint = (props: MobileControlPointProps) => {
     <>
       {!props.controlPoint.destination && (
         <SupplyRing controlPoint={props.controlPoint} />
+      )}
+      {!props.controlPoint.destination && (
+        <MainBaseStar controlPoint={props.controlPoint} />
       )}
       <PrimaryMarker
         controlPoint={props.controlPoint}
