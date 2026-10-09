@@ -105,6 +105,10 @@ def _risks(game: Game, cp: ControlPoint) -> list[str]:
         ]
         if near:
             risks.append(f"enemy airfield within {RISK_RANGE_NM} nm")
+    from .supply import carrier_reachable_by_sea
+
+    if isinstance(cp, NavalControlPoint) and not carrier_reachable_by_sea(game, cp):
+        risks.append("no sea access: supplied by air only")
     sunk = getattr(game.warehouse_logistics, "last_ships_sunk", {}) or {}
     if cp.name in sunk.get(cp.captured.name, []):
         risks.append("supply ship sunk last mission")

@@ -55,7 +55,7 @@ describe("SupplyRing", () => {
       expect.objectContaining({
         pathOptions: expect.objectContaining({
           color: "#f85149",
-          dashArray: "6 4",
+          dashArray: "10 6",
         }),
       }),
     );

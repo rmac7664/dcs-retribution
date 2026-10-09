@@ -102,6 +102,8 @@ class WarehouseState:
         self.supply_ships: list[SupplyShip] = []
         #: Player-picked main supply base by side name (see supply.main_base).
         self.main_bases: dict[str, UUID] = {}
+        #: Depot buildings being rebuilt: ID -> [turns left, side] (rebuild.py).
+        self.rebuilds: dict[Any, list[Any]] = {}
         #: Fuel depots known destroyed (fuel.py); None until first checked.
         self.dead_fuel_depots: Optional[set[UUID]] = None
         #: Decaying average of what each side fires, and missions seen (usage.py).
@@ -325,8 +327,18 @@ class WarehouseState:
         """Turn end: each side buys munitions at its depots and ships them forward."""
         from .supply import SupplyPlanner, update_main_bases
 
+        from .rebuild import ai_rebuild, process_rebuilds
+
+        for side, base, building in process_rebuilds(game):
+            if side == game.blue.player.name:
+                game.message(
+                    "Logistics: depot rebuilt",
+                    f"{building} at {base} has been rebuilt.",
+                )
         for line in update_main_bases(game):
             game.message("Logistics: main supply base", line)
+        if game.settings.logistics_apply_to_opfor:
+            ai_rebuild(game, game.red)
         from .fuel import fuel_depot_losses
 
         for side, base, tons in fuel_depot_losses(game):
@@ -396,6 +408,28 @@ class WarehouseState:
                     ship.carrier_name,
                 )
                 lost.append(ship.carrier_name)
+                continue
+            from .supply import carrier_reachable_by_sea, main_base
+
+            if not carrier_reachable_by_sea(game, carrier):
+                # No open water to reach it: the ship takes its cargo back to the
+                # main base; the carrier can only be resupplied by air.
+                hub = main_base(game, carrier.captured)
+                if hub is not None and not isinstance(hub, NavalControlPoint):
+                    self.receive(game, hub, ship.munitions, ship.fuel_kg)
+                logging.info(
+                    "Supply: ship for %s couldn't reach it; cargo back to %s",
+                    carrier.name,
+                    getattr(hub, "name", "nowhere"),
+                )
+                if carrier.captured.is_blue:
+                    game.message(
+                        "Logistics: replenishment ship turned back",
+                        f"The replenishment ship for {carrier.name} found no open "
+                        "water to reach it and took its cargo back to "
+                        f"{getattr(hub, 'name', 'port')}. {carrier.name} can only be "
+                        "resupplied by air while it stays there.",
+                    )
                 continue
             self.receive(game, carrier, ship.munitions, ship.fuel_kg)
             arrived += 1

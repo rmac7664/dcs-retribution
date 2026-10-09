@@ -120,6 +120,33 @@ def origin_bearing_point(
     return rendezvous.point_from_heading((toward + 180) % 360, 1000)
 
 
+def nearest_enemy_base(game: Game, cp: NavalControlPoint) -> Optional[Point]:
+    enemy = [
+        other.position
+        for other in game.theater.controlpoints
+        if other.captured == cp.captured.opponent
+    ]
+    if not enemy:
+        return None
+    return min(enemy, key=lambda p: p.distance_to_point(cp.position))
+
+
+def ship_can_reach(game: Game, cp: NavalControlPoint) -> bool:
+    """True if a replenishment ship can sail to `cp` through open water.
+
+    A carrier or LHA tucked in close to a coast may have no open water to start a
+    ship from (see start_point); such a ship can't be resupplied by sea, only by air.
+    """
+    rendezvous = cp.position
+    away = origin_bearing_point(game, cp, rendezvous) or nearest_enemy_base(game, cp)
+    return (
+        start_point(
+            rendezvous, away, start_distance(game.settings), game.theater.is_in_sea
+        )
+        is not None
+    )
+
+
 class ReplenishmentShipGenerator:
     def __init__(
         self,
@@ -212,18 +239,8 @@ class ReplenishmentShipGenerator:
     def away_from(self, cp: NavalControlPoint, rendezvous: Point) -> Optional[Point]:
         """The point the ship sails away from: it comes from the main supply base."""
         return origin_bearing_point(self.game, cp, rendezvous) or (
-            self.nearest_enemy_base(cp)
+            nearest_enemy_base(self.game, cp)
         )
-
-    def nearest_enemy_base(self, cp: NavalControlPoint) -> Optional[Point]:
-        enemy = [
-            other.position
-            for other in self.game.theater.controlpoints
-            if other.captured == cp.captured.opponent
-        ]
-        if not enemy:
-            return None
-        return min(enemy, key=lambda p: p.distance_to_point(cp.position))
 
     @staticmethod
     def ship_type(side: str, fallback: ShipUnitType) -> ShipUnitType:

@@ -123,6 +123,8 @@ class QWarehouseInfo(QFrame):
             runs_group.setLayout(runs_layout)
             content.addWidget(runs_group)
 
+        self._add_depot_buildings(content, cp, game)
+
         show_price = settings.logistics_munitions_cost
         title = "Munitions (on hand / authorized" + (
             ", unit price)" if show_price else ")"
@@ -171,6 +173,67 @@ class QWarehouseInfo(QFrame):
         layout = QVBoxLayout()
         layout.addWidget(scroll)
         self.setLayout(layout)
+
+    def _add_depot_buildings(
+        self, content: QVBoxLayout, cp: ControlPoint, game: Game
+    ) -> None:
+        """Ammo/fuel depots, factories and warehouses, with rebuilding."""
+        from game.warehouse.rebuild import (
+            REBUILD_COST,
+            REBUILD_TURNS,
+            can_rebuild,
+            depot_buildings,
+            turns_left,
+        )
+
+        buildings = depot_buildings(cp)
+        if not buildings:
+            return
+        group = QGroupBox("Supply depot buildings")
+        layout = QVBoxLayout()
+        for tgo in buildings:
+            row = QHBoxLayout()
+            left = turns_left(game, tgo)
+            if not tgo.is_dead:
+                status = "standing"
+            elif left is not None:
+                status = f"rebuilding, {left} turn(s) left"
+            else:
+                status = "destroyed"
+            label = QLabel(f"{tgo.name} ({tgo.category}): {status}")
+            row.addWidget(label, 1)
+            if cp.captured.is_blue and can_rebuild(game, tgo):
+                button = QPushButton(
+                    f"Rebuild (${REBUILD_COST}M, {REBUILD_TURNS} turns)"
+                )
+                button.clicked.connect(
+                    lambda _=False, tgo=tgo, label=label, button=button: (
+                        self._rebuild(game, tgo, label, button)
+                    )
+                )
+                row.addWidget(button)
+            layout.addLayout(row)
+        group.setLayout(layout)
+        content.addWidget(group)
+
+    def _rebuild(
+        self, game: Game, tgo: Any, label: QLabel, button: QPushButton
+    ) -> None:
+        from game.warehouse.rebuild import REBUILD_TURNS, begin_rebuild
+        from qt_ui.windows.GameUpdateSignal import GameUpdateSignal
+
+        try:
+            begin_rebuild(game, tgo)
+        except ValueError as ex:
+            QMessageBox.warning(self, "Can't rebuild", str(ex))
+            return
+        label.setText(
+            f"{tgo.name} ({tgo.category}): rebuilding, {REBUILD_TURNS} turn(s) left"
+        )
+        button.setEnabled(False)
+        signal = GameUpdateSignal.get_instance()
+        if signal is not None:
+            signal.updateBudget(game)
 
     def _shipment_row(self, game: Game, shipment: Any, text: str) -> QHBoxLayout:
         """A supply run or ship, with "Send by air…" or "Undo air delivery"."""

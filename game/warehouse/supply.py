@@ -371,6 +371,8 @@ class PurchaseReport:
     throughput_limited: list[str] = field(default_factory=list)
     ships_arrived: int = 0
     ships_lost: list[str] = field(default_factory=list)
+    #: Carriers no ship can reach, supplied by air this turn.
+    air_only_carriers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -736,6 +738,27 @@ def main_base_known(game: Game, cp: ControlPoint) -> bool:
     return cp.id in game.warehouse_logistics.revealed_main_bases
 
 
+def carrier_reachable_by_sea(game: Any, cp: ControlPoint) -> bool:
+    """True unless `cp` is a carrier/LHA no replenishment ship can sail to.
+
+    Ships need open water to approach from (see replenishmentshipgenerator); a
+    carrier or LHA close in to a coast may have none, and is then resupplied by air
+    only.
+    """
+    if not isinstance(cp, NavalControlPoint):
+        return True
+    theater = getattr(game, "theater", None)
+    if theater is None or not hasattr(theater, "is_in_sea"):
+        return True
+    from game.missiongenerator.replenishmentshipgenerator import ship_can_reach
+
+    try:
+        return ship_can_reach(game, cp)
+    except Exception:
+        logging.exception("Could not check sea access to %s", cp.name)
+        return True
+
+
 def airhead(game: Game, player: Any) -> Optional[ControlPoint]:
     """Where the side's off-map rear area delivers: its main supply base.
 
@@ -815,8 +838,19 @@ class SupplyPlanner:
         self.airhead = airhead(game, coalition.player)
         self._land_rear_area_runs()
         self.cancelled_runs = cancel_stalled_runs(coalition)
+        #: Carriers/LHAs no replenishment ship can reach: supplied by air only.
+        self.air_only: set[Any] = {
+            cp.id
+            for cp in self.bases
+            if isinstance(cp, NavalControlPoint)
+            and not carrier_reachable_by_sea(game, cp)
+        }
         if game.settings.logistics_supply_lines:
-            self.depots = [cp for cp in self.bases if self.is_depot(cp)]
+            self.depots = [
+                cp
+                for cp in self.bases
+                if self.is_depot(cp) and cp.id not in self.air_only
+            ]
             # Forward supply points: FOBs and other bases with a live ammo/fuel
             # depot or warehouse hold stock for shipping even without a DCS warehouse.
             for cp in game.theater.control_points_for(coalition.player):
@@ -864,7 +898,9 @@ class SupplyPlanner:
         self, cp: ControlPoint, munitions: dict[str, int], fuel_kg: float = 0.0
     ) -> None:
         """New stores for `cp`: straight into stock, or onto a carrier's ship."""
-        if not isinstance(cp, NavalControlPoint):
+        if not isinstance(cp, NavalControlPoint) or cp.id in getattr(
+            self, "air_only", set()
+        ):
             self.state.receive(self.game, cp, munitions, fuel_kg)
             return
         ship = self.ship_cargo.get(cp.id)
@@ -954,6 +990,22 @@ class SupplyPlanner:
         for cp in self.bases:
             if cp in self.depots:
                 served[cp.id] = cp
+                continue
+            if cp.id in getattr(self, "air_only", set()):
+                # Flown out from the main base, or the nearest land depot.
+                land = [
+                    d
+                    for d in self.depots
+                    if not isinstance(d, (NavalControlPoint, OffMapSpawn))
+                ]
+                land.sort(
+                    key=lambda d: (
+                        d is not main_base(self.game, self.coalition.player),
+                        d.position.distance_to_point(cp.position),
+                    )
+                )
+                if land:
+                    served[cp.id] = land[0]
                 continue
             if hub is not None and isinstance(cp, NavalControlPoint):
                 # Its replenishment ship is loaded at the main base.
@@ -1154,7 +1206,7 @@ class SupplyPlanner:
             capacity = self.state.fuel_capacity_kg(cp, self.settings)
             if isinstance(cp, NavalControlPoint):
                 if by_supply_lines and cp not in self.depots:
-                    continue  # its ship is fuelled from the main base's stock
+                    continue  # fuelled from the main base's stock (ship or air)
                 # Ships are refuelled by their replenishment ship, not at sea.
                 gap = capacity - stock.jet_fuel_kg - self.inbound_fuel[cp.id]
                 if gap >= 1:
@@ -1243,6 +1295,33 @@ class SupplyPlanner:
                     wanted,
                 )
             if not load and fuel < 1:
+                continue
+            if cp.id in getattr(self, "air_only", set()):
+                if truck is None:
+                    continue
+                for name, count in load.items():
+                    depot_stock.munitions[name] -= count
+                depot_stock.jet_fuel_kg -= fuel
+                transfer = TransferOrder(
+                    depot,
+                    cp,
+                    {truck: 1},
+                    request_airflift=True,
+                    supplies=SupplyLoad(
+                        munitions=load, fuel_kg=fuel, tons=tons, carriers=1
+                    ),
+                )
+                self.coalition.transfers.pending_transfers.append(transfer)
+                self.inbound[cp.id].update(load)
+                self.inbound_fuel[cp.id] += fuel
+                report.shipments += 1
+                report.air_only_carriers.append(cp.name)
+                logging.info(
+                    "Supply: %s flown from %s to %s (no sea access)",
+                    transfer.supplies.describe() if transfer.supplies else "",
+                    depot.name,
+                    cp.name,
+                )
                 continue
             if isinstance(cp, NavalControlPoint):
                 # Main base only: the carrier's replenishment ship is loaded here.
@@ -1595,6 +1674,12 @@ def report_lines(report: PurchaseReport, settings: Settings) -> list[str]:
         lines.append(f"{report.ships_sent} replenishment ship(s) sailed for carriers.")
     if report.ships_arrived:
         lines.append(f"{report.ships_arrived} replenishment ship(s) unloaded.")
+    if report.air_only_carriers:
+        names = ", ".join(sorted(set(report.air_only_carriers)))
+        lines.append(
+            f"No open water for replenishment ships to reach {names}: supplies are "
+            "flown out instead."
+        )
     if report.ships_lost:
         names = ", ".join(sorted(set(report.ships_lost)))
         lines.append(f"Cargo lost: no carrier left to unload at ({names}).")

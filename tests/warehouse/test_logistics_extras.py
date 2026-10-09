@@ -133,3 +133,69 @@ def test_main_base_only_makes_the_main_base_the_only_depot(monkeypatch: Any) -> 
         cp.coalition = SimpleNamespace(game=game)
     assert supply.SupplyPlanner.is_depot(hub)  # type: ignore[arg-type]
     assert not supply.SupplyPlanner.is_depot(other)  # type: ignore[arg-type]
+
+
+class FakeUnit:
+    def __init__(self) -> None:
+        self.alive = False
+
+    def revive(self, _events: Any) -> None:
+        self.alive = True
+
+
+class FakeDepot:
+    def __init__(self, cp: Any) -> None:
+        self.id = uuid.uuid4()
+        self.name = "Ammo depot"
+        self.category = "ammo"
+        self.units = [FakeUnit()]
+        self.control_point = cp
+
+    @property
+    def is_dead(self) -> bool:
+        return not any(u.alive for u in self.units)
+
+
+def rebuild_world(budget: float = 500) -> Any:
+    coalition = SimpleNamespace(budget=budget)
+    coalition.adjust_budget = lambda amount: setattr(
+        coalition, "budget", coalition.budget + amount
+    )
+    cp = SimpleNamespace(name="Tel Nof", captured=Player.BLUE, coalition=coalition)
+    tgo = FakeDepot(cp)
+    cp.connected_objectives = [tgo]
+    game: Any = SimpleNamespace(
+        warehouse_logistics=WarehouseState(),
+        theater=SimpleNamespace(controlpoints=[cp]),
+    )
+    return game, cp, tgo, tgo.units[0]
+
+
+def test_depot_building_rebuilt_after_as_many_turns_as_a_runway() -> None:
+    from game.warehouse import rebuild
+
+    game, cp, tgo, unit = rebuild_world()
+    assert rebuild.can_rebuild(game, tgo)
+    rebuild.begin_rebuild(game, tgo)
+    assert cp.coalition.budget == 500 - rebuild.REBUILD_COST
+    assert not rebuild.can_rebuild(game, tgo)
+    for _ in range(rebuild.REBUILD_TURNS - 1):
+        assert rebuild.process_rebuilds(game) == []
+    assert rebuild.process_rebuilds(game) == [("BLUE", "Tel Nof", "Ammo depot")]
+    assert unit.alive
+
+
+def test_rebuild_needs_money_and_is_lost_with_the_base() -> None:
+    import pytest
+
+    from game.warehouse import rebuild
+
+    game, cp, tgo, unit = rebuild_world(budget=10)
+    with pytest.raises(ValueError):
+        rebuild.begin_rebuild(game, tgo)
+    cp.coalition.budget = 500
+    rebuild.begin_rebuild(game, tgo)
+    cp.captured = Player.RED
+    assert rebuild.process_rebuilds(game) == []
+    assert rebuild.turns_left(game, tgo) is None
+    assert not unit.alive
