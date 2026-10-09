@@ -100,6 +100,8 @@ class WarehouseState:
         self.orders: dict[UUID, dict[str, MunitionOrder]] = {}
         #: Replenishment ships at sea, bound for carriers and LHAs.
         self.supply_ships: list[SupplyShip] = []
+        #: Player-picked main supply base by side name (see supply.main_base).
+        self.main_bases: dict[str, UUID] = {}
         #: Numbers replenishment ships, for unique mission group names.
         self.ship_serial = 0
         #: DCS SAM launcher type -> missiles it carries (learned; see sam.py).

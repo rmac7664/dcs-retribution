@@ -1,19 +1,19 @@
 """Puts carrier replenishment ships in the mission.
 
 Each SupplyShip the logistics system has at sea (game/warehouse/state.py) becomes a
-single ship timed to meet its carrier an hour and a half into the mission: the meeting
-point is where the carrier will be by then along its route, and the ship starts an
-hour and a half's sailing from there. On final approach the warehouse script
+single ship that starts far out ("Replenishment ships start", 70 nm by default),
+coming from the direction of its side's main supply base, and sails in at SAIL_SPEED
+to where the carrier will be when it gets there. On final approach the warehouse script
 (dcs_retribution_warehouses.lua) steers it at the carrier and, when it comes alongside,
-unloads its stores into the carrier's warehouse. If it is sunk on the way its cargo is
-lost.
+unloads its stores into the carrier's warehouse. If the mission ends first, its cargo
+arrives at the end of the turn; if it is sunk on the way its cargo is lost.
 """
 
 from __future__ import annotations
 
 import itertools
 import logging
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 import dcs.ships
 from dcs import Mission
@@ -31,10 +31,18 @@ if TYPE_CHECKING:
     from game.unitmap import UnitMap
     from game.warehouse.state import SupplyShip
 
-#: The ship meets its carrier this far into the mission, sailing at SAIL_SPEED.
-SAIL_SPEED = knots(12)
-MEET_AFTER_SECONDS = 90 * 60
-START_DISTANCE = nautical_miles(SAIL_SPEED.knots * MEET_AFTER_SECONDS / 3600)
+#: A fleet oiler's transit speed.
+SAIL_SPEED = knots(18)
+
+
+def start_distance(settings: Any) -> Distance:
+    return nautical_miles(getattr(settings, "logistics_replenishment_start_nm", 70))
+
+
+def sailing_seconds(distance: Distance) -> float:
+    """Time to sail `distance` at SAIL_SPEED."""
+    return distance.meters / SAIL_SPEED.meters_per_second
+
 
 #: DCS ship types for the role, most fitting first; the faction's cargo ship is the
 #: fallback. Red uses the Soviet Project 160 fleet oiler, so the sides look different.
@@ -95,6 +103,23 @@ def start_point(
     return None
 
 
+def origin_bearing_point(
+    game: Game, cp: NavalControlPoint, rendezvous: Point
+) -> Optional[Point]:
+    """A point opposite the side's main supply base, as seen from `rendezvous`.
+
+    start_point() places the ship away from the point it is given, so passing this
+    makes the ship come from the main base's direction.
+    """
+    from game.warehouse.supply import main_base
+
+    base = main_base(game, cp.captured)
+    if base is None or base.position.distance_to_point(rendezvous) < 1:
+        return None
+    toward = rendezvous.heading_between_point(base.position)
+    return rendezvous.point_from_heading((toward + 180) % 360, 1000)
+
+
 class ReplenishmentShipGenerator:
     def __init__(
         self,
@@ -140,11 +165,16 @@ class ReplenishmentShipGenerator:
         if info is None:
             return
         carrier_group: ShipGroup = info.ship_group
-        # Meet the carrier where it will be MEET_AFTER_SECONDS into the mission.
-        rendezvous = position_after(list(carrier_group.points), MEET_AFTER_SECONDS)
-        threat = self.nearest_enemy_base(cp)
+        # Meet the carrier where it will be by the time the ship gets there.
+        distance = start_distance(self.game.settings)
+        rendezvous = position_after(
+            list(carrier_group.points), sailing_seconds(distance)
+        )
         start = start_point(
-            rendezvous, threat, START_DISTANCE, self.game.theater.is_in_sea
+            rendezvous,
+            self.away_from(cp, rendezvous),
+            distance,
+            self.game.theater.is_in_sea,
         )
         if start is None:
             logging.info(
@@ -178,6 +208,12 @@ class ReplenishmentShipGenerator:
             )
         )
         logging.info("Supply: replenishment ship %s sails for %s", name, cp.name)
+
+    def away_from(self, cp: NavalControlPoint, rendezvous: Point) -> Optional[Point]:
+        """The point the ship sails away from: it comes from the main supply base."""
+        return origin_bearing_point(self.game, cp, rendezvous) or (
+            self.nearest_enemy_base(cp)
+        )
 
     def nearest_enemy_base(self, cp: NavalControlPoint) -> Optional[Point]:
         enemy = [

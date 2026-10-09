@@ -20,7 +20,7 @@ from game.missiongenerator.replenishmentshipgenerator import (
 from game.settings import Settings
 from game.theater.player import Player
 from game.unitmap import UnitMap
-from game.utils import nautical_miles
+from game.utils import knots, nautical_miles
 from game.warehouse.plan import MissionWarehousePlan
 from game.warehouse.state import BaseStock, SupplyShip, WarehouseState
 
@@ -146,12 +146,13 @@ def test_ships_at_sea_are_put_in_the_mission(monkeypatch: pytest.MonkeyPatch) ->
         if str(g.name) == info.group_name
     )
     assert group.units[0].type == dcs.ships.Ship_Tilde_Supply.id
-    # This carrier finishes its short leg before 90 minutes, so they meet at its end;
-    # the ship starts 18 nm (90 minutes at 12 kt) out.
+    # This carrier finishes its short leg long before the ship arrives, so they meet
+    # at its end; the ship starts 70 nm out (the default) and sails in at 18 kt.
     assert group.points[-1].position.distance_to_point(at(30_000, 0)) < 1
     assert group.points[0].position.distance_to_point(at(30_000, 0)) == pytest.approx(
-        nautical_miles(18).meters, rel=1e-3
+        nautical_miles(70).meters, rel=1e-3
     )
+    assert group.points[-1].speed == pytest.approx(knots(18).meters_per_second)
 
 
 def test_the_mission_script_is_told_about_each_ship(
@@ -235,12 +236,12 @@ def test_unloaded_cargo_is_credited_once_and_sunk_cargo_is_lost() -> None:
     assert result.state.supply_ships == []
 
 
-def test_meeting_point_is_where_the_carrier_will_be_after_90_minutes() -> None:
+def test_meeting_point_is_where_the_carrier_will_be_when_the_ship_arrives() -> None:
     from dcs.point import MovingPoint
 
     from game.missiongenerator.replenishmentshipgenerator import (
-        MEET_AFTER_SECONDS,
         position_after,
+        sailing_seconds,
     )
 
     def waypoint(x: float, speed_ms: float) -> MovingPoint:
@@ -248,17 +249,19 @@ def test_meeting_point_is_where_the_carrier_will_be_after_90_minutes() -> None:
         p.speed = speed_ms
         return p
 
-    # Like the Lincoln's route in a real test: a 54 nm leg at 21.4 kt (11 m/s).
-    leg = nautical_miles(54).meters
-    route = [waypoint(0, 11.0), waypoint(leg, 11.0)]
-    meet = position_after(route, MEET_AFTER_SECONDS)
-    assert meet.x == pytest.approx(11.0 * MEET_AFTER_SECONDS, rel=1e-3)
+    # 70 nm at 18 kt is just under four hours.
+    seconds = sailing_seconds(nautical_miles(70))
+    assert seconds == pytest.approx(70 / 18 * 3600)
+    # A long leg at 11 m/s (21 kt): the carrier is still on it when the ship arrives.
+    leg = nautical_miles(200).meters
+    meet = position_after([waypoint(0, 11.0), waypoint(leg, 11.0)], seconds)
+    assert meet.x == pytest.approx(11.0 * seconds, rel=1e-3)
     # A short leg the carrier finishes early: it waits at the end.
-    assert position_after([waypoint(0, 11), waypoint(5000, 11)], 5400).x == (
+    assert position_after([waypoint(0, 11), waypoint(5000, 11)], seconds).x == (
         pytest.approx(5000)
     )
     # A stopped carrier stays put.
-    assert position_after([waypoint(0, 0), waypoint(5000, 0)], 5400).x == 0
+    assert position_after([waypoint(0, 0), waypoint(5000, 0)], seconds).x == 0
 
 
 def test_red_and_blue_supply_ships_look_different() -> None:
@@ -290,3 +293,21 @@ def test_a_sunk_carrier_is_no_longer_supplied(monkeypatch: pytest.MonkeyPatch) -
     sunk: Any = Carrier(afloat=False)
     assert WarehouseState.is_managed(afloat, settings)
     assert not WarehouseState.is_managed(sunk, settings)
+
+
+def test_ships_sail_in_from_the_main_supply_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import game.warehouse.supply as supply_module
+
+    north = SimpleNamespace(position=at(500_000, 0))
+    monkeypatch.setattr(supply_module, "main_base", lambda _game, _side: north)
+    result = build(monkeypatch)
+    group = next(
+        g
+        for g in result.mission.country("USA").ship_group
+        if "replenishment" in str(g.name) or g.units[0].type == "Ship_Tilde_Supply"
+    )
+    start, end = group.points[0].position, group.points[-1].position
+    # It comes from the north (x grows northwards in DCS), 70 nm out.
+    assert start.x - end.x == pytest.approx(nautical_miles(70).meters, rel=1e-3)

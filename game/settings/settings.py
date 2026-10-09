@@ -1002,6 +1002,21 @@ class Settings:
             "fires freely for one mission while its load is learned from DCS."
         ),
     )
+    logistics_replenishment_start_nm: int = bounded_int_option(
+        "Replenishment ships start (nm from the carrier)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        LOGISTICS_SECTION,
+        default=70,
+        min=15,
+        max=200,
+        detail=(
+            "How far out a carrier's replenishment ship starts the mission, coming "
+            "from the direction of the side's main supply base and sailing in at 18 "
+            "knots. Far out it is outside the group's air defences and needs "
+            "protecting; if it hasn't reached the carrier when the mission ends, its "
+            "cargo arrives at the end of the turn, like a cargo ship's."
+        ),
+    )
     logistics_carrier_airlift: bool = boolean_option(
         "Carrier onboard delivery (C-2, helicopters)",
         CAMPAIGN_MANAGEMENT_PAGE,

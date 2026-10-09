@@ -13,12 +13,15 @@ from PySide6.QtWidgets import (
 )
 
 from game import Game
-from game.theater import ControlPoint
+from game.theater import Airfield, ControlPoint
 from game.warehouse.munitions import ammo_only
 from game.warehouse.state import KG_PER_TON, short_name
 from game.warehouse.supply import (
     MunitionPrices,
     SupplyPlanner,
+    main_base,
+    main_base_is_chosen,
+    set_main_base,
     manual_purchasing,
     ordered_at,
     supply_of,
@@ -52,6 +55,19 @@ class QWarehouseInfo(QFrame):
             role_label = QLabel(role)
             role_label.setWordWrap(True)
             content.addWidget(role_label)
+
+        if cp.captured.is_blue:
+            main_row = QHBoxLayout()
+            self.main_base_label = QLabel()
+            self.main_base_label.setWordWrap(True)
+            main_row.addWidget(self.main_base_label, 1)
+            self.main_base_button = QPushButton()
+            self.main_base_button.clicked.connect(
+                lambda: self._toggle_main_base(cp, game)
+            )
+            main_row.addWidget(self.main_base_button)
+            content.addLayout(main_row)
+            self._show_main_base(cp, game)
 
         if cp.captured.is_blue:
             order_row = QHBoxLayout()
@@ -138,6 +154,43 @@ class QWarehouseInfo(QFrame):
         layout = QVBoxLayout()
         layout.addWidget(scroll)
         self.setLayout(layout)
+
+    def _show_main_base(self, cp: ControlPoint, game: Game) -> None:
+        current = main_base(game, cp.captured)
+        if current is cp:
+            how = (
+                "you picked it"
+                if main_base_is_chosen(game, cp)
+                else "chosen automatically: your airfield farthest from the enemy"
+            )
+            self.main_base_label.setText(
+                f"<b>Main supply base</b> ({how}). Supplies originate here and "
+                "replenishment ships sail from this direction."
+            )
+            self.main_base_button.setText("Use automatic choice")
+            self.main_base_button.setVisible(main_base_is_chosen(game, cp))
+            return
+        name = current.name if current is not None else "none"
+        self.main_base_label.setText(f"Main supply base: {name}.")
+        self.main_base_button.setText("Make this the main supply base")
+        self.main_base_button.setVisible(
+            isinstance(cp, Airfield) and cp.runway_is_operational()
+        )
+
+    def _toggle_main_base(self, cp: ControlPoint, game: Game) -> None:
+        from game.server import EventStream
+
+        before = main_base(game, cp.captured)
+        if before is cp and main_base_is_chosen(game, cp):
+            set_main_base(game, cp.captured, None)
+        else:
+            set_main_base(game, cp.captured, cp)
+        after = main_base(game, cp.captured)
+        self._show_main_base(cp, game)
+        with EventStream.event_context() as events:
+            for changed in {before, after, cp}:
+                if changed is not None:
+                    events.update_control_point(changed)
 
     def _open_orders(self, cp: ControlPoint, game: Game) -> None:
         from qt_ui.windows.basemenu.QMunitionOrders import QMunitionOrders

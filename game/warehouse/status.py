@@ -22,6 +22,8 @@ class SupplyStatus:
     depot: bool
     #: Supply runs on their way to the base.
     inbound_runs: int
+    #: The side's main supply base (see supply.main_base).
+    main_base: bool = False
     #: Tooltip lines.
     lines: list[str] = field(default_factory=list)
 
@@ -37,7 +39,7 @@ def supply_status(game: Game, cp: ControlPoint) -> Optional[SupplyStatus]:
     Enemy bases report nothing: their stock levels are not something the player
     would know.
     """
-    from .supply import SupplyPlanner, iter_supply_transfers, supply_of
+    from .supply import SupplyPlanner, iter_supply_transfers, main_base, supply_of
 
     settings = game.settings
     state = game.warehouse_logistics
@@ -60,7 +62,10 @@ def supply_status(game: Game, cp: ControlPoint) -> Optional[SupplyStatus]:
         f"Munitions {munitions}% of authorized",
         f"Fuel {fuel}% ({stock.jet_fuel_kg / KG_PER_TON:,.0f} t)",
     ]
-    if depot:
+    is_main = main_base(game, cp.captured) is cp
+    if is_main:
+        lines.insert(0, "Main supply base")
+    elif depot:
         lines.append("Supply depot")
     for transfer in runs:
         load = supply_of(transfer)
@@ -68,4 +73,11 @@ def supply_status(game: Game, cp: ControlPoint) -> Optional[SupplyStatus]:
         lines.append(f"Inbound from {transfer.origin.name}: {what}")
     if ships:
         lines.append(f"{len(ships)} replenishment ship(s) at sea")
-    return SupplyStatus(munitions, fuel, depot, len(runs) + len(ships), lines)
+    return SupplyStatus(
+        munitions,
+        fuel,
+        depot,
+        len(runs) + len(ships),
+        main_base=is_main,
+        lines=lines,
+    )

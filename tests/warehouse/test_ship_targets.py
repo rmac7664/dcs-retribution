@@ -83,8 +83,9 @@ def test_blue_sees_reds_ships_but_not_its_own() -> None:
     assert not target.is_friendly(Player.BLUE) and target.is_friendly(Player.RED)
     assert FlightType.ANTISHIP in list(target.mission_types(Player.BLUE))
     assert list(target.mission_types(Player.RED)) == []
-    # Expected on the carrier's far side from blue's base (which is to the west).
-    assert target.position.y == pytest.approx(nautical_miles(15).meters, rel=1e-3)
+    # Expected early in its transit, 90% of the 70 nm start distance out, on the
+    # carrier's far side from blue's base (which is to the west).
+    assert target.position.y == pytest.approx(nautical_miles(63).meters, rel=1e-3)
 
 
 def test_no_targets_when_ships_are_off_the_map() -> None:
@@ -174,7 +175,7 @@ def test_the_planner_knows_whose_ship_it_is() -> None:
 
 
 class FakeEscorts:
-    """A carrier group's warships: an SM-2 umbrella 54 nm wide."""
+    """A carrier group's warships, with an umbrella covering the ship's approach."""
 
     def __init__(self, at: Point) -> None:
         self.position = at
@@ -182,7 +183,7 @@ class FakeEscorts:
         self.name = "KOMODO"
 
     def max_threat_range(self) -> Any:
-        return nautical_miles(54)
+        return nautical_miles(90)
 
 
 def protected_world(monkeypatch: pytest.MonkeyPatch, stock: int) -> Any:

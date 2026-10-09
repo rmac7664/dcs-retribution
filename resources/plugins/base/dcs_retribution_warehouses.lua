@@ -297,7 +297,7 @@ end
 local replenishment = data.replenishment or {}
 local ALONGSIDE_METERS = 5556 -- 3 nm
 local APPROACH_METERS = 18520 -- 10 nm
-local SAIL_SPEED = 6.17 -- 12 kt, in m/s
+local SAIL_SPEED = 9.26 -- 18 kt, in m/s
 
 local function aliveUnit(name)
     local ok, unit = pcall(Unit.getByName, name)

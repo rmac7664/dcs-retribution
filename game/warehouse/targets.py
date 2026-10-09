@@ -19,9 +19,10 @@ if TYPE_CHECKING:
     from game.theater.theatergroundobject import TheaterGroundObject
     from .state import SupplyShip
 
-#: How far from its carrier a replenishment ship is expected when strikes are planned:
-#: it starts 18 nm out and closes on the carrier during the mission.
-EXPECTED_DISTANCE = nautical_miles(15)
+#: Where along its approach a replenishment ship is expected when strikes are planned,
+#: as a share of its start distance: early in its transit (strikes are flown in the
+#: first part of the mission), before it reaches the carrier.
+EXPECTED_SHARE = 0.9
 
 
 class ReplenishmentShipTarget(MissionTarget):
@@ -60,20 +61,25 @@ def ship_group_name(ship: SupplyShip) -> str:
 
 
 def expected_position(game: Game, carrier: NavalControlPoint) -> Point:
-    """Where the ship should be: on the carrier's far side from the enemy."""
-    from game.missiongenerator.replenishmentshipgenerator import start_point
+    """Where the ship should be: partway in from the main supply base's side."""
+    from game.missiongenerator.replenishmentshipgenerator import (
+        origin_bearing_point,
+        start_distance,
+        start_point,
+    )
 
-    enemy = [
-        cp.position
-        for cp in game.theater.controlpoints
-        if cp.captured == carrier.captured.opponent
-    ]
-    threat: Optional[Point] = (
-        min(enemy, key=carrier.position.distance_to_point) if enemy else None
+    away: Optional[Point] = origin_bearing_point(game, carrier, carrier.position)
+    if away is None:
+        enemy = [
+            cp.position
+            for cp in game.theater.controlpoints
+            if cp.captured == carrier.captured.opponent
+        ]
+        away = min(enemy, key=carrier.position.distance_to_point) if enemy else None
+    distance = nautical_miles(
+        start_distance(game.settings).nautical_miles * EXPECTED_SHARE
     )
-    found = start_point(
-        carrier.position, threat, EXPECTED_DISTANCE, game.theater.is_in_sea
-    )
+    found = start_point(carrier.position, away, distance, game.theater.is_in_sea)
     return found if found is not None else carrier.position
 
 

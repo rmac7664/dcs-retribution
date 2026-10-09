@@ -408,6 +408,7 @@ export type SupplyStatus = {
   depot: boolean;
   inbound_runs: number;
   lines: string[];
+  main_base?: boolean;
 };
 export type ControlPoint = {
   id: string;

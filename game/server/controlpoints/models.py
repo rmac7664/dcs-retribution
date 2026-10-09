@@ -20,6 +20,7 @@ class SupplyStatusJs(BaseModel):
     depot: bool
     inbound_runs: int
     lines: list[str]
+    main_base: bool = False
 
     model_config = ConfigDict(title="SupplyStatus")
 
@@ -79,6 +80,7 @@ class ControlPointJs(BaseModel):
             depot=status.depot,
             inbound_runs=status.inbound_runs,
             lines=status.lines,
+            main_base=status.main_base,
         )
 
     @staticmethod

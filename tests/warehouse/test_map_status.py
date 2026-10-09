@@ -26,7 +26,7 @@ def setup(blue: bool = True) -> Any:
     cp = SimpleNamespace(
         id=uuid.uuid4(),
         name="Senaki",
-        captured=SimpleNamespace(is_blue=blue),
+        captured=SimpleNamespace(is_blue=blue, name="BLUE" if blue else "RED"),
         coalition=SimpleNamespace(transfers=SimpleNamespace(pending_transfers=[run])),
     )
     run.destination = cp
@@ -35,7 +35,11 @@ def setup(blue: bool = True) -> Any:
     state.is_managed = lambda _cp, _s: True  # type: ignore[method-assign,assignment]
     state.authorized_munitions = lambda _g, _cp: {AIM_120C: 20}  # type: ignore[method-assign,assignment]
     state.fuel_capacity_kg = lambda _cp, _s: 1_000_000.0  # type: ignore[method-assign,assignment]
-    game = SimpleNamespace(settings=settings, warehouse_logistics=state)
+    game = SimpleNamespace(
+        settings=settings,
+        warehouse_logistics=state,
+        theater=SimpleNamespace(controlpoints=[]),
+    )
     return game, cp
 
 

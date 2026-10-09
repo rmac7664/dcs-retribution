@@ -455,35 +455,74 @@ def stock_value(state: WarehouseState, cp: ControlPoint, settings: Settings) -> 
     return value + stock.jet_fuel_kg / 1_000_000
 
 
-def airhead(game: Game, player: Any) -> Optional[ControlPoint]:
-    """Where the side's off-map rear area delivers: its rear-most main airfield.
+def _main_base_eligible(cp: ControlPoint, player: Any) -> bool:
+    return (
+        isinstance(cp, Airfield)
+        and cp.captured == player
+        and cp.runway_is_operational()
+    )
 
-    Stock from the rear area arrives here by strategic airlift (it isn't flown in the
-    mission and can't be intercepted) and goes forward by convoy or airlift. It is the
-    side's airfield with a working runway, held since the campaign began, that is
-    farthest from any enemy base. None if the side has no off-map rear area or no such
-    airfield.
+
+def main_base(game: Game, player: Any) -> Optional[ControlPoint]:
+    """The side's main supply base: where its supplies originate.
+
+    The player can pick it (a friendly airfield, from its Logistics tab). Otherwise,
+    and always for the AI, it is the side's airfield with a working runway that is
+    farthest from any enemy base, ignoring bases off the map. Stock from an off-map
+    rear area arrives here by strategic airlift, it always buys munitions like a
+    depot, and replenishment ships sail from its direction.
     """
     points = list(game.theater.controlpoints)
-    if not any(isinstance(cp, OffMapSpawn) and cp.captured == player for cp in points):
-        return None
-    enemy = [cp.position for cp in points if cp.captured == player.opponent]
-    candidates = [
-        cp
-        for cp in points
-        if isinstance(cp, Airfield)
-        and cp.captured == player
-        and cp.starting_coalition == player
-        and cp.runway_is_operational()
-    ]
+    state = getattr(game, "warehouse_logistics", None)
+    chosen = (getattr(state, "main_bases", None) or {}).get(player.name)
+    if chosen is not None:
+        for cp in points:
+            if cp.id == chosen and _main_base_eligible(cp, player):
+                return cp
+    candidates = [cp for cp in points if _main_base_eligible(cp, player)]
     if not candidates:
         return None
+    enemy = [
+        cp.position
+        for cp in points
+        if cp.captured == player.opponent and not isinstance(cp, OffMapSpawn)
+    ]
 
     def safety(cp: ControlPoint) -> tuple[float, str]:
         nearest = min((cp.position.distance_to_point(e) for e in enemy), default=0.0)
         return nearest, cp.name
 
     return max(candidates, key=safety)
+
+
+def main_base_is_chosen(game: Game, cp: ControlPoint) -> bool:
+    """True if the player picked `cp` as main base (rather than it being automatic)."""
+    chosen = game.warehouse_logistics.main_bases.get(cp.captured.name)
+    return chosen == cp.id and main_base(game, cp.captured) is cp
+
+
+def set_main_base(game: Game, player: Any, cp: Optional[ControlPoint]) -> None:
+    """Picks `cp` as the side's main supply base, or goes back to automatic (None)."""
+    bases = game.warehouse_logistics.main_bases
+    if cp is None:
+        bases.pop(player.name, None)
+    elif _main_base_eligible(cp, player):
+        bases[player.name] = cp.id
+    else:
+        raise ValueError(f"{cp.name} can't be a main supply base")
+
+
+def airhead(game: Game, player: Any) -> Optional[ControlPoint]:
+    """Where the side's off-map rear area delivers: its main supply base.
+
+    Stock from the rear area arrives here by strategic airlift (it isn't flown in the
+    mission and can't be intercepted) and goes forward by convoy or airlift. None if
+    the side has no off-map rear area.
+    """
+    points = list(game.theater.controlpoints)
+    if not any(isinstance(cp, OffMapSpawn) and cp.captured == player for cp in points):
+        return None
+    return main_base(game, player)
 
 
 #: Ship-launched strike missiles: bought after a ship's interceptors.
@@ -642,7 +681,7 @@ class SupplyPlanner:
             return True
         if cp.captured.is_neutral:
             return False
-        if airhead(cp.coalition.game, cp.captured) is cp:
+        if main_base(cp.coalition.game, cp.captured) is cp:
             return True
         if cp.captured != cp.starting_coalition or cp.has_frontline:
             return False

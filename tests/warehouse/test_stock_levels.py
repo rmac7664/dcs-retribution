@@ -118,6 +118,7 @@ class FakeBase:
         from dcs.mapping import Point
         from dcs.terrain import Caucasus
 
+        self.id = uuid.uuid4()
         self.name = name
         self.position = Point(x, 0, Caucasus())
         self.captured = owner
@@ -143,19 +144,34 @@ def test_rear_area_supplies_arrive_at_the_rear_most_airfield(
     monkeypatch.setattr(supply_module, "Airfield", FakeAirfield)
     monkeypatch.setattr(supply_module, "OffMapSpawn", FakeOffMap)
     blue, red = Player.BLUE, Player.RED
-    rear = FakeAirfield("Vaziani", 0, blue, blue)
-    forward = FakeAirfield("Tbilisi", 150_000, blue, blue)
-    captured = FakeAirfield("Sukhumi", -100_000, blue, red)  # farther, but captured
-    enemy = FakeAirfield("Sochi", 250_000, red, red)
+    rear: Any = FakeAirfield("Vaziani", 0, blue, blue)
+    forward: Any = FakeAirfield("Tbilisi", 150_000, blue, blue)
+    enemy: Any = FakeAirfield("Sochi", 250_000, red, red)
+    enemy_off_map: Any = FakeOffMap("Red rear", -900_000, red, red)
     off_map: Any = FakeOffMap("Fairford", 900_000, blue, blue)
-    points = [rear, forward, captured, enemy]
+    points = [rear, forward, enemy, enemy_off_map]
     game: Any = SimpleNamespace(
-        theater=SimpleNamespace(controlpoints=points + [off_map])
+        theater=SimpleNamespace(controlpoints=points + [off_map]),
+        warehouse_logistics=SimpleNamespace(main_bases={}),
     )
 
+    # The airfield farthest from the enemy, ignoring the enemy's off-map spawn.
+    assert supply_module.main_base(game, blue) is rear
     assert supply_module.airhead(game, blue) is rear
-    # No off-map rear area, no airhead.
+
+    # The player can pick another; an ineligible pick falls back to automatic.
+    supply_module.set_main_base(game, blue, forward)
+    assert supply_module.main_base(game, blue) is forward
+    with pytest.raises(ValueError):
+        supply_module.set_main_base(game, blue, enemy)
+    game.warehouse_logistics.main_bases[blue.name] = enemy.id
+    assert supply_module.main_base(game, blue) is rear
+    supply_module.set_main_base(game, blue, None)
+    assert game.warehouse_logistics.main_bases == {}
+
+    # Without an off-map rear area there is still a main base, but no airhead.
     game.theater.controlpoints = points
+    assert supply_module.main_base(game, blue) is rear
     assert supply_module.airhead(game, blue) is None
 
 
