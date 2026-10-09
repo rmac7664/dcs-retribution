@@ -25,6 +25,7 @@ class FakeBase:
         self.starting_coalition = started or owner
         self.has_active_frontline = False
         self.runway_ok = True
+        self.connected_objectives: list[Any] = []
 
     def runway_is_operational(self) -> bool:
         return self.runway_ok
@@ -146,7 +147,7 @@ def test_lost_main_base_is_replaced_with_a_message() -> None:
     a.captured = RED
     messages = supply.update_main_bases(game)
     assert supply.main_base(game, BLUE) is b
-    assert messages == ["A was lost, so B is now our main supply base."]
+    assert messages == ["A was captured, so B is now our main supply base."]
 
 
 def test_enemy_main_base_revealed_by_strike_or_scouting() -> None:
@@ -173,3 +174,79 @@ def test_enemy_main_base_revealed_by_strike_or_scouting() -> None:
     strike = SimpleNamespace(target=SimpleNamespace(control_point=enemy), flights=[])
     game.blue.ato.packages = [strike]
     assert supply.reveal_enemy_main_base(game)
+
+
+def depot(category: str = "ammo") -> Any:
+    return SimpleNamespace(category=category, is_dead=False)
+
+
+def test_main_base_must_be_a_depot_when_the_side_has_one() -> None:
+    far: Any = FakeAirfield("Far", 0, BLUE)
+    mid: Any = FakeAirfield("Mid", 30, BLUE)
+    near: Any = FakeAirfield("Near", 60, BLUE)
+    enemy: Any = FakeAirfield("Enemy", 120, RED)
+    game = make_game([far, mid, near, enemy])
+    # No depot anywhere: the old rules (safer half, no depot needed).
+    assert supply.main_base_options(game, BLUE) == [far, mid]
+    # Only the forward base has a depot: it is the only option, safer half or not.
+    near.connected_objectives = [depot("ware"), SimpleNamespace(category="power")]
+    assert supply.main_base_options(game, BLUE) == [near]
+    # Two depot bases: the safer one of them.
+    mid.connected_objectives = [depot("fuel")]
+    assert supply.main_base_options(game, BLUE) == [mid]
+    # A dead depot building doesn't count.
+    mid.connected_objectives[0].is_dead = True
+    assert supply.main_base_options(game, BLUE) == [near]
+
+
+def test_carrier_counts_as_a_depot() -> None:
+    field: Any = FakeAirfield("Field", 0, BLUE)
+    ship: Any = FakeShip("CVN", 10, BLUE)
+    enemy: Any = FakeAirfield("Enemy", 100, RED)
+    game = make_game([field, ship, enemy])
+    assert supply.main_base_options(game, BLUE) == [ship]
+    field.connected_objectives = [depot()]
+    assert supply.main_base_options(game, BLUE) == [field]
+
+
+def test_main_base_moves_when_its_depots_are_destroyed() -> None:
+    a: Any = FakeAirfield("A", 0, BLUE)
+    b: Any = FakeAirfield("B", 40, BLUE)
+    enemy: Any = FakeAirfield("Enemy", 120, RED)
+    a.connected_objectives = [depot(), depot("factory")]
+    b.connected_objectives = [depot()]
+    game = make_game([a, b, enemy])
+    supply.update_main_bases(game)
+    assert supply.main_base(game, BLUE) is a
+    a.connected_objectives[0].is_dead = True
+    assert supply.update_main_bases(game) == []  # one building still stands
+    a.connected_objectives[1].is_dead = True
+    messages = supply.update_main_bases(game)
+    assert supply.main_base(game, BLUE) is b
+    assert messages == [
+        "Every supply depot building at A was destroyed, so B is now our main "
+        "supply base."
+    ]
+    # The last depot gone: nowhere to move to, so it stays put (old rules).
+    b.connected_objectives[0].is_dead = True
+    assert supply.update_main_bases(game) == []
+    assert supply.main_base(game, BLUE) is b
+
+
+def test_enemy_main_base_destroyed_message_only_once_found() -> None:
+    home: Any = FakeAirfield("Home", 0, BLUE)
+    e1: Any = FakeAirfield("E1", 200, RED)
+    e2: Any = FakeAirfield("E2", 150, RED)
+    e1.connected_objectives = [depot()]
+    e2.connected_objectives = [depot()]
+    game = make_game([home, e1, e2])
+    game.red.ato = None
+    supply.update_main_bases(game)
+    assert supply.main_base(game, RED) is e1
+    game.warehouse_logistics.revealed_main_bases.add(e1.id)
+    e1.connected_objectives[0].is_dead = True
+    assert supply.update_main_bases(game) == [
+        "We destroyed the enemy's main supply base at E1; they have moved it "
+        "elsewhere."
+    ]
+    assert supply.main_base(game, RED) is e2

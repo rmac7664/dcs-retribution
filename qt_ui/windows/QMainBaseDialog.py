@@ -47,10 +47,12 @@ class QMainBaseDialog(QDialog):
         intro = QLabel(
             "Your main supply base is where new supplies arrive and where "
             "replenishment ships sail from. It can't be changed once the campaign "
-            "begins (unless the cheat is enabled), and if it is lost a new one is "
-            "picked for you.<br><br>Only bases you have held since the start and that "
-            "are in the safer half of your territory are listed. The first is the "
-            "base farthest from the enemy."
+            "begins (unless the cheat is enabled). If it is captured, or every supply "
+            "depot building there is destroyed, the next base is picked for you."
+            "<br><br>Listed: bases you have held since the start that are supply "
+            "depots (an ammo depot, fuel depot, factory or warehouse still standing, "
+            "or a carrier), in the safer half of those. If you have no depots, the "
+            "safer half of your bases. The first is the farthest from the enemy."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)

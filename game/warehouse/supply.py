@@ -489,30 +489,68 @@ def distance_to_enemy(cp: ControlPoint, enemy: list[Any]) -> float:
     return min((cp.position.distance_to_point(e) for e in enemy), default=0.0)
 
 
-def main_base_options(game: Game, player: Any) -> list[ControlPoint]:
-    """The bases the side may pick as its main supply base, safest first.
+def _depot_buildings(cp: ControlPoint) -> list[Any]:
+    """The base's ammo depots, fuel depots, factories and warehouses, dead or alive."""
+    return [
+        tgo
+        for tgo in getattr(cp, "connected_objectives", [])
+        if getattr(tgo, "category", None) in DEPOT_CATEGORIES
+    ]
 
-    Rules: friendly and held since the campaign started, not off the map; an airfield
-    with a working runway, or if the side has none its carrier/LHA, or if none of those
-    a FOB; and in the rear half of those, ranked by distance to the nearest enemy base.
-    The first entry is the automatic choice: the base farthest from the enemy.
-    """
+
+def _has_live_depot(cp: ControlPoint) -> bool:
+    """True if `cp` can be a depot main base: a carrier/LHA (supplied by ship) or a
+    base with a depot building still standing."""
+    if isinstance(cp, NavalControlPoint):
+        return True
+    return any(not tgo.is_dead for tgo in _depot_buildings(cp))
+
+
+def _safer_half(
+    game: Game, player: Any, pool: list[ControlPoint]
+) -> list[ControlPoint]:
+    best = min(_base_tier(cp) for cp in pool)  # type: ignore[type-var]
+    pool = [cp for cp in pool if _base_tier(cp) == best]
+    enemy = enemy_positions(game, player)
+    pool.sort(key=lambda cp: (-distance_to_enemy(cp, enemy), cp.name))
+    return pool[: math.ceil(len(pool) / 2)]
+
+
+def _depot_options(game: Game, player: Any) -> list[ControlPoint]:
+    """Main base options that are supply depots; empty if the side has none."""
+    pool = [cp for cp in _main_base_pool(game, player) if _has_live_depot(cp)]
+    return _safer_half(game, player, pool) if pool else []
+
+
+def _main_base_pool(game: Game, player: Any) -> list[ControlPoint]:
     points = list(game.theater.controlpoints)
     friendly = [cp for cp in points if cp.captured == player]
     held = [
         cp for cp in friendly if getattr(cp, "starting_coalition", player) == player
     ]
     # A side that has lost every base it started with can still have a main base.
-    pool = [cp for cp in held if _base_tier(cp) is not None] or [
+    return [cp for cp in held if _base_tier(cp) is not None] or [
         cp for cp in friendly if _base_tier(cp) is not None
     ]
-    if not pool:
-        return []
-    best = min(_base_tier(cp) for cp in pool)  # type: ignore[type-var]
-    pool = [cp for cp in pool if _base_tier(cp) == best]
-    enemy = enemy_positions(game, player)
-    pool.sort(key=lambda cp: (-distance_to_enemy(cp, enemy), cp.name))
-    return pool[: math.ceil(len(pool) / 2)]
+
+
+def main_base_options(game: Game, player: Any) -> list[ControlPoint]:
+    """The bases the side may pick as its main supply base, safest first.
+
+    Rules: friendly and held since the campaign started, not off the map, and a supply
+    depot (a depot building still standing, or a carrier/LHA). Among those: an
+    airfield with a working runway, or if none its carrier/LHA, or if none a FOB; then
+    the rear half, ranked by distance to the nearest enemy base.
+
+    A side with no depot at all falls back to the same rules without the depot
+    requirement. The first entry is the automatic choice: the base farthest from the
+    enemy.
+    """
+    depots = _depot_options(game, player)
+    if depots:
+        return depots
+    pool = _main_base_pool(game, player)
+    return _safer_half(game, player, pool) if pool else []
 
 
 def main_base_warnings(game: Game, cp: ControlPoint) -> list[str]:
@@ -535,16 +573,26 @@ def main_base_warnings(game: Game, cp: ControlPoint) -> list[str]:
     return warnings
 
 
-def _still_main_base(cp: ControlPoint, player: Any) -> bool:
-    """A locked main base stays until it is lost: captured, or the ship is sunk.
+def _lost_reason(game: Game, cp: ControlPoint, player: Any) -> Optional[str]:
+    """Why a locked main base is no longer the main base, or None if it still is.
 
-    A damaged runway doesn't count; it gets repaired.
+    Lost when captured, when the ship is sunk, or when its last depot building is
+    destroyed (if the side has another depot to move to). A damaged runway doesn't
+    count; it gets repaired.
     """
     if cp.captured != player or isinstance(cp, OffMapSpawn):
-        return False
+        return "captured"
     if isinstance(cp, NavalControlPoint):
-        return cp.runway_is_operational()
-    return True
+        return None if cp.runway_is_operational() else "sunk"
+    buildings = _depot_buildings(cp)
+    if buildings and all(tgo.is_dead for tgo in buildings):
+        if _depot_options(game, player):
+            return "depots destroyed"
+    return None
+
+
+def _still_main_base(game: Game, cp: ControlPoint, player: Any) -> bool:
+    return _lost_reason(game, cp, player) is None
 
 
 def _stored_main_base(game: Game, player: Any) -> Optional[ControlPoint]:
@@ -568,7 +616,7 @@ def main_base(game: Game, player: Any) -> Optional[ControlPoint]:
     its direction.
     """
     stored = _stored_main_base(game, player)
-    if stored is not None and _still_main_base(stored, player):
+    if stored is not None and _still_main_base(game, stored, player):
         return stored
     options = main_base_options(game, player)
     return options[0] if options else None
@@ -577,7 +625,7 @@ def main_base(game: Game, player: Any) -> Optional[ControlPoint]:
 def main_base_is_locked(game: Game, player: Any) -> bool:
     """True once the side's main base has been picked for good."""
     stored = _stored_main_base(game, player)
-    return stored is not None and _still_main_base(stored, player)
+    return stored is not None and _still_main_base(game, stored, player)
 
 
 def set_main_base(game: Game, player: Any, cp: ControlPoint) -> None:
@@ -597,29 +645,40 @@ def update_main_bases(game: Game) -> list[str]:
     for coalition in (game.blue, game.red):
         player = coalition.player
         stored = _stored_main_base(game, player)
-        if stored is not None and _still_main_base(stored, player):
+        reason = None if stored is None else _lost_reason(game, stored, player)
+        if stored is not None and reason is None:
             continue
         options = main_base_options(game, player)
         if not options:
             bases.pop(player.name, None)
             continue
         bases[player.name] = options[0].id
-        if stored is not None:
-            logging.info(
-                "Supply: %s lost its main base %s; now %s",
-                player.name,
-                stored.name,
-                options[0].name,
+        if stored is None:
+            continue
+        new = options[0].name
+        logging.info(
+            "Supply: %s main base %s %s; now %s", player.name, stored.name, reason, new
+        )
+        if player.is_blue:
+            if reason == "depots destroyed":
+                messages.append(
+                    f"Every supply depot building at {stored.name} was destroyed, so "
+                    f"{new} is now our main supply base."
+                )
+            else:
+                messages.append(
+                    f"{stored.name} was {reason}, so {new} is now our main supply "
+                    "base."
+                )
+        elif reason == "captured" and stored.captured == game.blue.player:
+            messages.append(f"We captured the enemy's main supply base, {stored.name}.")
+        elif reason == "depots destroyed" and (
+            stored.id in game.warehouse_logistics.revealed_main_bases
+        ):
+            messages.append(
+                f"We destroyed the enemy's main supply base at {stored.name}; "
+                "they have moved it elsewhere."
             )
-            if player.is_blue:
-                messages.append(
-                    f"{stored.name} was lost, so {options[0].name} is now our main "
-                    "supply base."
-                )
-            elif stored.captured == game.blue.player:
-                messages.append(
-                    f"We captured the enemy's main supply base, {stored.name}."
-                )
     return messages
 
 
