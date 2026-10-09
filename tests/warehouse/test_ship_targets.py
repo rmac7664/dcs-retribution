@@ -27,6 +27,7 @@ class FakeCarrier:
         self.captured = side
         self.position = Point(0, 0, TERRAIN)
         self.afloat = afloat
+        self.ground_objects: list[Any] = []
 
     def runway_is_operational(self) -> bool:
         return self.afloat
@@ -170,3 +171,62 @@ def test_the_planner_knows_whose_ship_it_is() -> None:
     game.warehouse_logistics.supply_ships = [ship_for(kuznetsov)]
     (target,) = enemy_replenishment_ships(game, Player.BLUE)
     assert target.coalition == "red coalition"
+
+
+class FakeEscorts:
+    """A carrier group's warships: an SM-2 umbrella 54 nm wide."""
+
+    def __init__(self, at: Point) -> None:
+        self.position = at
+        self.is_dead = False
+        self.name = "KOMODO"
+
+    def max_threat_range(self) -> Any:
+        return nautical_miles(54)
+
+
+def protected_world(monkeypatch: pytest.MonkeyPatch, stock: int) -> Any:
+    import game.theater.theatergroundobject as tgo_module
+    import game.warehouse.sam as sam_module
+
+    monkeypatch.setattr(tgo_module, "NavalGroundObject", FakeEscorts)
+    lincoln = FakeCarrier("Lincoln", Player.BLUE)
+    lincoln.ground_objects = [FakeEscorts(lincoln.position)]
+    game = make_game(lincoln)
+    game.settings.logistics_limited_sam_missiles = True
+    state = game.warehouse_logistics
+    state.supply_ships = [ship_for(lincoln, "Lincoln replenishment 1")]
+    from game.warehouse.state import BaseStock
+
+    state.stocks[lincoln.id] = BaseStock(0.0, {"sam.missiles.SM_2": stock})
+    monkeypatch.setattr(sam_module, "seed_new_missiles", lambda _game: None)
+    monkeypatch.setattr(
+        sam_module,
+        "authorized_sam",
+        lambda _game, _cp: {"sam.missiles.SM_2": 100, "sam.missiles.BGM_109B": 50},
+    )
+    return game
+
+
+def test_supply_ships_under_a_well_stocked_umbrella_are_left_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    game = protected_world(monkeypatch, stock=80)
+    assert list(enemy_replenishment_ships(game, Player.RED)) == []
+
+
+def test_supply_ships_are_worth_it_once_the_magazines_run_low(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    game = protected_world(monkeypatch, stock=20)  # 20% of its interceptors
+    (target,) = enemy_replenishment_ships(game, Player.RED)
+    assert target.carrier.name == "Lincoln"
+
+
+def test_an_unescorted_supply_ship_is_fair_game(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    game = protected_world(monkeypatch, stock=100)
+    lincoln = game.theater.controlpoints[0]
+    lincoln.ground_objects[0].is_dead = True  # escorts sunk
+    assert len(list(enemy_replenishment_ships(game, Player.RED))) == 1

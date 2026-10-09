@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Iterator, Optional, TYPE_CHECKING
 
 from dcs.mapping import Point
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
     from game.coalition import Coalition
     from game.ato import FlightType
     from game.theater.player import Player
+    from game.theater.theatergroundobject import TheaterGroundObject
     from .state import SupplyShip
 
 #: How far from its carrier a replenishment ship is expected when strikes are planned:
@@ -93,4 +95,92 @@ def enemy_replenishment_ships(
             continue
         if not carrier.runway_is_operational() or carrier.captured != player.opponent:
             continue
-        yield ReplenishmentShipTarget(ship, carrier, expected_position(game, carrier))
+        position = expected_position(game, carrier)
+        reason = worth_striking(game, ship, carrier, position)
+        if reason is None:
+            logging.info(
+                "%s: not striking %s's replenishment ship: it sails under the "
+                "group's air defences, whose magazines are well stocked",
+                player.name,
+                carrier.name,
+            )
+            continue
+        logging.info(
+            "%s: %s's replenishment ship is worth striking (%s)",
+            player.name,
+            carrier.name,
+            reason,
+        )
+        yield ReplenishmentShipTarget(ship, carrier, position)
+
+
+#: Below this share of their interceptors, a ship group's magazines are low enough
+#: that its replenishment ship is worth the risk of striking.
+LOW_MAGAZINE_SHARE = 0.25
+
+
+def protecting_ships(
+    game: Game, carrier: NavalControlPoint, position: Point
+) -> list[TheaterGroundObject]:
+    """Live warships of the carrier's side whose air defences cover `position`.
+
+    The full threat range is used, whatever the auto-planner's aggressiveness: a
+    replenishment ship sails alongside its group, so a strike on it is a strike
+    into the group's missile envelope.
+    """
+    from game.theater.theatergroundobject import NavalGroundObject
+
+    found: list[TheaterGroundObject] = []
+    for cp in game.theater.controlpoints:
+        if cp.captured != carrier.captured:
+            continue
+        for tgo in getattr(cp, "ground_objects", []):
+            if not isinstance(tgo, NavalGroundObject) or tgo.is_dead:
+                continue
+            reach = tgo.max_threat_range().meters
+            if reach > 0 and tgo.position.distance_to_point(position) <= reach:
+                found.append(tgo)
+    return found
+
+
+def interceptor_share(game: Game, carrier: NavalControlPoint) -> Optional[float]:
+    """How full the carrier group's interceptor magazines are (0-1), if tracked.
+
+    None when SAM missiles aren't limited or the group's loads aren't learned yet.
+    """
+    from .sam import authorized_sam, enabled, seed_new_missiles
+    from .supply import STRIKE_SAM_PREFIXES
+
+    if not enabled(game):
+        return None
+    # Missiles just learned get their starting stock before anyone judges it.
+    seed_new_missiles(game)
+    wanted = {
+        k: v
+        for k, v in authorized_sam(game, carrier).items()
+        if not k.startswith(STRIKE_SAM_PREFIXES)
+    }
+    total = sum(wanted.values())
+    if total <= 0:
+        return None
+    stock = game.warehouse_logistics.stocks.get(carrier.id)
+    held = stock.munitions if stock is not None else {}
+    have = sum(min(max(0, held.get(k, 0)), v) for k, v in wanted.items())
+    return have / total
+
+
+def worth_striking(
+    game: Game, ship: SupplyShip, carrier: NavalControlPoint, position: Point
+) -> Optional[str]:
+    """Why a replenishment ship is worth an anti-ship strike, or None if it isn't.
+
+    It is if it sails outside its group's air defences (the escorts are sunk), or if
+    the group's interceptor magazines are low, so the strike can get through and
+    stopping the resupply hurts.
+    """
+    if not protecting_ships(game, carrier, position):
+        return "no air defence covers it"
+    share = interceptor_share(game, carrier)
+    if share is not None and share < LOW_MAGAZINE_SHARE:
+        return f"the group's interceptors are down to {share:.0%}"
+    return None
