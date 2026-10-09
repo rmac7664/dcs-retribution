@@ -102,6 +102,8 @@ class WarehouseState:
         self.supply_ships: list[SupplyShip] = []
         #: Player-picked main supply base by side name (see supply.main_base).
         self.main_bases: dict[str, UUID] = {}
+        #: Carriers each side lost a replenishment ship to in the last mission.
+        self.ships_sunk: dict[str, list[str]] = {}
         #: Enemy main bases the player has found by striking or scouting them.
         self.revealed_main_bases: set[UUID] = set()
         #: Numbers replenishment ships, for unique mission group names.
@@ -390,6 +392,8 @@ class WarehouseState:
         """
         reported = _as_dict(data.get("replenished")) if data else {}
         unloaded: list[str] = []
+        #: Carriers each side lost a replenishment ship to, this mission.
+        self.ships_sunk = {}
         for name in reported:
             ship = debriefing.unit_map.replenishment_ship(str(name))
             if ship is None or not self._remove_ship(ship):
@@ -402,6 +406,7 @@ class WarehouseState:
             self.receive(game, carrier, ship.munitions, ship.fuel_kg)
         for ship in debriefing.replenishment_ships_lost():
             if self._remove_ship(ship):
+                self.ships_sunk.setdefault(ship.side, []).append(ship.carrier_name)
                 logging.info(
                     "Supply: replenishment ship for %s was sunk with its cargo",
                     ship.carrier_name,

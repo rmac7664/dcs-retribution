@@ -49,6 +49,13 @@ class ControlPointJs(BaseModel):
             blue = True
         else:
             blue = False
+        main_base = ControlPointJs.main_base_for(control_point)
+        sidc = control_point.sidc()
+        if main_base:
+            # Drawn as a headquarters: the NATO HQ staff under the base's symbol.
+            from game.sidc import HeadquartersTaskForceDummy
+
+            sidc.headquarters_task_force_dummy = HeadquartersTaskForceDummy.HEADQUARTERS
         return ControlPointJs(
             id=control_point.id,
             name=control_point.name,
@@ -56,9 +63,9 @@ class ControlPointJs(BaseModel):
             position=control_point.position.latlng(),
             mobile=control_point.moveable and control_point.captured.is_blue,
             destination=destination,
-            sidc=str(control_point.sidc()),
+            sidc=str(sidc),
             supply=ControlPointJs.supply_for(control_point),
-            main_base=ControlPointJs.main_base_for(control_point),
+            main_base=main_base,
         )
 
     @staticmethod

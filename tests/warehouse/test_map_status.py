@@ -81,3 +81,41 @@ def test_supply_convoys_say_what_they_carry() -> None:
         "Supply run of 6 munitions (1.0 t) from Vaziani to Senaki",
         "3 units transferring from Vaziani to Senaki",
     ]
+
+
+def test_main_base_is_drawn_as_a_headquarters(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dcs.mapping import Point
+    from dcs.terrain import Caucasus
+
+    from game.server.controlpoints.models import ControlPointJs
+    from game.sidc import (
+        LandInstallationEntity,
+        StandardIdentity,
+        SymbolIdentificationCode,
+        SymbolSet,
+    )
+
+    def sidc() -> SymbolIdentificationCode:
+        return SymbolIdentificationCode(
+            standard_identity=StandardIdentity.FRIEND,
+            symbol_set=SymbolSet.LAND_INSTALLATIONS,
+            entity=LandInstallationEntity.AIPORT_AIR_BASE,
+        )
+
+    cp: Any = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Ben-Gurion",
+        captured=SimpleNamespace(is_blue=True),
+        position=Point(0, 0, Caucasus()),
+        target_position=None,
+        moveable=False,
+        sidc=sidc,
+    )
+    monkeypatch.setattr(ControlPointJs, "supply_for", staticmethod(lambda _cp: None))
+    for main, digit in ((False, "0"), (True, "2")):
+        monkeypatch.setattr(
+            ControlPointJs, "main_base_for", staticmethod(lambda _cp: main)
+        )
+        js = ControlPointJs.for_control_point(cp)
+        assert js.main_base is main
+        assert js.sidc[7] == digit

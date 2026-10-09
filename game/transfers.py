@@ -125,6 +125,10 @@ class TransferOrder:
     #: Turns in a row this order found no transport (see game/warehouse/supply.py).
     stalled_turns: int = field(default=0)
 
+    #: Set when a ship or convoy's munitions were switched to air delivery this turn
+    #: (see game/warehouse/airswitch.py), so the switch can be undone.
+    air_switch: Optional[Any] = field(default=None)
+
     def __str__(self) -> str:
         """Returns the text that should be displayed for the transfer."""
         if self.supplies is not None:

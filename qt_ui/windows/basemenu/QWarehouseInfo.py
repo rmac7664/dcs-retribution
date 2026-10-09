@@ -1,3 +1,5 @@
+from typing import Any
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
@@ -16,7 +18,7 @@ from PySide6.QtWidgets import (
 from game import Game
 from game.theater import ControlPoint
 from game.warehouse.munitions import ammo_only
-from game.warehouse.state import KG_PER_TON, short_name
+from game.warehouse.state import KG_PER_TON, SupplyShip, short_name
 from game.warehouse.supply import (
     MunitionPrices,
     SupplyPlanner,
@@ -98,13 +100,26 @@ class QWarehouseInfo(QFrame):
             for t in cp.coalition.transfers.pending_transfers
             if supply_of(t) is not None and cp in (t.origin, t.destination)
         ]
-        if runs:
+        ships = list(state.ships_bound_for(cp))
+        if runs or ships:
             runs_group = QGroupBox("Supply runs")
             runs_layout = QVBoxLayout()
             for transfer in runs:
-                line = QLabel(f"{transfer} — {transfer.description}")
-                line.setWordWrap(True)
-                runs_layout.addWidget(line)
+                runs_layout.addLayout(
+                    self._shipment_row(
+                        game, transfer, f"{transfer} — {transfer.description}"
+                    )
+                )
+            for ship in ships:
+                cargo = sum(ship.munitions.values())
+                runs_layout.addLayout(
+                    self._shipment_row(
+                        game,
+                        ship,
+                        f"Replenishment ship at sea: {cargo} munitions, "
+                        f"{ship.fuel_kg / KG_PER_TON:,.0f} t fuel",
+                    )
+                )
             runs_group.setLayout(runs_layout)
             content.addWidget(runs_group)
 
@@ -156,6 +171,49 @@ class QWarehouseInfo(QFrame):
         layout = QVBoxLayout()
         layout.addWidget(scroll)
         self.setLayout(layout)
+
+    def _shipment_row(self, game: Game, shipment: Any, text: str) -> QHBoxLayout:
+        """A supply run or ship, with "Send by air…" or "Undo air delivery"."""
+        from game.warehouse.airswitch import can_undo, switchable
+
+        row = QHBoxLayout()
+        line = QLabel(text)
+        line.setWordWrap(True)
+        row.addWidget(line, 1)
+        if isinstance(shipment, SupplyShip):
+            if shipment.side != "BLUE":
+                return row
+        elif not shipment.player.is_blue:
+            return row
+        if switchable(game, shipment):
+            button = QPushButton("Send by air…")
+            button.clicked.connect(
+                lambda: self._send_by_air(game, shipment, line, button)
+            )
+            row.addWidget(button)
+        elif not isinstance(shipment, SupplyShip) and can_undo(game, shipment):
+            button = QPushButton("Undo air delivery")
+            button.clicked.connect(lambda: self._undo_air(game, shipment, line, button))
+            row.addWidget(button)
+        return row
+
+    def _send_by_air(
+        self, game: Game, shipment: Any, line: QLabel, button: QPushButton
+    ) -> None:
+        from qt_ui.windows.QSendByAirDialog import QSendByAirDialog
+
+        if QSendByAirDialog(game, shipment, self).exec():
+            line.setText(line.text() + " — munitions sent by air")
+            button.setEnabled(False)
+
+    def _undo_air(
+        self, game: Game, transfer: Any, line: QLabel, button: QPushButton
+    ) -> None:
+        from qt_ui.windows.QSendByAirDialog import undo_air_delivery
+
+        if undo_air_delivery(game, transfer, self):
+            line.setText(line.text() + " — back on the ship or convoy")
+            button.setEnabled(False)
 
     @staticmethod
     def can_change_main_base(game: Game) -> bool:

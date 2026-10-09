@@ -181,16 +181,21 @@ class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):
             )
 
         if self.flight.is_helo:
-            # Create CTLD Zones for Helo flights
-            pickup_zone = builder.pickup_zone(
-                MissionTarget("Pickup Zone", self._generate_ctld_pickup())
-            )
-            drop_off_zone = builder.dropoff_zone(
-                MissionTarget("Dropoff zone", self._generate_ctld_dropoff())
-            )
-            # Show the zone waypoints only to the player
-            pickup_zone.only_for_player = True
-            drop_off_zone.only_for_player = True
+            # Create CTLD Zones for Helo flights. Carriers and LHAs have none: the
+            # cargo is set down on the deck (the cargo stop) instead.
+            if isinstance(cargo.origin, CTLD):
+                pickup_zone = builder.pickup_zone(
+                    MissionTarget("Pickup Zone", self._generate_ctld_pickup())
+                )
+                pickup_zone.only_for_player = True
+            if cargo.transport is not None and isinstance(
+                cargo.transport.destination, CTLD
+            ):
+                drop_off_zone = builder.dropoff_zone(
+                    MissionTarget("Dropoff zone", self._generate_ctld_dropoff())
+                )
+                # Show the zone waypoints only to the player
+                drop_off_zone.only_for_player = True
 
         nav_to_pickup = builder.nav_path(
             self.flight.departure.position,

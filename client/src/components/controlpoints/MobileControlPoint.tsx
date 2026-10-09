@@ -5,9 +5,12 @@ import {
   useSetControlPointDestinationMutation,
 } from "../../api/liberationApi";
 import { makeLocationMarkerEventHandlers } from "./EventHandlers";
-import { iconForControlPoint } from "./Icons";
+import {
+  controlPointLines,
+  controlPointZIndex,
+  iconForControlPoint,
+} from "./Icons";
 import LocationTooltipText from "./LocationTooltipText";
-import MainBaseStar from "./MainBaseStar";
 import { MovementPath, MovementPathHandle } from "./MovementPath";
 import { StaticControlPoint } from "./StaticControlPoint";
 import SupplyRing from "./SupplyRing";
@@ -106,7 +109,7 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
         : ReactDOMServer.renderToString(
             <LocationTooltipText
               name={props.controlPoint.name}
-              lines={props.controlPoint.supply?.lines}
+              lines={controlPointLines(props.controlPoint)}
             />,
           ),
     );
@@ -126,7 +129,7 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
         // We might draw other markers on top of the CP. The tooltips from the
         // other markers are helpful so we want to keep them, but make sure the CP
         // is always the clickable thing.
-        zIndexOffset={1000}
+        zIndexOffset={controlPointZIndex(props.controlPoint)}
         opacity={props.controlPoint.destination ? 0.5 : 1}
         ref={(ref) => {
           if (ref != null) {
@@ -222,9 +225,6 @@ export const MobileControlPoint = (props: MobileControlPointProps) => {
     <>
       {!props.controlPoint.destination && (
         <SupplyRing controlPoint={props.controlPoint} />
-      )}
-      {!props.controlPoint.destination && (
-        <MainBaseStar controlPoint={props.controlPoint} />
       )}
       <PrimaryMarker
         controlPoint={props.controlPoint}

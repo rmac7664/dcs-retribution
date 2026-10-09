@@ -99,6 +99,11 @@ class PendingTransfersDialog(QDialog):
 
         button_layout.addStretch()
 
+        self.game_model = game_model
+        self.air_button = QPushButton("Send by air…")
+        self.air_button.clicked.connect(self.on_air_button)
+        button_layout.addWidget(self.air_button)
+
         self.cancel_button = QPushButton("Cancel Transfer")
         self.cancel_button.setProperty("style", "btn-danger")
         self.cancel_button.clicked.connect(self.on_cancel_transfer)
@@ -106,6 +111,50 @@ class PendingTransfersDialog(QDialog):
             self.can_cancel(self.transfer_list.currentIndex())
         )
         button_layout.addWidget(self.cancel_button)
+        self.update_air_button(self.transfer_list.currentIndex())
+
+    def _air_state(self, index: QModelIndex) -> str:
+        """'send', 'undo' or '' for the transfer at `index`."""
+        from game.warehouse.airswitch import can_undo, switchable
+
+        if not index.isValid():
+            return ""
+        transfer = self.transfer_model.transfer_at_index(index)
+        game = self.game_model.game
+        if game is None or not transfer.player.is_blue:
+            return ""
+        if switchable(game, transfer):
+            return "send"
+        if can_undo(game, transfer):
+            return "undo"
+        return ""
+
+    def update_air_button(self, index: QModelIndex) -> None:
+        state = self._air_state(index)
+        self.air_button.setText(
+            "Undo air delivery" if state == "undo" else "Send by air…"
+        )
+        self.air_button.setEnabled(bool(state))
+
+    def on_air_button(self) -> None:
+        """Sends the selected convoy or cargo ship's munitions by air, or undoes it."""
+        from qt_ui.windows.QSendByAirDialog import QSendByAirDialog, undo_air_delivery
+
+        index = self.transfer_list.currentIndex()
+        state = self._air_state(index)
+        game = self.game_model.game
+        if not state or game is None:
+            return
+        transfer = self.transfer_model.transfer_at_index(index)
+        self.transfer_model.beginResetModel()
+        try:
+            if state == "send":
+                QSendByAirDialog(game, transfer, self).exec()
+            else:
+                undo_air_delivery(game, transfer, self)
+        finally:
+            self.transfer_model.endResetModel()
+        self.update_air_button(self.transfer_list.currentIndex())
 
     def on_cancel_transfer(self) -> None:
         """Cancels the selected transfer order."""
@@ -124,5 +173,7 @@ class PendingTransfersDialog(QDialog):
             self.cancel_button.setEnabled(
                 self.can_cancel(self.transfer_list.currentIndex())
             )
+            self.update_air_button(self.transfer_list.currentIndex())
             return
         self.cancel_button.setEnabled(self.can_cancel(selected.indexes()[0]))
+        self.update_air_button(selected.indexes()[0])
