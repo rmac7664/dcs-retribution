@@ -35,6 +35,17 @@ def test_only_player_helicopters_carry_crates_and_only_when_chosen() -> None:
     assert not uses_ctld_crates(settings(), flight(helo=False))
 
 
+def test_no_crates_for_a_carrier_delivery() -> None:
+    from game.theater.controlpoint import Carrier
+
+    carrier = Carrier.__new__(Carrier)
+    to_carrier = flight()
+    to_carrier.cargo = SimpleNamespace(
+        transport=SimpleNamespace(destination=carrier), destination=carrier
+    )
+    assert not uses_ctld_crates(settings(), to_carrier)
+
+
 def bare_plan() -> MissionWarehousePlan:
     plan = MissionWarehousePlan.__new__(MissionWarehousePlan)
     plan.prefixes = ("weapons.missiles.",)

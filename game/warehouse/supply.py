@@ -254,12 +254,22 @@ def carriers_per_aircraft(transfer: TransferOrder, aircraft: AircraftType) -> in
 
 
 def uses_ctld_crates(settings: Settings, flight: Any) -> bool:
-    """True if this supply airlift's cargo is carried as CTLD crates by a player."""
+    """True if this supply airlift's cargo is carried as CTLD crates by a player.
+
+    Not for a carrier or LHA: a crate set down on a moving deck isn't "on the
+    ground", so it would never count. Those flights deliver by landing on board.
+    """
+    cargo = getattr(flight, "cargo", None)
+    transport = getattr(cargo, "transport", None)
+    destination = getattr(transport, "destination", None) or getattr(
+        cargo, "destination", None
+    )
     return (
         settings.logistics_player_supply_cargo == "ctld"
         and bool(settings.plugins.get(settings.plugin_settings_key("ctld"), False))
         and flight.client_count > 0
         and flight.is_helo
+        and not isinstance(destination, NavalControlPoint)
     )
 
 
