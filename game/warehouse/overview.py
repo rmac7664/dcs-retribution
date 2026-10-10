@@ -105,6 +105,9 @@ def _risks(game: Game, cp: ControlPoint) -> list[str]:
         ]
         if near:
             risks.append(f"enemy airfield within {RISK_RANGE_NM} nm")
+    route = _route_risk(game, cp)
+    if route:
+        risks.append(route)
     from .supply import carrier_reachable_by_sea
 
     if isinstance(cp, NavalControlPoint) and not carrier_reachable_by_sea(game, cp):
@@ -124,6 +127,37 @@ def _risks(game: Game, cp: ControlPoint) -> list[str]:
             risks.append("supply run hit en route")
             break
     return risks
+
+
+def _route_risk(game: Game, cp: ControlPoint) -> Optional[str]:
+    """How supply reaches a land base from its side's main base, if that's a worry.
+
+    "no supply route": nothing can reach it (its roads run through enemy bases and
+    it has no sea lane or airlift link). "supplied by air only": its last leg is an
+    airlift, so everything it gets, fuel included, depends on transport aircraft.
+    """
+    from game.theater.transitnetwork import TransitConnection
+
+    from .supply import main_base
+
+    if not game.settings.logistics_supply_lines or isinstance(
+        cp, (NavalControlPoint, OffMapSpawn)
+    ):
+        return None
+    hub = main_base(game, cp.captured)
+    if hub is None or hub is cp:
+        return None
+    try:
+        network = cp.coalition.transit_network
+        if not network.has_path_between(hub, cp):
+            return "no supply route"
+        path = network.shortest_path_between(hub, cp)
+        before = path[-2] if len(path) > 1 else hub
+        if network.link_type(before, cp) == TransitConnection.Airlift:
+            return "supplied by air only"
+    except Exception:
+        return None
+    return None
 
 
 def base_row(game: Game, cp: ControlPoint) -> Optional[BaseRow]:

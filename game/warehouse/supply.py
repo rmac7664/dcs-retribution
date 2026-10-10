@@ -797,6 +797,8 @@ STRIKE_SAM_PREFIXES = (
 #: Turns a supply run may wait with no transport able to carry it before it is
 #: called off and its cargo unloaded where it waits.
 STALL_LIMIT = 2
+#: Less fuel than this (kg) isn't worth a run of its own: it waits for the next one.
+MIN_FUEL_KG = 1000.0
 
 
 def cancel_stalled_runs(coalition: Coalition) -> list[str]:
@@ -888,8 +890,11 @@ class SupplyPlanner:
             self.state.ensure_stock(game, cp)
         self.inbound: dict[Any, Counter[str]] = {cp.id: Counter() for cp in self.bases}
         self.inbound_fuel: dict[Any, float] = {cp.id: 0.0 for cp in self.bases}
-        #: Supply still on its way to each base, in tons (for cargo handling limits).
+        #: Supply arriving at each base next, in tons (for cargo handling limits).
         self.inbound_tons: dict[Any, float] = {cp.id: 0.0 for cp in self.bases}
+        #: Bases with a run that found no transport last turn: no more are sent
+        #: there until it moves, so runs don't pile up waiting for aircraft.
+        self.waiting: set[Any] = set()
         for transfer in coalition.transfers.pending_transfers:
             load = supply_of(transfer)
             if load is None or transfer.destination.id not in self.inbound:
@@ -897,7 +902,13 @@ class SupplyPlanner:
             share = load.scaled(transfer.size / max(1, load.carriers))
             self.inbound[transfer.destination.id].update(share.munitions)
             self.inbound_fuel[transfer.destination.id] += share.fuel_kg
-            self.inbound_tons[transfer.destination.id] += share.tons
+            # The cargo handling limit is what a base unloads in a turn: only cargo
+            # on its last leg counts. Cargo still a stop away (e.g. a ship to Ben
+            # Gurion, then an airlift on) doesn't hold up the next run.
+            if self._on_last_leg(transfer):
+                self.inbound_tons[transfer.destination.id] += share.tons
+            if getattr(transfer, "stalled_turns", 0) > 0 and transfer.transport is None:
+                self.waiting.add(transfer.destination.id)
         # Ships already at sea count too, so a carrier is never ordered for twice.
         for cp in self.bases:
             for ship in self.state.ships_bound_for(cp):
@@ -1247,6 +1258,20 @@ class SupplyPlanner:
             return float(limit)
         return limit / 3
 
+    def _on_last_leg(self, transfer: Any) -> bool:
+        """True if `transfer`'s next stop is its destination."""
+        transport = getattr(transfer, "transport", None)
+        if transport is not None:
+            return transport.destination is transfer.destination
+        try:
+            network = self.coalition.transit_network
+            path = network.shortest_path_between(
+                transfer.position, transfer.destination
+            )
+        except Exception:
+            return True
+        return len(path) <= 1
+
     def handling_room_kg(self, cp: ControlPoint) -> Optional[float]:
         """Cargo `cp` can still accept this turn, after what's already inbound."""
         limit = self.throughput_tons(cp)
@@ -1269,6 +1294,13 @@ class SupplyPlanner:
         for cp in ordered:
             depot = self.served_by.get(cp.id)
             if depot is None or depot is cp:
+                continue
+            if cp.id in getattr(self, "waiting", set()):
+                logging.info(
+                    "Supply: %s already has a run waiting for transport; "
+                    "nothing more sent this turn",
+                    cp.name,
+                )
                 continue
             depot_stock = self.state.stocks[depot.id]
             depot_auth = self.authorized[depot.id]
@@ -1295,20 +1327,26 @@ class SupplyPlanner:
                     depot, self.settings
                 )
                 fuel = max(0.0, min(gap_kg, spare_kg))
+                if fuel < MIN_FUEL_KG:
+                    fuel = 0.0
             wanted = MunitionMasses.tons(*self._fit_to_shipment(cp, load, fuel))
             room = self.handling_room_kg(cp)
             load, fuel = self._fit_to_shipment(cp, load, fuel, room)
+            if fuel < MIN_FUEL_KG:
+                fuel = 0.0
             tons = MunitionMasses.tons(load, fuel)
             limited = room is not None and tons < wanted - 0.5
             if limited:
                 report.throughput_limited.append(cp.name)
                 logging.info(
-                    "Supply: %s is at its cargo handling limit (%.0f of %.0f t)",
+                    "Supply: %s needs %.0f t but can only take %.0f t more this "
+                    "turn (cargo handling limit); sending %.0f t",
                     cp.name,
-                    tons,
                     wanted,
+                    (room or 0.0) / 1000,
+                    tons,
                 )
-            if not load and fuel < 1:
+            if not load and fuel <= 0:
                 continue
             if cp.id in getattr(self, "air_only", set()):
                 if truck is None:
@@ -1360,10 +1398,10 @@ class SupplyPlanner:
             depot_stock.jet_fuel_kg -= fuel
             # Fuel goes in its own convoy of tanker trucks (a separate target);
             # munitions in cargo trucks.
-            tanker = self.fuel_truck() if load and fuel >= 1 else None
-            if load and fuel >= 1 and tanker is not None:
+            tanker = self.fuel_truck() if load and fuel > 0 else None
+            if load and fuel > 0 and tanker is not None:
                 parts = [(load, 0.0, truck), ({}, fuel, tanker)]
-            elif not load and fuel >= 1:
+            elif not load and fuel > 0:
                 parts = [({}, fuel, self.fuel_truck() or truck)]
             else:
                 parts = [(load, fuel, truck)]

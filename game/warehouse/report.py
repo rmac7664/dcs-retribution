@@ -95,10 +95,20 @@ def low_bases(game: Game, player: Any) -> list[str]:
         for r in overview(game, player).rows
         if r.level < LOW_PERCENT and r.role != "Rear area"
     ]
-    return [
-        f"{r.name} (munitions {r.munitions_percent}%, fuel {r.fuel_percent}%)"
-        for r in rows
-    ]
+    lines = []
+    for r in rows:
+        # Say why it can't be topped up quickly, if its route is the problem.
+        route = [
+            risk
+            for risk in r.risks
+            if risk in ("no supply route", "supplied by air only")
+        ]
+        lines.append(
+            f"{r.name} (munitions {r.munitions_percent}%, fuel {r.fuel_percent}%"
+            + "".join(f"; {risk}" for risk in route)
+            + ")"
+        )
+    return lines
 
 
 def turn_messages(game: Game) -> list[tuple[str, str]]:
