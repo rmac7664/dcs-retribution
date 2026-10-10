@@ -46,7 +46,15 @@ class Landmap:
 def load_landmap(filename: Path) -> Optional[Landmap]:
     try:
         with open(filename, "rb") as f:
-            return pickle.load(f)
+            landmap = pickle.load(f)
+        # Unpickling skips __post_init__, so the spatial indexes are built here.
+        for zones in (
+            landmap.inclusion_zones,
+            landmap.exclusion_zones,
+            landmap.sea_zones,
+        ):
+            shp.prepare(zones)
+        return landmap
     except:
         logging.exception(f"Failed to load landmap {filename}")
         return None

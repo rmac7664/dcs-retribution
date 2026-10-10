@@ -114,15 +114,10 @@ class ConflictTheater:
         if self.is_on_land(point):
             return False
 
-        for exclusion_zone in self.landmap.exclusion_zones.geoms:
-            if poly_contains(point.x, point.y, exclusion_zone):
-                return False
+        if poly_contains(point.x, point.y, self.landmap.exclusion_zones):
+            return False
 
-        for sea in self.landmap.sea_zones.geoms:
-            if poly_contains(point.x, point.y, sea):
-                return True
-
-        return False
+        return poly_contains(point.x, point.y, self.landmap.sea_zones)
 
     def is_on_land(self, point: Point, ignore_exclusion: bool = False) -> bool:
         if not self.landmap:
@@ -135,10 +130,12 @@ class ConflictTheater:
         if not is_point_included:
             return False
 
-        if not ignore_exclusion:
-            for exclusion_zone in self.landmap.exclusion_zones.geoms:
-                if poly_contains(point.x, point.y, exclusion_zone):
-                    return False
+        # One check against the whole (prepared) multipolygon: looping over its
+        # thousands of polygons one at a time took ~70 ms a point.
+        if not ignore_exclusion and poly_contains(
+            point.x, point.y, self.landmap.exclusion_zones
+        ):
+            return False
 
         return True
 
