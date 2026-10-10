@@ -30,6 +30,7 @@
 * **[Modding]** Update UH-60L mod to v2.1.5 including MH-60L DAP
 
 ## Fixes
+* **[Mission Generation]** Anti-ship strikes on cargo ships get an AttackGroup task for the ship (they used to fly out and turn back).
 * **[Procurement]** Enemy ground and aircraft orders are refunded at turn start again when "Automate aircraft reinforcements" is off for the player.
 * **[Transfers]** Helicopter airlifts now check the distance to the drop-off; enemy transfers are labelled as such.
 * **[Campaign AI]** The AI plans convoy interdiction and anti-shipping strikes against enemy transports again (it was looking at its own side's convoys). "Disable cargo ships" now also stops the AI from targeting them.
