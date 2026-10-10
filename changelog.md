@@ -30,6 +30,9 @@
 * **[Modding]** Update UH-60L mod to v2.1.5 including MH-60L DAP
 
 ## Fixes
+* **[Transfers]** Changing a transport flight's squadron no longer crashes the ATO ("TransferOrder.next_stop called with no transport assigned"): the new flight takes over the cargo, trimmed to what it can carry (the rest waits for the next transport).
+* **[Transfers]** Helicopter airlifts to or from a carrier, LHA or off-map base no longer fail to plan ("Could not generate CTLD pickup/dropoff"); the cargo stop is used there.
+* **[Transfers]** Splitting a transfer mid-route keeps the split part where the cargo is, instead of sending it back to its origin.
 * **[Mission Generation]** Fix mission generation dying on "Duplicate convoy unit": convoy and cargo-ship names no longer reset each turn onto a convoy still in transit.
 * **[Mission Generator]** Dynamically allocated TACAN channels no longer collide with map beacons: DME/VOR-DME beacons (which share TACAN's channelization) are now blacklisted alongside TACAN/VORTAC, and beacons whose DCS data omits a channel (e.g. Syria's KALDE "KAD" VOR-DME) have their channel/band derived from the beacon's VHF frequency per the ICAO VOR/TACAN channelling plan instead of being silently skipped. The "Assign TACAN" dialog now warns in real time when the selected channel/band is already in use by a map beacon or another carrier/airfield/flight. (#36)
 * **[Map]** Right-clicking a front line under a blue flight-plan route now opens the new-package dialog instead of the browser context menu (the route's invisible hover overlay swallowed the click).

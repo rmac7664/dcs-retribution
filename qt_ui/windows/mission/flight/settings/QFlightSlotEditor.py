@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QWidget,
     QSizePolicy,
+    QMessageBox,
 )
 
 from game import Game
@@ -26,6 +27,7 @@ from game.dcs.aircrafttype import AircraftType
 from game.squadrons import Squadron
 from game.squadrons.pilot import Pilot
 from game.theater import ControlPoint, OffMapSpawn
+from game.transfers import reassign_cargo
 from game.utils import nautical_miles
 from qt_ui.models import PackageModel
 
@@ -357,6 +359,22 @@ class QFlightSlotEditor(QGroupBox):
             )
             self.package_model.add_flight(flight)
             self.package_model.delete_flight(self.flight)
+            cargo = flight.cargo
+            if cargo is not None:
+                # Hand the cargo to the replacement flight, trimmed to what its
+                # aircraft can carry; the rest waits for the next transport.
+                old = cargo.transport
+                next_stop = old.destination if old is not None else cargo.destination
+                left = reassign_cargo(self.game, flight, next_stop)
+                flight.recreate_flight_plan()
+                if left:
+                    QMessageBox.information(
+                        self,
+                        "Cargo left behind",
+                        f"{flight.squadron.aircraft} can't carry the whole load. "
+                        f"{left} unit(s) stay at {cargo.position.name} and go "
+                        f"with the next transport.",
+                    )
             self.squadron_changed.emit(flight)
 
     def _find_divert_field(

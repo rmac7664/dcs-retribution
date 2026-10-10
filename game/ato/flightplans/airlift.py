@@ -163,34 +163,44 @@ class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):
                 altitude,
                 altitude_is_agl,
             )
-        if cargo.next_stop != self.flight.arrival:
-            drop_off = builder.cargo_stop(cargo.next_stop)
+        # A flight being edited can briefly have no transport: fall back to where
+        # the cargo is going.
+        next_stop = (
+            cargo.transport.destination
+            if cargo.transport is not None
+            else cargo.destination
+        )
+        if next_stop != self.flight.arrival:
+            drop_off = builder.cargo_stop(next_stop)
             drop_off_ascent = self._create_ascent_or_descent(
                 builder,
                 cargo.origin.position,
-                cargo.next_stop.position,
+                next_stop.position,
                 altitude,
                 altitude_is_agl,
             )
             drop_off_descent = self._create_ascent_or_descent(
                 builder,
-                cargo.next_stop.position,
+                next_stop.position,
                 cargo.origin.position,
                 altitude,
                 altitude_is_agl,
             )
 
         if self.flight.is_helo:
-            # Create CTLD Zones for Helo flights
-            pickup_zone = builder.pickup_zone(
-                MissionTarget("Pickup Zone", self._generate_ctld_pickup())
-            )
-            drop_off_zone = builder.dropoff_zone(
-                MissionTarget("Dropoff zone", self._generate_ctld_dropoff())
-            )
-            # Show the zone waypoints only to the player
-            pickup_zone.only_for_player = True
-            drop_off_zone.only_for_player = True
+            # Create CTLD Zones for Helo flights. Carriers, LHAs and off-map bases
+            # have none (a CTLD zone needs land): the cargo stop is used instead.
+            if isinstance(cargo.origin, CTLD):
+                pickup_zone = builder.pickup_zone(
+                    MissionTarget("Pickup Zone", self._generate_ctld_pickup())
+                )
+                pickup_zone.only_for_player = True
+            if isinstance(next_stop, CTLD):
+                drop_off_zone = builder.dropoff_zone(
+                    MissionTarget("Dropoff zone", self._generate_ctld_dropoff())
+                )
+                # Show the zone waypoints only to the player
+                drop_off_zone.only_for_player = True
 
         nav_to_pickup = builder.nav_path(
             self.flight.departure.position,
@@ -202,8 +212,8 @@ class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):
         return_ascent = self._create_ascent_or_descent(
             builder,
             (
-                cargo.next_stop.position
-                if cargo.next_stop != self.flight.arrival
+                next_stop.position
+                if next_stop != self.flight.arrival
                 else cargo.origin.position
             ),
             self.flight.arrival.position,
@@ -214,8 +224,8 @@ class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):
             builder,
             self.flight.arrival.position,
             (
-                cargo.next_stop.position
-                if cargo.next_stop != self.flight.arrival
+                next_stop.position
+                if next_stop != self.flight.arrival
                 else cargo.origin.position
             ),
             altitude,
@@ -232,7 +242,7 @@ class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):
             drop_off_ascent=drop_off_ascent,
             nav_to_drop_off=builder.nav_path(
                 cargo.origin.position,
-                cargo.next_stop.position,
+                next_stop.position,
                 altitude,
                 altitude_is_agl,
             ),
@@ -266,6 +276,9 @@ class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):
         cargo = self.flight.cargo
         if cargo and cargo.transport and isinstance(cargo.transport.destination, CTLD):
             return generate_random_ctld_point(cargo.transport.destination)
+        # A flight being edited can briefly have no transport.
+        if cargo and cargo.transport is None and isinstance(cargo.destination, CTLD):
+            return generate_random_ctld_point(cargo.destination)
         raise RuntimeError("Could not generate CTLD dropoff")
 
     @staticmethod
