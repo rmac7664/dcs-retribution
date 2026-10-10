@@ -752,11 +752,25 @@ def carrier_reachable_by_sea(game: Any, cp: ControlPoint) -> bool:
         return True
     from game.missiongenerator.replenishmentshipgenerator import ship_can_reach
 
+    # The check traces open water around the ship and is slow (seconds), so it is
+    # done once per carrier per turn: it only changes when the carrier moves.
+    key = (id(game), getattr(game, "turn", None), cp.id, cp.position.x, cp.position.y)
+    cached = _SEA_ACCESS.get(key)
+    if cached is not None:
+        return cached
     try:
-        return ship_can_reach(game, cp)
+        reachable = ship_can_reach(game, cp)
     except Exception:
         logging.exception("Could not check sea access to %s", cp.name)
-        return True
+        reachable = True
+    if len(_SEA_ACCESS) > 64:
+        _SEA_ACCESS.clear()
+    _SEA_ACCESS[key] = reachable
+    return reachable
+
+
+#: carrier_reachable_by_sea results: (game, turn, carrier, position) -> reachable.
+_SEA_ACCESS: dict[tuple[Any, ...], bool] = {}
 
 
 def airhead(game: Game, player: Any) -> Optional[ControlPoint]:
