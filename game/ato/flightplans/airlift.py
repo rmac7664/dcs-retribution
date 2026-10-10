@@ -163,18 +163,25 @@ class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):
                 altitude,
                 altitude_is_agl,
             )
-        if cargo.next_stop != self.flight.arrival:
-            drop_off = builder.cargo_stop(cargo.next_stop)
+        # A flight being edited can briefly have no transport: fall back to where
+        # the cargo is going.
+        next_stop = (
+            cargo.transport.destination
+            if cargo.transport is not None
+            else cargo.destination
+        )
+        if next_stop != self.flight.arrival:
+            drop_off = builder.cargo_stop(next_stop)
             drop_off_ascent = self._create_ascent_or_descent(
                 builder,
                 cargo.origin.position,
-                cargo.next_stop.position,
+                next_stop.position,
                 altitude,
                 altitude_is_agl,
             )
             drop_off_descent = self._create_ascent_or_descent(
                 builder,
-                cargo.next_stop.position,
+                next_stop.position,
                 cargo.origin.position,
                 altitude,
                 altitude_is_agl,
@@ -207,8 +214,8 @@ class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):
         return_ascent = self._create_ascent_or_descent(
             builder,
             (
-                cargo.next_stop.position
-                if cargo.next_stop != self.flight.arrival
+                next_stop.position
+                if next_stop != self.flight.arrival
                 else cargo.origin.position
             ),
             self.flight.arrival.position,
@@ -219,8 +226,8 @@ class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):
             builder,
             self.flight.arrival.position,
             (
-                cargo.next_stop.position
-                if cargo.next_stop != self.flight.arrival
+                next_stop.position
+                if next_stop != self.flight.arrival
                 else cargo.origin.position
             ),
             altitude,
@@ -237,7 +244,7 @@ class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):
             drop_off_ascent=drop_off_ascent,
             nav_to_drop_off=builder.nav_path(
                 cargo.origin.position,
-                cargo.next_stop.position,
+                next_stop.position,
                 altitude,
                 altitude_is_agl,
             ),

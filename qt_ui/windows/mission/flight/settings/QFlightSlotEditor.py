@@ -26,6 +26,7 @@ from game.dcs.aircrafttype import AircraftType
 from game.squadrons import Squadron
 from game.squadrons.pilot import Pilot
 from game.theater import ControlPoint, OffMapSpawn
+from game.transfers import Airlift
 from game.utils import nautical_miles
 from qt_ui.models import PackageModel
 
@@ -357,6 +358,12 @@ class QFlightSlotEditor(QGroupBox):
             )
             self.package_model.add_flight(flight)
             self.package_model.delete_flight(self.flight)
+            cargo = flight.cargo
+            if cargo is not None:
+                # Hand the cargo to the replacement flight.
+                old = cargo.transport
+                next_stop = old.destination if old is not None else cargo.destination
+                cargo.transport = Airlift(cargo, flight, next_stop)
             self.squadron_changed.emit(flight)
 
     def _find_divert_field(
