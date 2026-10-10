@@ -137,7 +137,7 @@ class QTopPanel(QFrame):
 
         self.air_wing.setEnabled(True)
         self.transfers.setEnabled(True)
-        self.logistics.setEnabled(game.settings.logistics_enabled)
+        self.update_logistics_button(game)
 
         self.conditionsWidget.setCurrentTurn(game.turn, game.conditions)
 
@@ -166,6 +166,12 @@ class QTopPanel(QFrame):
     def open_air_wing(self):
         self.dialog = AirWingDialog(self.game_model, self.window())
         self.dialog.show()
+
+    def update_logistics_button(self, game: Optional[Game]) -> None:
+        """The Logistics button only shows when the logistics option is on."""
+        enabled = game is not None and game.settings.logistics_enabled
+        self.logistics.setVisible(enabled)
+        self.logistics.setEnabled(enabled)
 
     def open_logistics(self):
         from qt_ui.windows.QLogisticsOverview import QLogisticsOverview

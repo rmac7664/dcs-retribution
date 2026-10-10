@@ -142,8 +142,8 @@ def test_airlifters_that_had_not_landed_when_the_mission_stopped_bring_cargo_bac
 def test_losses_in_a_merged_convoy_are_spread_over_its_orders() -> None:
     truck = "truck"
 
-    def order(trucks: int) -> Any:
-        o = SimpleNamespace(units={truck: trucks})
+    def order(trucks: int, supplies: Any = "supplies") -> Any:
+        o = SimpleNamespace(units={truck: trucks}, supplies=supplies)
 
         def kill_unit(unit_type: str) -> None:
             o.units[unit_type] -= 1
@@ -160,6 +160,12 @@ def test_losses_in_a_merged_convoy_are_spread_over_its_orders() -> None:
 
     assert first.units[truck] + second.units[truck] == 3
     assert first.units[truck] >= 1 and second.units[truck] >= 1
+
+    # Unit transfers (no supplies) keep upstream's rule: the first order pays.
+    first, second = order(2, None), order(4, None)
+    convoy.transfers = [first, second]
+    convoy.kill_unit(truck)  # type: ignore[arg-type]
+    assert (first.units[truck], second.units[truck]) == (1, 4)
 
 
 def test_pallets_go_back_into_full_trucks_for_the_road() -> None:

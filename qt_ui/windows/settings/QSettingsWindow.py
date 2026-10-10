@@ -93,11 +93,14 @@ class CheatSettingsBox(QGroupBox):
         self.main_base_cheat_checkbox = QCheckBox()
         self.main_base_cheat_checkbox.setChecked(sc.settings.enable_main_base_cheat)
         self.main_base_cheat_checkbox.toggled.connect(apply_settings)
-        self.main_layout.addLayout(
-            QLabeledWidget(
-                "Enable Main Supply Base Change Cheat:", self.main_base_cheat_checkbox
+        # Only meaningful with logistics on (main supply bases).
+        if sc.settings.logistics_enabled:
+            self.main_layout.addLayout(
+                QLabeledWidget(
+                    "Enable Main Supply Base Change Cheat:",
+                    self.main_base_cheat_checkbox,
+                )
             )
-        )
 
         # Instant transfer
         self.transfer_cheat_checkbox = QCheckBox()

@@ -469,13 +469,17 @@ class MultiGroupTransport(MissionTarget, Transport):
         self.transfers.remove(transfer)
 
     def kill_unit(self, unit_type: GroundUnitType) -> None:
-        # Take the loss from whichever order has the most of that unit left, so losses
-        # in a merged convoy are spread over its orders instead of all hitting the
-        # first one.
         carrying = [t for t in self.transfers if t.units.get(unit_type, 0) > 0]
         if not carrying:
             raise KeyError
-        max(carrying, key=lambda t: t.units[unit_type]).kill_unit(unit_type)
+        if any(getattr(t, "supplies", None) is not None for t in self.transfers):
+            # Supply runs: take the loss from whichever order has the most of that
+            # truck left, so losses in a merged convoy are spread over its orders
+            # instead of all hitting the first one.
+            max(carrying, key=lambda t: t.units[unit_type]).kill_unit(unit_type)
+            return
+        # Unit transfers: the first order carrying one takes the loss (as upstream).
+        carrying[0].kill_unit(unit_type)
 
     def kill_all(self) -> None:
         for transfer in self.transfers:

@@ -102,6 +102,8 @@ class PendingTransfersDialog(QDialog):
         self.game_model = game_model
         self.air_button = QPushButton("Send by air…")
         self.air_button.clicked.connect(self.on_air_button)
+        game = game_model.game
+        self.air_button.setVisible(game is not None and game.settings.logistics_enabled)
         button_layout.addWidget(self.air_button)
 
         self.cancel_button = QPushButton("Cancel Transfer")

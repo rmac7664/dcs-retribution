@@ -617,6 +617,10 @@ class QLiberationWindow(QMainWindow):
 
     def showSettingsDialog(self) -> None:
         self.dialog = QSettingsWindow(self.game)
+        # The Logistics button follows the logistics option once settings close.
+        self.dialog.finished.connect(
+            lambda _: self.top_panel.update_logistics_button(self.game)
+        )
         self.dialog.show()
 
     def showStatsDialog(self):
