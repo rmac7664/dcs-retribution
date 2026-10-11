@@ -368,24 +368,99 @@ class AirliftPlanner:
 
         return True
 
-    def create_package_for_airlift(self, now: datetime) -> None:
+    def _candidate_squadrons(self) -> list[Squadron]:
+        """Squadrons that can fly this airlift, nearest base first."""
         distance_cache = ObjectiveDistanceCache.get_closest_airfields(
             self.transfer.position
         )
         air_wing = self.game.air_wing_for(self.for_player)
+        candidates = []
         for cp in distance_cache.closest_airfields:
             if cp.captured != self.for_player:
                 continue
-
             squadrons = air_wing.auto_assignable_for_task_at(FlightType.TRANSPORT, cp)
             for squadron in squadrons:
                 if self.compatible_with_mission(squadron.aircraft, cp):
-                    while (
-                        squadron.untasked_aircraft
-                        and squadron.has_available_pilots
-                        and self.transfer.transport is None
-                    ):
-                        self.create_airlift_flight(squadron)
+                    candidates.append(squadron)
+        return candidates
+
+    @staticmethod
+    def _can_fly(squadron: Squadron) -> bool:
+        return bool(squadron.untasked_aircraft and squadron.has_available_pilots)
+
+    def _flight_capacity(self, squadron: Squadron) -> tuple[float, int]:
+        """(what one aircraft carries, most aircraft one flight can have).
+
+        Supply runs are measured in tonnes; unit transfers in vehicles.
+        """
+        from game.warehouse.supply import cargo_tons
+
+        aircraft = squadron.aircraft
+        if self.transfer.supplies is not None:
+            each = cargo_tons(aircraft)
+        else:
+            each = 1.0 if aircraft.dcs_unit_type.helicopter else 2.0
+        most = min(
+            squadron.untasked_aircraft,
+            aircraft.dcs_unit_type.group_size_max,
+            max(1, squadron.max_fulfillable_aircraft),
+        )
+        return each, max(0, most)
+
+    def _remaining(self) -> float:
+        """What is still to carry: tonnes for supply runs, vehicles otherwise."""
+        load = self.transfer.supplies
+        if load is None:
+            return float(self.transfer.size)
+        return load.tons * self.transfer.size / max(1, load.carriers)
+
+    def _pick_squadron(self, candidates: list[Squadron]) -> Optional[Squadron]:
+        """The squadron to fly the rest of this airlift (logistics on).
+
+        Fewest flights, fewest aircraft, least wasted space: if some squadron can
+        take everything left in one flight, the one needing the fewest aircraft
+        (then the least spare room, then the nearest) wins, so a big transport takes
+        a big load and a small load gets a small aircraft. If none can, the one
+        that carries the most in a flight goes first and the rest is split off.
+        """
+        remaining = self._remaining()
+        whole: list[tuple[int, float, int, Squadron]] = []
+        partial: list[tuple[float, int, Squadron]] = []
+        for rank, squadron in enumerate(candidates):
+            if not self._can_fly(squadron):
+                continue
+            each, most = self._flight_capacity(squadron)
+            if most <= 0 or each <= 0:
+                continue
+            needed = max(1, math.ceil(remaining / each - 1e-9))
+            if needed <= most:
+                whole.append((needed, needed * each - remaining, rank, squadron))
+            else:
+                partial.append((-(most * each), rank, squadron))
+        if whole:
+            return min(whole, key=lambda c: c[:3])[3]
+        if partial:
+            return min(partial, key=lambda c: c[:2])[2]
+        return None
+
+    def create_package_for_airlift(self, now: datetime) -> None:
+        candidates = self._candidate_squadrons()
+        if self.game.settings.logistics_enabled:
+            # Biggest transport that fits the load, fewest flights (see
+            # _pick_squadron). Each flight splits off what it carries; the rest of
+            # the transfer goes to the next pick.
+            for _ in range(32):
+                if self.transfer.transport is not None:
+                    break
+                squadron = self._pick_squadron(candidates)
+                if squadron is None:
+                    break
+                if not self.create_airlift_flight(squadron):
+                    candidates.remove(squadron)
+        else:
+            for squadron in candidates:
+                while self._can_fly(squadron) and self.transfer.transport is None:
+                    self.create_airlift_flight(squadron)
         if self.package.flights:
             self.package.set_tot_asap(now)
             self.game.ato_for(self.for_player).add_package(self.package)

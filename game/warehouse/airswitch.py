@@ -274,8 +274,20 @@ def air_options(game: Game, shipment: Shipment) -> list[AirOption]:
                 squadron, origin, max(0, free), cargo_tons(aircraft), cargo, problem
             )
         )
-    options.sort(key=lambda o: (o.problem is not None, -min(o.capacity_tons, cargo)))
+    options.sort(key=_best_fit)
     return options
+
+
+def _best_fit(option: AirOption) -> tuple[Any, ...]:
+    """Same order the AI uses (AirliftPlanner._pick_squadron): squadrons that can
+    take it all in one flight first, fewest aircraft then least spare room; then
+    the rest, biggest first; squadrons that can't fly it last."""
+    if option.problem is not None:
+        return (2, 0.0, 0.0)
+    if option.carries_all:
+        spare = option.sorties * option.tons_each - option.cargo_tons
+        return (0, float(option.sorties), spare)
+    return (1, -option.capacity_tons, 0.0)
 
 
 # Switching ---------------------------------------------------------------------------
