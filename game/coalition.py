@@ -203,6 +203,11 @@ class Coalition:
 
         if not is_turn_0:
             self.plan_missions(self.game.conditions.start_time)
+        if self.game.settings.logistics_enabled:
+            # After scheduling, so take-off times are final.
+            from game.warehouse.spacing import space_out_transports
+
+            space_out_transports(self)
         self.plan_procurement()
 
     def refund_outstanding_orders(self) -> None:

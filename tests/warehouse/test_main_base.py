@@ -250,3 +250,32 @@ def test_enemy_main_base_destroyed_message_only_once_found() -> None:
         "elsewhere."
     ]
     assert supply.main_base(game, RED) is e2
+
+
+def test_strike_that_destroys_the_enemy_main_base_reveals_it() -> None:
+    # Mission results kill the depot buildings before the turn ends, so the reveal
+    # must check the base that was in force during the mission, not its successor.
+    home: Any = FakeAirfield("Home", 0, BLUE)
+    e1: Any = FakeAirfield("E1", 200, RED)
+    e2: Any = FakeAirfield("E2", 150, RED)
+    gull = depot()
+    gull.control_point = e1
+    e1.connected_objectives = [gull]
+    e2.connected_objectives = [depot()]
+    game = make_game([home, e1, e2])
+    supply.update_main_bases(game)
+    assert supply.main_base(game, RED) is e1
+
+    far = SimpleNamespace(position=Point(10 * NM, 0, Caucasus()))
+    strike = SimpleNamespace(target=gull, flights=[SimpleNamespace(points=[far])])
+    game.blue.ato.packages = [strike]
+    gull.is_dead = True
+
+    assert supply.reveal_enemy_main_base(game)
+    assert game.messages[-1][1] == "E1 is the enemy's main supply base."
+    assert supply.update_main_bases(game) == [
+        "We destroyed the enemy's main supply base at E1; they have moved it "
+        "elsewhere."
+    ]
+    assert supply.main_base(game, RED) is e2
+    assert not supply.main_base_known(game, e2)

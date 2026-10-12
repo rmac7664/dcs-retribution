@@ -11,6 +11,7 @@ from dcs.terrain import Caucasus
 
 import game.transfers as transfers_module
 import game.warehouse.airswitch as airswitch
+import game.warehouse.spacing as spacing_module
 import game.warehouse.supply as supply_module
 from game.settings import Settings
 from game.theater.player import Player
@@ -128,6 +129,7 @@ def fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(airswitch, "NavalControlPoint", FakeCarrier)
     monkeypatch.setattr(supply_module, "NavalControlPoint", FakeCarrier)
     monkeypatch.setattr(airswitch, "_announce_flights", lambda _flights: None)
+    monkeypatch.setattr(spacing_module, "space_out_transports", lambda _c: 0)
     monkeypatch.setattr(
         airswitch, "is_by_ground", lambda t: isinstance(t.transport, FakeConvoy)
     )
@@ -186,7 +188,6 @@ def test_ship_cargo_flies_urgent_items_first_and_fuel_stays_on_board(
 ) -> None:
     depot = FakeBase("Ben-Gurion", 0)
     carrier = FakeCarrier("CVN-74", 80)
-    monkeypatch.setattr(airswitch, "main_base", lambda _g, _p: depot)
     # The carrier has plenty of Mk-82s but almost no AMRAAMs.
     authorized = {carrier: {AIM_120C: 40, MK_82: 40}}
     stocks = {carrier: {AIM_120C: 2, MK_82: 40}, depot: {}}
@@ -227,7 +228,6 @@ def test_a_ship_left_empty_doesnt_sail_until_undone(
 ) -> None:
     depot = FakeBase("Ben-Gurion", 0)
     carrier = FakeCarrier("CVN-74", 80)
-    monkeypatch.setattr(airswitch, "main_base", lambda _g, _p: depot)
     game = make_game([FakeSquadron(C2, depot, 4)], [depot, carrier], {}, {})
     ship = SupplyShip(carrier.id, carrier.name, "BLUE", {AIM_9X: 4}, 0.0)
     state = game.warehouse_logistics
@@ -294,7 +294,6 @@ def test_a_convoy_left_empty_is_called_off_until_undone() -> None:
 def test_options_explain_what_cant_fly_it(monkeypatch: pytest.MonkeyPatch) -> None:
     depot = FakeBase("Ben-Gurion", 0)
     carrier = FakeCarrier("CVN-74", 150)
-    monkeypatch.setattr(airswitch, "main_base", lambda _g, _p: depot)
     squadrons = [
         FakeSquadron(C130, depot, 4),
         FakeSquadron(CH47, depot, 2),
@@ -342,3 +341,36 @@ def test_ai_flies_cargo_on_a_route_that_was_hit() -> None:
     assert airswitch.ai_send_by_air(game, game.coalition_for(Player.RED)) == [
         "Hurghada"
     ]
+
+
+def test_ship_cargo_loads_where_the_round_trip_is_shortest() -> None:
+    # Kola: a carrier-based C-2 flew 520 nm to the main base and back. It now loads
+    # at the friendly airfield nearest the carrier; one based inland loads at home.
+    fast_c2 = SimpleNamespace(**vars(C2))
+    fast_c2.dcs_unit_type = SimpleNamespace(
+        id="C2A_Greyhound", helicopter=False, max_speed=574.0
+    )
+    main = FakeBase("Main", 0)
+    coast = FakeBase("Coast", 200)
+    carrier = FakeCarrier("CVN-74", 260)
+    on_deck = FakeSquadron(fast_c2, carrier, 2)
+    game = make_game([on_deck], [main, coast, carrier], {}, {})
+    ship = SupplyShip(carrier.id, carrier.name, "BLUE", {AIM_9X: 4}, 0.0)
+    game.warehouse_logistics.supply_ships.append(ship)
+
+    (option,) = airswitch.air_options(game, ship)
+    assert option.origin is coast
+    assert option.route_nm is not None and round(option.route_nm) == 120
+    assert "round trip 120 nm, about 25 min in the air" in option.describe()
+    assert not option.longer_than_mission
+
+    inland = FakeSquadron(fast_c2, main, 2)
+    game = make_game([inland], [main, coast, carrier], {}, {})
+    game.warehouse_logistics.supply_ships.append(ship)
+    (option,) = airswitch.air_options(game, ship)
+    assert option.origin is main
+    assert round(option.route_nm or 0) == 520
+    assert "round trip 520 nm, about 2 h in the air" in option.describe()
+    # Longer than the default mission: say so.
+    assert option.longer_than_mission
+    assert "may not get back before it ends" in option.describe()

@@ -11,8 +11,8 @@ transport aircraft:
   first and the rest stays with the ship or convoy. A ship or convoy left with
   nothing doesn't go.
 * The cargo is loaded where the convoy or ship would leave from: the run's current
-  position, or for a replenishment ship the side's main supply base (or the nearest
-  land depot the aircraft can reach).
+  position, or for a replenishment ship the friendly airfield giving the transport
+  the shortest round trip (one it can reach and park at).
 * From there it is an ordinary supply airlift: transport flights in this turn's ATO,
   delivered when they land, lost if shot down.
 * The player can undo it until the mission starts; the cargo goes back on the ship or
@@ -38,7 +38,7 @@ from .supply import (
     SupplyPlanner,
     URGENT_SHARE,
     cargo_tons,
-    main_base,
+    fits_parking,
     supply_of,
 )
 
@@ -92,6 +92,12 @@ class AirOption:
     cargo_tons: float
     #: Why it can't fly the cargo, or None if it can.
     problem: Optional[str] = None
+    #: Home -> load point -> destination -> home, in nautical miles.
+    route_nm: Optional[float] = None
+    #: Rough cruise speed in knots, for the flight time.
+    speed_kt: Optional[float] = None
+    #: True if the round trip alone takes longer than the planned mission.
+    longer_than_mission: bool = False
 
     @property
     def capacity_tons(self) -> float:
@@ -101,6 +107,22 @@ class AirOption:
     def sorties(self) -> int:
         """Aircraft needed to carry all of the shipment's munitions."""
         return max(1, math.ceil(self.cargo_tons / max(0.1, self.tons_each)))
+
+    def route_text(self) -> str:
+        """Round trip and rough flight time, e.g. "round trip 520 nm, about 2 h"."""
+        if self.route_nm is None:
+            return ""
+        text = f"round trip {self.route_nm:,.0f} nm"
+        if self.speed_kt:
+            minutes = round(self.route_nm / self.speed_kt * 60 / 5) * 5
+            hours, rest = divmod(int(minutes), 60)
+            if hours and rest:
+                text += f", about {hours} h {rest} min in the air"
+            elif hours:
+                text += f", about {hours} h in the air"
+            else:
+                text += f", about {max(5, rest)} min in the air"
+        return text
 
     @property
     def carries_all(self) -> bool:
@@ -115,10 +137,17 @@ class AirOption:
             else f"{min(self.capacity_tons * CAPACITY_MARGIN, self.cargo_tons):.1f} t "
             "of it (the most urgent items)"
         )
+        route = self.route_text()
         return (
             f"{self.squadron} ({self.squadron.aircraft}) from {self.origin}: "
             f"{self.aircraft} free, {self.tons_each:.1f} t each, "
             f"{self.sorties} needed for {self.cargo_tons:.1f} t — carries {share}"
+            + (f" ({route})" if route else "")
+            + (
+                " — longer than the mission, may not get back before it ends"
+                if self.longer_than_mission
+                else ""
+            )
         )
 
 
@@ -207,28 +236,43 @@ def describe_shipment(game: Game, shipment: Shipment) -> str:
 def _load_points(
     game: Game, coalition: Coalition, shipment: Shipment
 ) -> list[ControlPoint]:
-    """Where the cargo can be loaded onto aircraft, best first."""
+    """Where the cargo can be loaded onto aircraft, best first.
+
+    A road/sea run loads where it is. A replenishment ship's cargo isn't anyone's
+    stock yet, so it can be loaded at any friendly airfield or depot away from the
+    front (the supply network stocks them from the main base). air_options picks,
+    per squadron, the one giving the shortest round trip that it can reach and park
+    at: a long trip from the main base can outlast the mission (Kola: a carrier
+    C-2 flew 520 nm via Vidsel).
+    """
     if not isinstance(shipment, SupplyShip):
         return [shipment.position]
     destination = destination_of(game, shipment)
-    depots = [
+    points = [
         cp
         for cp in game.theater.controlpoints
         if cp.captured == coalition.player
         and not isinstance(cp, (NavalControlPoint, OffMapSpawn))
-        and SupplyPlanner.is_depot(cp)
-    ]
-    base = main_base(game, coalition.player)
-
-    def rank(cp: ControlPoint) -> tuple[int, float]:
-        far = (
-            cp.position.distance_to_point(destination.position)
-            if destination is not None
-            else 0.0
+        and (
+            SupplyPlanner.is_depot(cp) or not getattr(cp, "has_active_frontline", False)
         )
-        return (0 if cp is base else 1, far)
+    ]
 
-    return sorted(depots, key=rank)
+    def rank(cp: ControlPoint) -> float:
+        if destination is None:
+            return 0.0
+        return cp.position.distance_to_point(destination.position)
+
+    return sorted(points, key=rank)
+
+
+def _round_trip(home: ControlPoint, load: ControlPoint, to: ControlPoint) -> float:
+    """Home -> load point -> destination -> home, in metres."""
+    return (
+        home.position.distance_to_point(load.position)
+        + load.position.distance_to_point(to.position)
+        + to.position.distance_to_point(home.position)
+    )
 
 
 def air_options(game: Game, shipment: Shipment) -> list[AirOption]:
@@ -247,20 +291,33 @@ def air_options(game: Game, shipment: Shipment) -> list[AirOption]:
         if not aircraft.capable_of(FlightType.TRANSPORT):
             continue
         free = squadron.untasked_crewed_aircraft
-        origin = next(
-            (
-                p
-                for p in points
-                if destination.can_operate(aircraft)
-                and SupplyPlanner.can_fly_leg(
-                    aircraft, squadron.location, p, destination
-                )
-            ),
-            None,
+        reachable = [
+            p
+            for p in points
+            if destination.can_operate(aircraft)
+            and SupplyPlanner.can_fly_leg(aircraft, squadron.location, p, destination)
+        ]
+        # The shortest round trip for this squadron: a carrier-based C-2 loads
+        # ashore near the carrier, one based inland loads at home.
+        # Within a kilometre counts as a tie: loading at home saves a landing.
+        origin = (
+            min(
+                reachable,
+                key=lambda p: (
+                    round(_round_trip(squadron.location, p, destination) / 1000),
+                    p is not squadron.location,
+                ),
+            )
+            if reachable
+            else None
         )
         problem = None
         if not destination.can_operate(aircraft):
             problem = f"can't land at {destination.name}"
+        elif destination is not squadron.location and not fits_parking(
+            destination, aircraft
+        ):
+            problem = f"no parking spot big enough at {destination.name}"
         elif origin is None:
             problem = (
                 "out of reach (helicopters fly legs of 100 nm at most)"
@@ -269,9 +326,33 @@ def air_options(game: Game, shipment: Shipment) -> list[AirOption]:
             )
         elif free <= 0:
             problem = "no aircraft free this turn"
+        route_nm = speed_kt = None
+        if origin is not None:
+            route_nm = _round_trip(squadron.location, origin, destination) / 1852.0
+            # Same cruise rule as flight planning (GroundSpeed): 85% of max speed,
+            # 70% for helicopters, at most mach 0.85. Max speed is in kph.
+            share = 0.7 if aircraft.dcs_unit_type.helicopter else 0.85
+            max_kph = getattr(aircraft.dcs_unit_type, "max_speed", None)
+            if max_kph:
+                speed_kt = min(max_kph * share, 1040.0) / 1.852
+        mission = getattr(game.settings, "desired_player_mission_duration", None)
+        longer = bool(
+            route_nm
+            and speed_kt
+            and mission is not None
+            and route_nm / speed_kt * 3600 > mission.total_seconds()
+        )
         options.append(
             AirOption(
-                squadron, origin, max(0, free), cargo_tons(aircraft), cargo, problem
+                squadron,
+                origin,
+                max(0, free),
+                cargo_tons(aircraft),
+                cargo,
+                problem,
+                route_nm,
+                speed_kt,
+                longer,
             )
         )
     options.sort(key=_best_fit)
@@ -450,6 +531,9 @@ def send_by_air(
     if planner.package.flights:
         planner.package.set_tot_asap(game.conditions.start_time)
         game.ato_for(coalition.player).add_package(planner.package)
+        from .spacing import space_out_transports
+
+        space_out_transports(coalition)
         _announce_flights(planner.package.flights)
     if run.transport is None:
         # Ran out of aircraft for the last pallets: they go back on the ship/convoy.

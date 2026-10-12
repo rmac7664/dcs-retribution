@@ -95,6 +95,44 @@ DEFAULT_MASS_KG = {
 TRUCK_PREFERENCE = ("M818", "Ural-4320", "Ural-375", "KAMAZ", "MAN", "Opel", "GAZ")
 
 
+_PARKING_FIT: dict[tuple[str, str], bool] = {}
+
+
+def fits_parking(cp: ControlPoint, aircraft: AircraftType) -> bool:
+    """True if a transport plane has a DCS parking spot big enough at `cp`.
+
+    Retribution counts parking without looking at aircraft size, so a fighter base
+    can look roomy while having no spot a C-2, An-26 or C-130 fits. DCS then logs
+    "No parking place" and the transport has nowhere to go after landing. Uses
+    the same size rule DCS's slot data supports (pydcs's slot dimensions). Only
+    fixed-wing aircraft at airfields are checked: helicopters use helipads and
+    open ground, and carriers and FOBs have their own rules.
+    """
+    unit_type = aircraft.dcs_unit_type
+    if unit_type.helicopter or not isinstance(cp, Airfield):
+        return True
+    airport = getattr(cp, "airport", None)
+    if airport is None or getattr(airport, "slot_version", 2) == 1:
+        return True
+    key = (cp.name, unit_type.id)
+    known = _PARKING_FIT.get(key)
+    if known is not None:
+        return known
+    slots = list(getattr(airport, "parking_slots", []) or [])
+    width = getattr(unit_type, "width", None) or 0.0
+    length = getattr(unit_type, "length", None) or 0.0
+    height = getattr(unit_type, "height", None) or 0.0
+    fits = not slots or any(
+        (slot.airplanes or slot.large)
+        and width < (slot.width or 1000.0)
+        and length < (slot.length or 1000.0)
+        and height < (slot.height or 1000.0)
+        for slot in slots
+    )
+    _PARKING_FIT[key] = fits
+    return fits
+
+
 def cargo_tons(aircraft: AircraftType) -> float:
     known = CARGO_TONS.get(aircraft.dcs_unit_type.id)
     if known is not None:
@@ -713,8 +751,14 @@ def reveal_enemy_main_base(game: Game) -> bool:
 
     Struck: a package targeted the base or something at it. Scouted: a flight's route
     passed within SCOUT_RANGE_NM of it. Called at the end of a turn that was flown.
+
+    Mission results are already applied by then, so a strike that destroyed every
+    depot building would make main_base() return the enemy's next base. Check the
+    base that was in force during the mission instead.
     """
-    enemy_base = main_base(game, game.red.player)
+    enemy_base = _stored_main_base(game, game.red.player) or main_base(
+        game, game.red.player
+    )
     state = game.warehouse_logistics
     if enemy_base is None or enemy_base.id in state.revealed_main_bases:
         return False
@@ -1547,10 +1591,15 @@ class SupplyPlanner:
         depot: ControlPoint,
         to: ControlPoint,
     ) -> bool:
-        """Same reach rule as the airlift planner: helicopters, 100 nm per leg."""
+        """Same reach rule as the airlift planner: helicopters, 100 nm per leg.
+
+        The depot must also have a parking spot the aircraft fits (fits_parking).
+        """
         from game.transfers import AirliftPlanner
 
         if not depot.can_operate(aircraft):
+            return False
+        if depot is not home and not fits_parking(depot, aircraft):
             return False
         if not aircraft.dcs_unit_type.helicopter:
             return True

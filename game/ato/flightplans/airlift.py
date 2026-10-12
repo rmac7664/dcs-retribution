@@ -122,7 +122,8 @@ class AirliftFlightPlan(StandardFlightPlan[AirliftLayout]):
 
     @property
     def mission_departure_time(self) -> datetime:
-        return self.package.time_over_target
+        # Includes the flight's TOT offset (supply transports are spaced out with it).
+        return self.tot
 
 
 class Builder(IBuilder[AirliftFlightPlan, AirliftLayout]):

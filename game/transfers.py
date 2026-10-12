@@ -344,6 +344,19 @@ class AirliftPlanner:
             return False
         if not self.next_stop.can_operate(unit_type):
             return False
+        game = getattr(self, "game", None)
+        if game is not None and game.settings.logistics_enabled:
+            from game.warehouse.supply import fits_parking
+
+            # A transport plane needs a parking spot it fits at each stop away
+            # from home, or it has nowhere to go after landing.
+            load_at = self.transfer.position
+            if load_at is not airfield and not fits_parking(load_at, unit_type):
+                return False
+            if self.next_stop is not airfield and not fits_parking(
+                self.next_stop, unit_type
+            ):
+                return False
 
         # Cargo planes have no maximum range.
         if not unit_type.dcs_unit_type.helicopter:
