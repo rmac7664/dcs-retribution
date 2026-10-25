@@ -165,6 +165,20 @@ class CommonRadioChannelAllocator(RadioChannelAllocator):
         ]
         if (freq := flight.package.frequency) is not None:
             stations.append(("Support", Station("Package", freq)))
+        else:
+            # No shared package frequency (flights on their own frequencies):
+            # preset the other flights in the package instead.
+            for other in mission_data.flights:
+                if other is not flight and other.package is flight.package:
+                    stations.append(
+                        (
+                            "Package",
+                            Station(
+                                f"{other.callsign} ({other.flight_type})",
+                                other.intra_flight_channel,
+                            ),
+                        )
+                    )
         if not same_field:
             stations += airfield(flight.arrival, "Arrival")
         stations += [
