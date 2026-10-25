@@ -669,7 +669,10 @@ class GenericCarrierGenerator(GroundObjectGenerator):
                 # Empty array (no alive units), skip this group
                 continue
 
-            ship_group = self.create_ship_group(group.group_name, ship_units, atc)
+            frequency = atc
+            if g_id > 0 and self.mission_data.dcs_atc is not None:
+                frequency = self.red_crown_frequency(ship_units) or atc
+            ship_group = self.create_ship_group(group.group_name, ship_units, frequency)
 
             # Always steam into the wind, even if the carrier is being moved.
             # There are multiple unsimulated hours between turns, so we can
@@ -809,6 +812,24 @@ class GenericCarrierGenerator(GroundObjectGenerator):
             tacan_callsign=callsign,
             icls=icls,
         )
+
+    def red_crown_frequency(
+        self, ship_units: list[TheaterUnit]
+    ) -> Optional[RadioFrequency]:
+        """Own frequency for an escort group DCS-ATC uses as Red Crown (personal).
+
+        DCS-ATC treats a friendly Ticonderoga, Arleigh Burke or Perry group as
+        Red Crown, on its first ship's radio frequency. Escorts normally share
+        the carrier's frequency, which would put Red Crown on Strike's channel.
+        """
+        from game.radio.dcsatc import is_red_crown_type
+
+        if not is_red_crown_type(ship_units[0].type.id):
+            return None
+        name = self.control_point.name
+        if name not in self.mission_data.red_crowns:
+            self.mission_data.red_crowns[name] = self.radio_registry.alloc_uhf()
+        return self.mission_data.red_crowns[name]
 
 
 class CarrierGenerator(GenericCarrierGenerator):

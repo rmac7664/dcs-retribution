@@ -149,3 +149,6 @@ class MissionData:
     warehouse_plan: Optional[MissionWarehousePlan] = None
     #: What DCS-ATC listens on, when it's installed (Saved Games\\DCS-ATC).
     dcs_atc: Optional[DcsAtcFrequencies] = None
+    #: Carrier name -> Red Crown frequency (its escort cruiser/destroyer group),
+    #: when DCS-ATC is installed.
+    red_crowns: dict[str, RadioFrequency] = field(default_factory=dict)

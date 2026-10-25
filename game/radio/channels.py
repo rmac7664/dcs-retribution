@@ -107,9 +107,11 @@ class CommonRadioChannelAllocator(RadioChannelAllocator):
         """Presets matching DCS-ATC and SkyEye (personal branch).
 
         Inter-flight radio, most important first, each frequency once:
-        departure airfield (ATIS, Ground/Tower/Departure/Approach), the Centers
-        on the route, AWACS (SkyEye 269.0), JTACs, the package, the arrival
-        airfield, tankers, then the divert airfield if there's room.
+        departure airfield (ATIS, Ground/Tower/Departure/Approach; for a carrier
+        Strike/Marshal/Tower/Paddles and Red Crown), the Centers on the route,
+        AWACS (SkyEye 269.0), JTACs, the package, the arrival airfield, tankers,
+        then the divert airfield if there's room. A station the inter-flight
+        radio can't tune goes on the intra-flight radio's spare channels.
         """
         from game.radio.dcsatc import SKYEYE_AWACS, Station
 
@@ -140,6 +142,14 @@ class CommonRadioChannelAllocator(RadioChannelAllocator):
             if airport is None:
                 if runway.atc is None:
                     return []
+                if any(c.freq == runway.atc for c in mission_data.carriers):
+                    # DCS-ATC: every carrier station shares the ship's frequency.
+                    found = [
+                        (section, Station("Strike/Marshal/Tower/Paddles", runway.atc))
+                    ]
+                    if (red_crown := mission_data.red_crowns.get(name)) is not None:
+                        found.append((section, Station("Red Crown", red_crown)))
+                    return found
                 return [(section, Station("ATC", runway.atc))]
             stations = atc.airfield_stations(airport, runway.atc)
             return [
@@ -188,20 +198,38 @@ class CommonRadioChannelAllocator(RadioChannelAllocator):
         ]
         stations += airfield(flight.divert, "Divert")
 
-        used: set[RadioFrequency] = set()
-        if self.intra_flight_radio_index == radio_id:
-            used.add(flight.intra_flight_channel)
+        used: set[RadioFrequency] = {flight.intra_flight_channel}
         radio = getattr(flight.aircraft_type, "inter_flight_radio", None)
+        # Stations the main radio can't tune (e.g. a VHF-only ATIS on a UHF
+        # radio) go on the flight radio's spare channels, when it can tune them.
+        second_id = self.intra_flight_radio_index
+        second_radio = flight.aircraft_type.intra_flight_radio
+        second_ok = second_id is not None and second_id != radio_id
+        second_last = (
+            flight.num_radio_channels(second_id)
+            if second_ok and second_id is not None
+            else 0
+        )
+        second_channel = 2
         channel = first
         for section, station in stations:
-            if channel > last:
-                break
-            freq = station.tunable_on(radio)
-            if freq is None or freq in used:
-                continue  # this radio can't tune it, or it's already preset
-            used.add(freq)
-            flight.label_channel(radio_id, channel, freq, station.label, section)
-            channel += 1
+            freq = station.tunable_on(radio) if channel <= last else None
+            if freq is not None:
+                if freq in used:
+                    continue
+                used.add(freq)
+                flight.label_channel(radio_id, channel, freq, station.label, section)
+                channel += 1
+                continue
+            if not second_ok or second_channel > second_last:
+                continue
+            assert second_id is not None
+            alt = station.tunable_on(second_radio) if second_radio else None
+            if alt is None or alt in used:
+                continue  # neither radio can tune it, or it's already preset
+            used.add(alt)
+            flight.label_channel(second_id, second_channel, alt, station.label, section)
+            second_channel += 1
 
     @classmethod
     def from_cfg(cls, cfg: dict[str, Any]) -> CommonRadioChannelAllocator:

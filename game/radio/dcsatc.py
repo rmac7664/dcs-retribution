@@ -34,6 +34,15 @@ from game.radio.radios import Radio, RadioFrequency, kHz, MHz
 #: SkyEye (the group's GCI bot) always listens here.
 SKYEYE_AWACS = MHz(269)
 
+#: DCS-ATC's built-in station defaults that config.jsonc doesn't list.
+BUILT_IN_DEFAULTS = {"carrier": [kHz(127500)], "redcrown": [kHz(252500)]}
+
+
+def is_red_crown_type(unit_type_id: str) -> bool:
+    """Ships DCS-ATC uses as Red Crown (cruisers/destroyers with air search)."""
+    return any(k in unit_type_id for k in ("TICONDEROG", "Arleigh_Burke", "PERRY"))
+
+
 CONTROLLERS = ("Ground", "Tower", "Departure", "Approach")
 
 _MAP_MARKER = re.compile(r"^\s*//\s*=====\s*(.+?)\s*=====")
@@ -350,6 +359,8 @@ class DcsAtcFrequencies:
     def all_frequencies(self, terrain: Terrain) -> set[RadioFrequency]:
         """Everything DCS-ATC (and SkyEye) listens on, so nothing else gets it."""
         out: set[RadioFrequency] = {SKYEYE_AWACS}
+        for key, values in BUILT_IN_DEFAULTS.items():
+            out.update(self.defaults.get(key, values))
         for values in self.defaults.values():
             out.update(values)
         out.update(self.atis_by_airfield.values())

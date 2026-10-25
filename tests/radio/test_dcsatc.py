@@ -103,3 +103,17 @@ def test_preset_uses_a_frequency_the_radio_can_tune() -> None:
     assert both.tunable_on(uhf) == MHz(327)
     assert vhf_first.tunable_on(uhf) == MHz(250)
     assert vhf_only.tunable_on(None) == MHz(125)  # radio unknown: as before
+
+
+def test_red_crown_ships_and_built_in_defaults(tmp_path: Path) -> None:
+    from game.radio.dcsatc import is_red_crown_type
+
+    assert is_red_crown_type("USS_Arleigh_Burke_IIa")
+    assert is_red_crown_type("TICONDEROG")
+    assert is_red_crown_type("PERRY")
+    assert not is_red_crown_type("CVN_71")
+    data = DcsAtcFrequencies.load(write(tmp_path), Caucasus())
+    assert data is not None
+    taken = data.all_frequencies(Caucasus())
+    # Carrier 127.5 and Red Crown 252.5 aren't in config.jsonc but DCS-ATC uses them.
+    assert kHz(127500) in taken and kHz(252500) in taken

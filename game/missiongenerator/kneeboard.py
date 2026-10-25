@@ -705,20 +705,23 @@ class SupportPage(KneeboardPage):
 
 class RadioPresetsPage(KneeboardPage):
     """Every preset channel by section, in the Support Info page's style
-    (DCS-ATC presets, personal)."""
+    (DCS-ATC presets, personal). Continues on another page when full."""
 
-    def __init__(self, flight: FlightData, dark_kneeboard: bool) -> None:
+    def __init__(
+        self,
+        flight: FlightData,
+        dark_kneeboard: bool,
+        sections: Optional[list[str]] = None,
+        part: int = 1,
+        parts: int = 1,
+    ) -> None:
         self.flight = flight
         self.dark_kneeboard = dark_kneeboard
+        self.sections = sections
+        self.part = part
+        self.parts = parts
 
-    def write(self, path: Path) -> None:
-        writer = KneeboardPageWriter(dark_theme=self.dark_kneeboard)
-        if self.flight.custom_name:
-            custom_name_title = ' ("{}")'.format(self.flight.custom_name)
-        else:
-            custom_name_title = ""
-        writer.title(f"{self.flight.callsign} Radio Presets{custom_name_title}")
-
+    def _rows(self) -> dict[str, list[list[str]]]:
         sections: dict[str, list[list[str]]] = {}
         for assignment, label, frequency, section in self.flight.channel_labels:
             channel_name = self.flight.aircraft_type.channel_name(
@@ -730,10 +733,44 @@ class RadioPresetsPage(KneeboardPage):
                     f"{channel_name}\n{frequency}",
                 ]
             )
-        for section, rows in sections.items():
-            writer.heading(section)
-            writer.table(rows, headers=["Station", "FREQ"])
-        writer.write(path)
+        return sections
+
+    def _render(self, names: list[str]) -> KneeboardPageWriter:
+        writer = KneeboardPageWriter(dark_theme=self.dark_kneeboard)
+        if self.flight.custom_name:
+            custom_name_title = ' ("{}")'.format(self.flight.custom_name)
+        else:
+            custom_name_title = ""
+        more = f" ({self.part}/{self.parts})" if self.parts > 1 else ""
+        writer.title(f"{self.flight.callsign} Radio Presets{more}{custom_name_title}")
+        rows = self._rows()
+        for name in names:
+            writer.heading(name)
+            writer.table(rows[name], headers=["Station", "FREQ"])
+        return writer
+
+    def write(self, path: Path) -> None:
+        names = self.sections if self.sections is not None else list(self._rows())
+        self._render(names).write(path)
+
+    @classmethod
+    def pages_for(
+        cls, flight: FlightData, dark_kneeboard: bool
+    ) -> "list[RadioPresetsPage]":
+        """One page, or more when the sections don't fit on one."""
+        probe = cls(flight, dark_kneeboard, part=9, parts=9)
+        bottom = probe._render([]).image_size[1] - 24
+        groups: list[list[str]] = [[]]
+        for name in probe._rows():
+            trial = groups[-1] + [name]
+            if groups[-1] and probe._render(trial).y > bottom:
+                groups.append([name])
+            else:
+                groups[-1] = trial
+        return [
+            cls(flight, dark_kneeboard, names, i + 1, len(groups))
+            for i, names in enumerate(groups)
+        ]
 
 
 class SeadTaskPage(KneeboardPage):
@@ -956,7 +993,7 @@ class KneeboardGenerator(MissionInfoGenerator):
         ]
 
         if flight.channel_labels:
-            pages.append(RadioPresetsPage(flight, self.dark_kneeboard))
+            pages.extend(RadioPresetsPage.pages_for(flight, self.dark_kneeboard))
 
         # Only create the notes page if there are notes to show.
         if notes := self.game.notes:
