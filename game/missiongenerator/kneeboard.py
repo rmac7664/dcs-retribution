@@ -704,7 +704,8 @@ class SupportPage(KneeboardPage):
 
 
 class RadioPresetsPage(KneeboardPage):
-    """Every preset channel with its station (DCS-ATC presets, personal)."""
+    """Every preset channel by section, in the Support Info page's style
+    (DCS-ATC presets, personal)."""
 
     def __init__(self, flight: FlightData, dark_kneeboard: bool) -> None:
         self.flight = flight
@@ -712,24 +713,26 @@ class RadioPresetsPage(KneeboardPage):
 
     def write(self, path: Path) -> None:
         writer = KneeboardPageWriter(dark_theme=self.dark_kneeboard)
-        writer.title(f"{self.flight.callsign} Radio Presets")
-        rows = []
-        for assignment, label, frequency in self.flight.channel_labels:
+        if self.flight.custom_name:
+            custom_name_title = ' ("{}")'.format(self.flight.custom_name)
+        else:
+            custom_name_title = ""
+        writer.title(f"{self.flight.callsign} Radio Presets{custom_name_title}")
+
+        sections: dict[str, list[list[str]]] = {}
+        for assignment, label, frequency, section in self.flight.channel_labels:
             channel_name = self.flight.aircraft_type.channel_name(
                 assignment.radio_id, assignment.channel
             )
-            rows.append(
+            sections.setdefault(section or "Other", []).append(
                 [
-                    channel_name,
-                    KneeboardPageWriter.wrap_line(label, 34),
-                    str(frequency),
+                    KneeboardPageWriter.wrap_line(label, 30),
+                    f"{channel_name}\n{frequency}",
                 ]
             )
-        writer.table(rows, headers=["Channel", "Station", "FREQ"])
-        writer.text(
-            "Matches DCS-ATC (Saved Games\\DCS-ATC) and SkyEye. "
-            "Shared controllers are on one channel."
-        )
+        for section, rows in sections.items():
+            writer.heading(section)
+            writer.table(rows, headers=["Station", "FREQ"])
         writer.write(path)
 
 

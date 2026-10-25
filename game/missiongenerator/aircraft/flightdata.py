@@ -80,7 +80,8 @@ class FlightData:
     )
 
     #: Names for preset channels, for the kneeboard (DCS-ATC presets).
-    channel_labels: list[tuple[ChannelAssignment, str, RadioFrequency]] = field(
+    #: (channel, station, frequency, kneeboard section) in preset order.
+    channel_labels: list[tuple[ChannelAssignment, str, RadioFrequency, str]] = field(
         init=False, default_factory=list
     )
 
@@ -117,10 +118,15 @@ class FlightData:
             )
 
     def label_channel(
-        self, radio_id: int, channel_id: int, frequency: RadioFrequency, label: str
+        self,
+        radio_id: int,
+        channel_id: int,
+        frequency: RadioFrequency,
+        label: str,
+        section: str = "",
     ) -> None:
         """Assigns a preset channel and remembers its name for the kneeboard."""
         self.assign_channel(radio_id, channel_id, frequency)
         self.channel_labels.append(
-            (ChannelAssignment(radio_id, channel_id), label, frequency)
+            (ChannelAssignment(radio_id, channel_id), label, frequency, section)
         )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -120,7 +120,8 @@ class CommonRadioChannelAllocator(RadioChannelAllocator):
                 self.intra_flight_radio_index,
                 1,
                 flight.intra_flight_channel,
-                "Flight (intra)",
+                flight.custom_name or "Flight",
+                "Flight",
             )
         if self.inter_flight_radio_index is None:
             return
@@ -128,45 +129,64 @@ class CommonRadioChannelAllocator(RadioChannelAllocator):
         first = 2 if self.intra_flight_radio_index == radio_id else 1
         last = flight.num_radio_channels(radio_id)
 
-        def airfield(runway: Optional[RunwayData]) -> list[Station]:
+        def airfield(
+            runway: Optional[RunwayData], role: str
+        ) -> list[tuple[str, Station]]:
             if runway is None:
                 return []
-            airport = atc.airport_named(runway.airfield_name)
+            name = runway.airfield_name
+            section = f"{role}: {name}"
+            airport = atc.airport_named(name)
             if airport is None:
                 if runway.atc is None:
                     return []
-                return [Station(f"{runway.airfield_name} ATC", runway.atc)]
-            return atc.airfield_stations(airport, runway.atc)
+                return [(section, Station("ATC", runway.atc))]
+            stations = atc.airfield_stations(airport, runway.atc)
+            return [
+                (section, replace(s, label=s.label.removeprefix(f"{name} ")))
+                for s in stations
+            ]
 
+        same_field = flight.arrival == flight.departure
         side = flight.friendly.name.lower()
         route = [w.position for w in flight.waypoints]
-        stations: list[Station] = []
-        stations += airfield(flight.departure)
-        stations += [Station(c.name, c.freq) for c in atc.centers_along(route, side)]
-        stations.append(Station("AWACS (SkyEye)", SKYEYE_AWACS))
-        stations += [Station(f"JTAC {j.callsign}", j.freq) for j in mission_data.jtacs]
-        if (freq := flight.package.frequency) is not None:
-            stations.append(Station("Package", freq))
-        if flight.arrival != flight.departure:
-            stations += airfield(flight.arrival)
+        stations: list[tuple[str, Station]] = []
+        stations += airfield(
+            flight.departure, "Departure & Arrival" if same_field else "Departure"
+        )
         stations += [
-            Station(f"Tanker {t.callsign}", t.freq) for t in mission_data.tankers
+            ("Enroute", Station(c.name, c.freq)) for c in atc.centers_along(route, side)
         ]
-        stations += airfield(flight.divert)
+        stations.append(("Support", Station("AWACS (SkyEye)", SKYEYE_AWACS)))
+        stations += [
+            ("Support", Station(f"JTAC {j.callsign}", j.freq))
+            for j in mission_data.jtacs
+            if j.blue == flight.friendly
+        ]
+        if (freq := flight.package.frequency) is not None:
+            stations.append(("Support", Station("Package", freq)))
+        if not same_field:
+            stations += airfield(flight.arrival, "Arrival")
+        stations += [
+            ("Support", Station(f"Tanker {t.callsign}", t.freq))
+            for t in mission_data.tankers
+            if t.blue == flight.friendly  # the enemy's tankers aren't ours
+        ]
+        stations += airfield(flight.divert, "Divert")
 
         used: set[RadioFrequency] = set()
         if self.intra_flight_radio_index == radio_id:
             used.add(flight.intra_flight_channel)
         radio = getattr(flight.aircraft_type, "inter_flight_radio", None)
         channel = first
-        for station in stations:
+        for section, station in stations:
             if channel > last:
                 break
             freq = station.tunable_on(radio)
             if freq is None or freq in used:
                 continue  # this radio can't tune it, or it's already preset
             used.add(freq)
-            flight.label_channel(radio_id, channel, freq, station.label)
+            flight.label_channel(radio_id, channel, freq, station.label, section)
             channel += 1
 
     @classmethod
