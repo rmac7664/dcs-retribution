@@ -1235,6 +1235,21 @@ class Settings:
             "the pilot leg unreadable."
         ),
     )
+    dcs_atc_radio_presets: bool = boolean_option(
+        "Radio presets for DCS-ATC and SkyEye",
+        MISSION_GENERATOR_PAGE,
+        GAMEPLAY_SECTION,
+        default=True,
+        detail=(
+            "Uses Saved Games\\DCS-ATC (config.jsonc and frequencies.jsonc) to "
+            "preset each player flight's radios with its airfields' ATIS, Ground, "
+            "Tower, Departure and Approach, the Centers on its route, SkyEye "
+            "(269.0), Strike/Marshal and Red Crown for carriers, and adds a Radio "
+            "Presets kneeboard page. No flight or package is put on one of those "
+            "frequencies. Read again every time a mission is generated. Off, or "
+            "with no DCS-ATC folder: Retribution's normal presets."
+        ),
+    )
     never_delay_player_flights: bool = boolean_option(
         "Player flights ignore TOT and spawn immediately",
         MISSION_GENERATOR_PAGE,

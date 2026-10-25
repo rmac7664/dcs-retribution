@@ -238,6 +238,8 @@ class MissionGenerator:
         from game import persistency
         from game.radio.dcsatc import DcsAtcFrequencies
 
+        if not getattr(self.game.settings, "dcs_atc_radio_presets", True):
+            return
         try:
             folder = DcsAtcFrequencies.default_folder(persistency.base_path())
         except AssertionError:
