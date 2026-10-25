@@ -255,6 +255,9 @@ class AircraftType(UnitType[Type[FlyingType]]):
     #: that declare no block.
     property_date_gate: PropertyDateGate = PropertyDateGate()
 
+    #: The radio used for inter-flight presets (ATC, AWACS...), if known.
+    inter_flight_radio: Optional[Radio] = None
+
     _by_name: ClassVar[dict[str, AircraftType]] = {}
     _by_unit_type: ClassVar[dict[type[FlyingType], list[AircraftType]]] = defaultdict(
         list
@@ -607,6 +610,7 @@ class AircraftType(UnitType[Type[FlyingType]]):
             fuel_consumption=fuel_consumption,
             default_livery=data.get("default_livery"),
             intra_flight_radio=radio_config.intra_flight,
+            inter_flight_radio=radio_config.inter_flight,
             channel_allocator=radio_config.channel_allocator,
             channel_namer=radio_config.channel_namer,
             kneeboard_units=units,

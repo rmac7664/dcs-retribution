@@ -13,6 +13,7 @@ from game.missiongenerator.aircraft.flightdata import FlightData
 from game.runways import RunwayData
 
 if TYPE_CHECKING:
+    from game.radio.dcsatc import DcsAtcFrequencies
     from game.radio.radios import RadioFrequency
     from game.radio.tacan import TacanChannel
     from game.theater.player import Player
@@ -146,3 +147,5 @@ class MissionData:
     enemy_frontline_groups: list[FrontlineUnitGroupsInfo] = field(default_factory=list)
     #: Present when base logistics (limited warehouses) is enabled.
     warehouse_plan: Optional[MissionWarehousePlan] = None
+    #: What DCS-ATC listens on, when it's installed (Saved Games\\DCS-ATC).
+    dcs_atc: Optional[DcsAtcFrequencies] = None

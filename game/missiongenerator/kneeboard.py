@@ -703,6 +703,36 @@ class SupportPage(KneeboardPage):
         return f"{time}"
 
 
+class RadioPresetsPage(KneeboardPage):
+    """Every preset channel with its station (DCS-ATC presets, personal)."""
+
+    def __init__(self, flight: FlightData, dark_kneeboard: bool) -> None:
+        self.flight = flight
+        self.dark_kneeboard = dark_kneeboard
+
+    def write(self, path: Path) -> None:
+        writer = KneeboardPageWriter(dark_theme=self.dark_kneeboard)
+        writer.title(f"{self.flight.callsign} Radio Presets")
+        rows = []
+        for assignment, label, frequency in self.flight.channel_labels:
+            channel_name = self.flight.aircraft_type.channel_name(
+                assignment.radio_id, assignment.channel
+            )
+            rows.append(
+                [
+                    channel_name,
+                    KneeboardPageWriter.wrap_line(label, 34),
+                    str(frequency),
+                ]
+            )
+        writer.table(rows, headers=["Channel", "Station", "FREQ"])
+        writer.text(
+            "Matches DCS-ATC (Saved Games\\DCS-ATC) and SkyEye. "
+            "Shared controllers are on one channel."
+        )
+        writer.write(path)
+
+
 class SeadTaskPage(KneeboardPage):
     """A kneeboard page containing SEAD/DEAD target information."""
 
@@ -921,6 +951,9 @@ class KneeboardGenerator(MissionInfoGenerator):
                 self.dark_kneeboard,
             ),
         ]
+
+        if flight.channel_labels:
+            pages.append(RadioPresetsPage(flight, self.dark_kneeboard))
 
         # Only create the notes page if there are notes to show.
         if notes := self.game.notes:

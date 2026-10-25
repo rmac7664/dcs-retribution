@@ -79,6 +79,11 @@ class FlightData:
         init=False, default_factory=dict
     )
 
+    #: Names for preset channels, for the kneeboard (DCS-ATC presets).
+    channel_labels: list[tuple[ChannelAssignment, str, RadioFrequency]] = field(
+        init=False, default_factory=list
+    )
+
     def __post_init__(self) -> None:
         self.callsign = create_group_callsign_from_unit(self.units[0])
 
@@ -110,3 +115,12 @@ class FlightData:
             self.frequency_to_channel_map[frequency] = ChannelAssignment(
                 radio_id, channel_id
             )
+
+    def label_channel(
+        self, radio_id: int, channel_id: int, frequency: RadioFrequency, label: str
+    ) -> None:
+        """Assigns a preset channel and remembers its name for the kneeboard."""
+        self.assign_channel(radio_id, channel_id, frequency)
+        self.channel_labels.append(
+            (ChannelAssignment(radio_id, channel_id), label, frequency)
+        )

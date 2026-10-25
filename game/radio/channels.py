@@ -6,6 +6,8 @@ from typing import Any, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from game.missiongenerator.aircraft.flightdata import FlightData
     from game.missiongenerator.missiondata import MissionData
+    from game.radio.radios import RadioFrequency
+    from game.runways import RunwayData
 
 
 class RadioChannelAllocator:
@@ -48,6 +50,8 @@ class CommonRadioChannelAllocator(RadioChannelAllocator):
     ) -> None:
         if flight.client_units and flight.squadron.radio_presets:
             return self.assign_from_squadron_presets(flight)
+        if mission_data.dcs_atc is not None:
+            return self.assign_dcs_atc_channels(flight, mission_data)
 
         if self.intra_flight_radio_index is not None:
             flight.assign_channel(
@@ -96,6 +100,74 @@ class CommonRadioChannelAllocator(RadioChannelAllocator):
             # Any remaining channels are nice-to-haves, but not necessary for
             # the few aircraft with a small number of channels available.
             pass
+
+    def assign_dcs_atc_channels(
+        self, flight: FlightData, mission_data: MissionData
+    ) -> None:
+        """Presets matching DCS-ATC and SkyEye (personal branch).
+
+        Inter-flight radio, most important first, each frequency once:
+        departure airfield (ATIS, Ground/Tower/Departure/Approach), the Centers
+        on the route, AWACS (SkyEye 269.0), JTACs, the package, the arrival
+        airfield, tankers, then the divert airfield if there's room.
+        """
+        from game.radio.dcsatc import SKYEYE_AWACS, Station
+
+        atc = mission_data.dcs_atc
+        assert atc is not None
+        if self.intra_flight_radio_index is not None:
+            flight.label_channel(
+                self.intra_flight_radio_index,
+                1,
+                flight.intra_flight_channel,
+                "Flight (intra)",
+            )
+        if self.inter_flight_radio_index is None:
+            return
+        radio_id = self.inter_flight_radio_index
+        first = 2 if self.intra_flight_radio_index == radio_id else 1
+        last = flight.num_radio_channels(radio_id)
+
+        def airfield(runway: Optional[RunwayData]) -> list[Station]:
+            if runway is None:
+                return []
+            airport = atc.airport_named(runway.airfield_name)
+            if airport is None:
+                if runway.atc is None:
+                    return []
+                return [Station(f"{runway.airfield_name} ATC", runway.atc)]
+            return atc.airfield_stations(airport, runway.atc)
+
+        side = flight.friendly.name.lower()
+        route = [w.position for w in flight.waypoints]
+        stations: list[Station] = []
+        stations += airfield(flight.departure)
+        stations += [Station(c.name, c.freq) for c in atc.centers_along(route, side)]
+        stations.append(Station("AWACS (SkyEye)", SKYEYE_AWACS))
+        stations += [Station(f"JTAC {j.callsign}", j.freq) for j in mission_data.jtacs]
+        if (freq := flight.package.frequency) is not None:
+            stations.append(Station("Package", freq))
+        if flight.arrival != flight.departure:
+            stations += airfield(flight.arrival)
+        stations += [
+            Station(f"Tanker {t.callsign}", t.freq) for t in mission_data.tankers
+        ]
+        stations += airfield(flight.divert)
+
+        used: set[RadioFrequency] = set()
+        if self.intra_flight_radio_index == radio_id:
+            used.add(flight.intra_flight_channel)
+        radio = getattr(flight.aircraft_type, "inter_flight_radio", None)
+        channel = first
+        for station in stations:
+            if channel > last:
+                break
+            freq = station.tunable_on(radio)
+            if freq is None or freq in used:
+                continue  # this radio can't tune it, or it's already preset
+            used.add(freq)
+            flight.label_channel(radio_id, channel, freq, station.label)
+            channel += 1
 
     @classmethod
     def from_cfg(cls, cfg: dict[str, Any]) -> CommonRadioChannelAllocator:

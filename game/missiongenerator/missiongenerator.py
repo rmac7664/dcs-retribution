@@ -226,6 +226,44 @@ class MissionGenerator:
         unique_map_frequencies.add(MHz(121, 500))
         for frequency in unique_map_frequencies:
             self.radio_registry.reserve(frequency)
+        self.reserve_dcs_atc_frequencies()
+
+    def reserve_dcs_atc_frequencies(self) -> None:
+        """Keeps DCS-ATC's and SkyEye's frequencies away from flights (personal).
+
+        A flight or package on a controller's frequency would have its chatter
+        answered by Tower or Center. Package and flight frequencies kept from
+        earlier planning that clash are given new ones.
+        """
+        from game import persistency
+        from game.radio.dcsatc import DcsAtcFrequencies
+
+        try:
+            folder = DcsAtcFrequencies.default_folder(persistency.base_path())
+        except AssertionError:
+            return
+        terrain = self.game.theater.terrain
+        data = DcsAtcFrequencies.load(folder, terrain)
+        if data is None:
+            return
+        self.mission_data.dcs_atc = data
+        taken = data.all_frequencies(terrain)
+        for frequency in taken:
+            if frequency not in self.radio_registry.allocated_channels:
+                self.radio_registry.reserve(frequency)
+        for coalition in (self.game.blue, self.game.red):
+            for package in coalition.ato.packages:
+                if package.frequency in taken:
+                    logging.info(
+                        "DCS-ATC: package %s was on %s, a controller frequency; "
+                        "giving it a new one",
+                        package.package_description,
+                        package.frequency,
+                    )
+                    package.frequency = None
+                for flight in package.flights:
+                    if flight.frequency in taken:
+                        flight.frequency = None
 
     def initialize_tacan_registry(
         self, unique_map_frequencies: set[RadioFrequency]
