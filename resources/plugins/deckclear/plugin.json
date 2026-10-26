@@ -1,0 +1,37 @@
+{
+    "nameInUI": "Carrier Deck Clear",
+    "descriptionInUI": "Removes AI aircraft from carrier and ship decks a set time after they land, so a jet stuck in the wires or parked in the landing area can't block everyone behind it. Players are never removed. Removed aircraft are not counted as losses: they go back to their squadron as normal.",
+    "defaultValue": true,
+    "specificOptions": [
+        {
+            "nameInUI": "Remove AI from the deck after n seconds",
+            "mnemonic": "despawnSecondsAfterLanding",
+            "minimumValue": 15,
+            "maximumValue": 1800,
+            "defaultValue": 90
+        },
+        {
+            "nameInUI": "Also remove AI stuck on the deck without a landing report",
+            "mnemonic": "clearStuckAircraft",
+            "defaultValue": true
+        },
+        {
+            "nameInUI": "Include helicopters",
+            "mnemonic": "includeHelicopters",
+            "defaultValue": true
+        },
+        {
+            "nameInUI": "Show a message when an aircraft is removed",
+            "mnemonic": "announce",
+            "defaultValue": false
+        }
+    ],
+    "scriptsWorkOrders": [],
+    "configurationWorkOrders": [
+        {
+            "file": "deckclear.lua",
+            "mnemonic": "deckclear"
+        }
+    ],
+    "otherResourceFiles": []
+}

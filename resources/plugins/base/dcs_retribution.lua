@@ -176,7 +176,20 @@ write_state_error_handling = function()
 end
 
 activeWeapons = {}
+
+-- Aircraft removed on purpose (e.g. by the Carrier Deck Clear plugin) are not losses.
+local function deliberately_removed(object)
+    if not RetributionDeckCleared or not object or not object.getName then
+        return false
+    end
+    local ok, name = pcall(object.getName, object)
+    return ok and name ~= nil and RetributionDeckCleared[name] == true
+end
+
 local function onEvent(event)
+    if deliberately_removed(event.initiator) or deliberately_removed(event.target) then
+        return
+    end
     if event.id == world.event.S_EVENT_CRASH and event.initiator then
         crash_events[#crash_events + 1] = event.initiator.getName(event.initiator)
         dirty_state = true
