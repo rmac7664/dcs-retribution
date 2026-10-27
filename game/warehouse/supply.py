@@ -1383,9 +1383,17 @@ class SupplyPlanner:
                 fuel = max(0.0, min(gap_kg, spare_kg))
                 if fuel < MIN_FUEL_KG:
                     fuel = 0.0
-            wanted = MunitionMasses.tons(*self._fit_to_shipment(cp, load, fuel))
+            # A replenishment ship isn't a truck convoy: it takes the carrier's whole
+            # shortfall, munitions and fuel, rather than one 60 t run.
+            by_ship = isinstance(cp, NavalControlPoint) and cp.id not in getattr(
+                self, "air_only", set()
+            )
+            convoy = not by_ship
+            wanted = MunitionMasses.tons(
+                *self._fit_to_shipment(cp, load, fuel, convoy_limit=convoy)
+            )
             room = self.handling_room_kg(cp)
-            load, fuel = self._fit_to_shipment(cp, load, fuel, room)
+            load, fuel = self._fit_to_shipment(cp, load, fuel, room, convoy)
             if fuel < MIN_FUEL_KG:
                 fuel = 0.0
             tons = MunitionMasses.tons(load, fuel)
@@ -1528,16 +1536,19 @@ class SupplyPlanner:
         load: dict[str, int],
         fuel: float,
         limit_kg: Optional[float] = None,
+        convoy_limit: bool = True,
     ) -> tuple[dict[str, int], float]:
         """Trims a load to one supply run's capacity; the rest waits a turn.
 
         Items the base is shortest of (relative to its authorized level) go first, then
-        fuel fills whatever weight is left.
+        fuel fills whatever weight is left. With convoy_limit off (replenishment
+        ships), only `limit_kg` applies, if given.
         """
-        if limit_kg is None:
-            limit_kg = self.default_shipment_kg()
-        else:
-            limit_kg = min(limit_kg, self.default_shipment_kg())
+        if convoy_limit:
+            convoy_kg = self.default_shipment_kg()
+            limit_kg = convoy_kg if limit_kg is None else min(limit_kg, convoy_kg)
+        elif limit_kg is None:
+            limit_kg = math.inf
         authorized = self.authorized.get(cp.id, {})
         stock = self.state.stocks[cp.id].munitions
 
@@ -1558,7 +1569,10 @@ class SupplyPlanner:
         )
         for name, count in ranked:
             mass = MunitionMasses.mass_kg(name)
-            room = int((limit_kg - used) // mass) if mass > 0 else count
+            if mass <= 0 or math.isinf(limit_kg):
+                room = count
+            else:
+                room = int((limit_kg - used) // mass)
             take = min(count, room)
             if take > 0:
                 fitted[name] = take
