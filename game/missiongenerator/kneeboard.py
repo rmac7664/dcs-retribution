@@ -1696,7 +1696,7 @@ class KneeboardGenerator(MissionInfoGenerator):
             )
         )
 
-        if flight.channel_labels:
+        if isinstance(flight.channel_labels, list) and flight.channel_labels:
             pages.extend(RadioPresetsPage.pages_for(flight, self.dark_kneeboard))
 
         # Only create the notes page if there are notes to show.
