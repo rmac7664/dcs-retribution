@@ -157,6 +157,7 @@ class QTopPanel(QFrame):
             self.air_wing,
             self.playable,
             self.transfers,
+            self.simSpeedControls,
             self.passTurnButton,
             self.proceedButton,
         ]
@@ -302,6 +303,7 @@ class QTopPanel(QFrame):
         elif game.turn == 0:
             self.passTurnButton.setText("Begin Campaign")
             self.proceedButton.setEnabled(False)
+            self.simSpeedControls.setEnabled(False)
         else:
             raise RuntimeError(f"game.turn out of bounds!\n  value = {game.turn}")
 
