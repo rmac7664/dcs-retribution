@@ -21,6 +21,9 @@ function base(supply?: ControlPoint["supply"]): ControlPoint {
     mobile: false,
     sidc: "",
     supply: supply,
+    units: [],
+    threat_ranges: [],
+    detection_ranges: [],
   };
 }
 

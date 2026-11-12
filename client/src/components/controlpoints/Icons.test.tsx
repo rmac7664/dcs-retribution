@@ -19,6 +19,9 @@ function base(blue: boolean, main_base?: boolean): ControlPoint {
     mobile: false,
     sidc: main_base ? AIRFIELD_HQ : AIRFIELD,
     main_base: main_base,
+    units: [],
+    threat_ranges: [],
+    detection_ranges: [],
   };
 }
 
