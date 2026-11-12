@@ -415,6 +415,7 @@ class QPackagePanel(QGroupBox):
 
     def __init__(self, game_model: GameModel, ato_model: AtoModel) -> None:
         super().__init__("Packages")
+        self.game_model = game_model
         self.ato_model = ato_model
         self.ato_model.layoutChanged.connect(self.on_current_changed)
 
@@ -447,6 +448,11 @@ class QPackagePanel(QGroupBox):
         self.delete_button.setProperty("style", "btn-danger")
         self.delete_button.clicked.connect(self.on_delete)
         self.button_row.addWidget(self.delete_button)
+
+        self.timeline_button = QPushButton("Timeline")
+        self.timeline_button.setToolTip("Every package on one time axis")
+        self.timeline_button.clicked.connect(self.on_timeline)
+        self.button_row.addWidget(self.timeline_button)
 
         self.current_changed.connect(self.on_current_changed)
         self.on_current_changed()
@@ -489,6 +495,15 @@ class QPackagePanel(QGroupBox):
             logging.error(f"Cannot edit package when no package is selected.")
             return
         self.package_list.edit_package(index)
+
+    def on_timeline(self) -> None:
+        """Opens the ATO timeline window."""
+        from qt_ui.dialogs import open_once
+        from qt_ui.windows.atotimeline import AtoTimelineWindow
+
+        self.timeline = open_once(
+            "ato-timeline", lambda: AtoTimelineWindow(self.game_model, self.window())
+        )
 
     def on_clone(self) -> None:
         index = self.package_list.currentIndex()

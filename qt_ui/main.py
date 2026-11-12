@@ -305,6 +305,19 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--dev", action="store_true", help="Enable development mode.")
 
+    speed_controls_group = parser.add_argument_group()
+    speed_controls_group.add_argument(
+        "--show-sim-speed-controls",
+        action="store_true",
+        help="Shows the sim speed controls in the top panel.",
+    )
+    speed_controls_group.add_argument(
+        "--no-show-sim-speed-controls",
+        dest="show_sim_speed_controls",
+        action="store_false",
+        help="Hides the sim speed controls in the top panel (default).",
+    )
+
     parser.add_argument("--new-map", help="Deprecated. Does nothing.")
     parser.add_argument("--old-map", help="Deprecated. Does nothing.")
 
@@ -609,7 +622,7 @@ def main():
 
     liberation_install.init()
     with Server(liberation_install.server_port()).run_in_thread():
-        run_ui(game, UiFlags(args.dev))
+        run_ui(game, UiFlags(args.dev, args.show_sim_speed_controls))
 
 
 if __name__ == "__main__":
