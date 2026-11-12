@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, List
 
@@ -27,8 +28,11 @@ from dcs.translation import String
 from dcs.triggers import Event, TriggerCondition, TriggerOnce
 from dcs.unit import Skill
 
+from game.dcs.skills import ground_skill
+
 from game.theater import Airfield
 from game.theater.controlpoint import Fob, TRIGGER_RADIUS_CAPTURE
+from game.theater.theatergroundobject import NAME_BY_CATEGORY
 
 if TYPE_CHECKING:
     from game.game import Game
@@ -112,9 +116,11 @@ class TriggerGenerator:
         """
         for coalition_name, coalition in self.mission.coalition.items():
             if coalition_name == player_coalition:
-                skill_level = Skill(self.game.settings.player_skill)
+                skill_level = ground_skill(Skill(self.game.settings.player_skill))
             elif coalition_name == enemy_coalition:
-                skill_level = Skill(self.game.settings.enemy_vehicle_skill)
+                skill_level = ground_skill(
+                    Skill(self.game.settings.enemy_vehicle_skill)
+                )
             else:
                 continue
 
@@ -137,14 +143,34 @@ class TriggerGenerator:
                         continue
 
                     seen.add(ground_object.obj_name)
-                    for location in ground_object.mark_locations:
+                    category = ground_object.category
+                    kind = (
+                        "Oil derrick"
+                        if category == "derrick"
+                        else NAME_BY_CATEGORY.get(category, category)
+                    )
+                    allegiance = "ALLY" if cp.captured.is_blue else "ENEMY"
+                    name = f"{ground_object.obj_name} - {kind.upper()} [{allegiance}]"
+                    units = list(ground_object.units)
+                    # Captures can clear a military site's unit list entirely.
+                    # Empty armor/SAM sites still have no surviving force, unlike
+                    # an empty motorpool which can simply have no reserve stock.
+                    destroyed = (bool(units) or category in {"armor", "aa"}) and all(
+                        not unit.alive for unit in units
+                    )
+                    locations = list(ground_object.mark_locations)
+                    if destroyed:
+                        name += " [DESTROYED]"
+                        # Building mark locations normally include only survivors.
+                        # Retain their original positions when the whole site is gone.
+                        if not locations:
+                            locations = [unit.position for unit in units]
+                    if category in {"aa", "ewr"}:
+                        name += " [INITIAL POSITION]"
+                    for location in locations:
                         zone = self.mission.triggers.add_triggerzone(
                             location, radius=10, hidden=True, name="MARK"
                         )
-                        if cp.captured.is_blue:
-                            name = ground_object.obj_name + " [ALLY]"
-                        else:
-                            name = ground_object.obj_name + " [ENEMY]"
                         mark_trigger.add_action(MarkToAll(v, zone.id, String(name)))
                         v += 1
             self.mission.triggerrules.triggers.append(mark_trigger)
@@ -189,19 +215,29 @@ class TriggerGenerator:
         capturing_coalition_int: int,
         cp: ControlPoint,
         flag_condition_true: bool = False,
+        require_capturing_in_zone: bool = True,
     ) -> TriggerCondition:
-        """Helper method to create a single capture trigger with the given parameters."""
+        """Helper method to create a single capture trigger with the given parameters.
+
+        When ``require_capturing_in_zone`` is False the trigger fires as soon as the
+        losing coalition has no ground units left in the zone, without requiring the
+        capturing coalition to have a ground unit there. This is used for the
+        recapture (revert) trigger so a base reverts to its original owner once the
+        attackers leave or are destroyed -- e.g. wiped out from the air -- instead of
+        staying "captured" until a friendly ground unit happens to re-enter the zone.
+        """
         trigger = TriggerCondition(Event.NoEvent, "Capture Trigger")
         trigger.add_condition(
             AllOfCoalitionOutsideZone(
                 losing_coalition, trigger_zone_id, unit_type="GROUND"
             )
         )
-        trigger.add_condition(
-            PartOfCoalitionInZone(
-                capturing_coalition, trigger_zone_id, unit_type="GROUND"
+        if require_capturing_in_zone:
+            trigger.add_condition(
+                PartOfCoalitionInZone(
+                    capturing_coalition, trigger_zone_id, unit_type="GROUND"
+                )
             )
-        )
 
         if flag_condition_true:
             trigger.add_condition(FlagIsTrue(flag=flag))
@@ -210,8 +246,19 @@ class TriggerGenerator:
             trigger.add_condition(FlagIsFalse(flag=flag))
             trigger.add_action(SetFlag(flag=flag))
 
+        initial_side = 2 if cp.captured.is_blue else 1 if cp.captured.is_red else 0
+        capture_event = json.dumps(
+            f"{cp.id}||{capturing_coalition_int}||{cp.full_name}", ensure_ascii=False
+        )
+        base_id = json.dumps(str(cp.id), ensure_ascii=False)
+        base_name = json.dumps(cp.full_name, ensure_ascii=False)
         script_string = String(
-            f'base_capture_events[#base_capture_events + 1] = "{cp.id}||{capturing_coalition_int}||{cp.full_name}"\ndirty_state = true'
+            f"base_capture_events[#base_capture_events + 1] = {capture_event}\n"
+            "dirty_state = true\n"
+            'if type(MISSION_LOG_BASE_CAPTURED) == "function" then\n'
+            f"  MISSION_LOG_BASE_CAPTURED({base_id}, {base_name}, "
+            f"{capturing_coalition_int}, {initial_side})\n"
+            "end"
         )
         trigger.add_action(DoScript(script_string))
         return trigger
@@ -222,6 +269,8 @@ class TriggerGenerator:
         Directly appends to the global `base_capture_events` var declared by `dcs_libaration.lua`
         """
         for cp in self.game.theater.controlpoints:
+            if cp.is_capture_protected(self.game.turn):
+                continue
             attacking_coalition = str.lower(cp.captured.opponent.name)
             defending_coalition = str.lower(cp.captured.opponent.opponent.name)
             if attacking_coalition == "red":
@@ -246,6 +295,10 @@ class TriggerGenerator:
                     attack_coalition_int,
                     cp,
                 )
+                # Revert as soon as the attackers are gone from the zone (dead or
+                # withdrawn), without waiting for a friendly ground unit to enter --
+                # otherwise a base stays "captured" even after the intruders are
+                # wiped out from the air.
                 recapture = self._create_capture_trigger(
                     trigger_zone.id,
                     flag,
@@ -254,6 +307,7 @@ class TriggerGenerator:
                     defend_coalition_int,
                     cp,
                     flag_condition_true=True,
+                    require_capturing_in_zone=False,
                 )
                 self.mission.triggerrules.triggers.extend([capture, recapture])
 

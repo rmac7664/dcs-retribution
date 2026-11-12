@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -58,6 +59,12 @@ def _sample_debriefing() -> Debriefing:
     debriefing.air_losses = air
     debriefing.ground_losses = ground
     debriefing.base_captures = captures
+    # The aircraft headline honours the "crashes don't count" doctrine, so
+    # loss_counts reads game.settings; stub it (off = count every air loss).
+    debriefing.game = cast(
+        Any,
+        SimpleNamespace(settings=SimpleNamespace(ignore_non_combat_air_losses=False)),
+    )
     return debriefing
 
 
@@ -119,6 +126,29 @@ def test_loss_counts_partition_matches_combined_totals() -> None:
     )
 
 
+def test_lua_suppresses_player_despawn_loss_events() -> None:
+    # A player leaving the seat (spectator / mission end) makes DCS fire a
+    # crash/dead for the aircraft that must NOT count as a combat loss, while a
+    # real shootdown (and any ejection) still does. The Lua needs an in-game pass,
+    # but lock the guard's structure here so it can't silently regress.
+    script = Path("resources/plugins/base/dcs_retribution.lua").read_text(
+        encoding="utf-8"
+    )
+    # Tracks seat-leaves and ejections.
+    assert "S_EVENT_PLAYER_LEAVE_UNIT" in script
+    assert "player_left_units" in script
+    assert "ejected_units" in script
+    # The crash/dead/lost handlers gate on the despawn check.
+    assert "is_player_despawn" in script
+    despawn = script.split("local function is_player_despawn(name)", maxsplit=1)[
+        1
+    ].split("local function onEvent(event)", maxsplit=1)[0]
+    # An ejection is a real loss -> never suppressed.
+    assert "ejected_units[name]" in despawn
+    # Crash recording is now guarded, not unconditional.
+    assert "if not is_player_despawn(name) then" in script
+
+
 def test_motorpool_losses_by_type_counts_per_side() -> None:
     """motorpool_losses_by_type buckets a side's motorpool kills by unit type,
     mirroring front_line_losses_by_type. Feeds the debrief casualty screen."""
@@ -136,3 +166,31 @@ def test_motorpool_losses_by_type_counts_per_side() -> None:
 
     assert debriefing.motorpool_losses_by_type(Player.BLUE) == {t90: 2, bmp: 1}
     assert debriefing.motorpool_losses_by_type(Player.RED) == {bmp: 1}
+
+
+def test_ground_object_losses_belong_to_the_side_in_the_name() -> None:
+    """The rule the LLM's debrief documents: red_sites_lost is what RED lost, not what
+    red killed. The howtoplay text said the opposite of the code for both sides."""
+
+    def _lost(type_id: str) -> Any:
+        return SimpleNamespace(
+            theater_unit=SimpleNamespace(type=SimpleNamespace(id=type_id))
+        )
+
+    debriefing = _sample_debriefing()
+    debriefing.ground_losses = GroundLosses(
+        player_ground_objects=[
+            _lost("Patriot ln"),
+            _lost("Patriot ln"),
+            _lost("Hawk sr"),
+        ],
+        enemy_ground_objects=[_lost("S-300PS 5P85C ln")],
+    )
+
+    assert debriefing.ground_object_losses_by_type(Player.BLUE) == {
+        "Patriot ln": 2,
+        "Hawk sr": 1,
+    }
+    assert debriefing.ground_object_losses_by_type(Player.RED) == {
+        "S-300PS 5P85C ln": 1
+    }

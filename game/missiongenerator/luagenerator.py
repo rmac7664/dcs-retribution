@@ -5,6 +5,7 @@ import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
+from uuid import uuid4
 
 from dcs import Mission
 from dcs.action import DoScript, DoScriptFile
@@ -16,12 +17,19 @@ from game.data.units import UnitClass
 from game.dcs.aircrafttype import AircraftType
 from game.plugins import LuaPluginManager
 from game.theater import TheaterGroundObject
+from game.theater.theatergroup import SceneryUnit
 from game.theater.iadsnetwork.iadsrole import IadsRole
 from game.utils import escape_string_for_lua
+from .cruisemissileluadata import populate_cruise_missiles_lua
+from .gpsjammingluadata import populate_gps_jamming_lua
+from .navalmagazineluadata import populate_naval_magazines_lua
 from .missiondata import MissionData
+from .realisticcascampaign import prepare_campaign, inject_campaign
+from . import imac
 
 if TYPE_CHECKING:
     from game import Game
+    from game.unitmap import FlyingUnit, UnitMap
 
 
 class LuaGenerator:
@@ -30,21 +38,269 @@ class LuaGenerator:
         game: Game,
         mission: Mission,
         mission_data: MissionData,
+        unit_map: UnitMap | None = None,
     ) -> None:
         self.game = game
         self.mission = mission
         self.mission_data = mission_data
+        self.unit_map = unit_map
         self.plugin_scripts: list[str] = []
 
     def generate(self) -> None:
-        ewrj_triggers = [
+        # Same plugin-manager settings as injection; preflight before adding Lua.
+        realistic_cas = prepare_campaign(self, LuaPluginManager.plugins())
+        imac_options = imac.options(LuaPluginManager.plugins())
+        existing_start_triggers = [
             x for x in self.mission.triggerrules.triggers if isinstance(x, TriggerStart)
         ]
         self.generate_plugin_data()
+        self._seed_pilot_roster()
         self.inject_plugins()
-        for t in ewrj_triggers:
+        self._inject_aircraft_maintenance()
+        self._seed_scenery_objectives()
+        self._seed_persistent_damage()
+        self._inject_barcap_refuelling()
+        self._inject_sam_transit_defense()
+        inject_campaign(self, realistic_cas)
+        imac.inject(self, imac.configure(self, imac_options))
+        for t in existing_start_triggers:
             self.mission.triggerrules.triggers.remove(t)
             self.mission.triggerrules.triggers.append(t)
+
+    def _inject_sam_transit_defense(self) -> None:
+        from dcs.lua import dumps
+        from .samtransitdefense import configure
+
+        groups = configure(self.mission, self.unit_map)
+        if not groups:
+            return
+        trigger = TriggerStart(comment="Mobile SAM transit defense")
+        trigger.add_action(
+            DoScript(String("ESCALATION_SAM_TRANSIT_CONFIG=" + dumps(groups)))
+        )
+        trigger.add_action(
+            DoScriptFile(
+                self.mission.map_resource.add_resource_file(
+                    Path("resources/plugins/base/sam_transit_defense.lua")
+                )
+            )
+        )
+        self.mission.triggerrules.triggers.append(trigger)
+
+    def _inject_barcap_refuelling(self) -> None:
+        from dcs.lua import dumps
+        from .barcaprefuelling import configure
+
+        config = configure(self.game, self.mission, self.mission_data)
+        if not config:
+            return
+        trigger = TriggerStart(comment="BARCAP reactive refuelling")
+        trigger.add_action(
+            DoScript(String("ESCALATION_BARCAP_REFUELLING=" + dumps(config)))
+        )
+        script = Path("resources/plugins/base/barcap_refuelling.lua")
+        trigger.add_action(
+            DoScriptFile(self.mission.map_resource.add_resource_file(script))
+        )
+        self.mission.triggerrules.triggers.append(trigger)
+
+    def _inject_aircraft_maintenance(self) -> None:
+        settings = self.game.settings
+        morale_telemetry = (
+            settings.live_pilots_enabled
+            and settings.morale_enabled
+            and settings.morale_damaged_return != 0
+        )
+        if self.unit_map is None or not (
+            settings.aircraft_maintenance_enabled or morale_telemetry
+        ):
+            return
+        names = ",".join(
+            f'"{escape_string_for_lua(name)}"' for name in self.unit_map.aircraft
+        )
+        preamble = (
+            f'ESCALATION_AIRCRAFT_MAINTENANCE = {{mission_id="{uuid4()}",'
+            f"units={{{names}}}}}"
+        )
+        trigger = TriggerStart(comment="Aircraft maintenance telemetry")
+        trigger.add_action(DoScript(String(preamble)))
+        script = Path("resources/plugins/base/aircraft_maintenance.lua")
+        trigger.add_action(
+            DoScriptFile(self.mission.map_resource.add_resource_file(script))
+        )
+        self.mission.triggerrules.triggers.append(trigger)
+
+    def _seed_persistent_damage(self) -> None:
+        from game.missiongenerator.persistenthealth import SetUnitHealth
+        from game.persistentdamage import enabled
+
+        if self.unit_map is None or not enabled(self.game.settings):
+            return
+        rows = []
+        native_actions = []
+        for name, mapping in self.unit_map.theater_objects.items():
+            unit = mapping.theater_unit
+            if unit.alive and unit.persistent_damage_eligible:
+                rows.append(
+                    {
+                        "name": name,
+                        "health": unit.health_fraction,
+                        "native": unit.is_ship,
+                        "building": not unit.is_ship,
+                    }
+                )
+                if unit.is_ship and unit.health_fraction < 1:
+                    native_actions.append(
+                        SetUnitHealth(mapping.dcs_unit.id, unit.health_fraction)
+                    )
+        for name, scenery in self.unit_map.scenery_objects.items():
+            unit = scenery.ground_unit
+            if unit.alive and unit.persistent_damage_eligible:
+                rows.append(
+                    {
+                        "name": name,
+                        "health": unit.health_fraction,
+                        "unsupported": True,
+                        "x": unit.position.x,
+                        "z": unit.position.y,
+                    }
+                )
+        if not rows:
+            return
+        import json
+
+        # JSON's scalar values and string escaping are also valid in Lua tables.
+        entries = []
+        for row in rows:
+            entries.append(
+                "{"
+                + ", ".join(
+                    f"{key} = {json.dumps(value, ensure_ascii=False)}"
+                    for key, value in row.items()
+                )
+                + "}"
+            )
+        trigger = TriggerStart(comment="Persistent ship and building damage")
+        trigger.add_action(
+            DoScript(
+                String(
+                    "ESCALATION_PERSISTENT_DAMAGE = {\n" + ",\n".join(entries) + "\n}"
+                )
+            )
+        )
+        trigger.add_action(
+            DoScriptFile(
+                self.mission.map_resource.add_resource_file(
+                    "resources/plugins/base/persistent_damage.lua"
+                )
+            )
+        )
+        # The native action belongs to DCS's mission-trigger environment, not
+        # the separate sandbox used by DO SCRIPT. The initializer runs one
+        # second later and verifies the actual life that DCS applied.
+        for action in native_actions:
+            trigger.add_action(action)
+        self.mission.triggerrules.triggers.append(trigger)
+
+    def _seed_scenery_objectives(self) -> None:
+        """Hand the base script the position of every building objective.
+
+        DCS reports a scenery death with the object's numeric id rather than a
+        name, so the base script cannot tell which objective just lost a
+        building. It resolves that by position instead, which needs the list of
+        objectives and where they stand -- this is that list.
+
+        Objectives already destroyed are seeded too, marked dead. They are not
+        there to be scored again -- the base script pre-counts them so they never
+        are -- but to own the deaths around them: the destruction zone that
+        replays their rubble at mission start kills their scenery, and without
+        them in the list those deaths would be credited to whichever live
+        objective happened to be nearest.
+        """
+        rows = []
+        for tgo in self.game.theater.ground_objects:
+            for unit in tgo.units:
+                if not isinstance(unit, SceneryUnit):
+                    continue
+                name = escape_string_for_lua(unit.name)
+                dead = "false" if unit.alive else "true"
+                # The objective and its category are for the Mission Log, which
+                # has to name what was hit. A bomb into a factory damages a
+                # dozen separate map models with names like BLACKGUM and
+                # SILO_02, and reporting those tells the pilot nothing; the
+                # objective they belong to does.
+                objective = escape_string_for_lua(tgo.name)
+                category = escape_string_for_lua(str(tgo.category))
+                owner = tgo.control_point.captured
+                coalition = 2 if owner.is_blue else 1 if owner.is_red else 0
+                rows.append(
+                    f'  {{ name = "{name}", x = {unit.position.x}, '
+                    f"y = {unit.position.y}, dead = {dead}, "
+                    f'objective = "{objective}", category = "{category}", '
+                    f"coalition = {coalition} }},"
+                )
+        if not rows:
+            return
+
+        preamble = "ESCALATION_SCENERY_ZONES = {\n" + "\n".join(rows) + "\n}\n"
+        trigger = TriggerStart(comment="Building objectives (positions)")
+        trigger.add_action(DoScript(String(preamble)))
+        self.mission.triggerrules.triggers.append(trigger)
+        logging.info("Seeded %d building objectives for scenery matching", len(rows))
+
+    def _seed_pilot_roster(self) -> None:
+        """Hand the Mission Log the name of the pilot behind every unit.
+
+        A DCS event names a unit "STAG BARCAP|2|14|F-15C Eagle| Pilot #2". The
+        aircraft is in there, but the pilot is not: only Escalation knows who
+        was rostered into that seat. This is that mapping, and it is seeded only
+        when the plugin that reads it is switched on -- an unused table of a few
+        hundred names in every mission is pure weight.
+        """
+        if self.unit_map is None:
+            return
+        # Asked of the plugin manager, which is also what decides whether the
+        # script that reads this table gets injected. Reading game.settings
+        # directly looked equivalent and was not: the manager is a class-level
+        # singleton holding whatever Settings it was last loaded with, so
+        # starting a second campaign left it answering for the first. The script
+        # went in and the roster did not, and every message named an aircraft
+        # with no pilot behind it.
+        if not any(
+            plugin.identifier == "missionlog" and plugin.enabled
+            for plugin in LuaPluginManager.plugins()
+        ):
+            return
+
+        rows = []
+        for unit_name, flying_unit in self.unit_map.aircraft.items():
+            if flying_unit.pilot is None:
+                continue
+            name = escape_string_for_lua(unit_name)
+            pilot = escape_string_for_lua(self._addressed(flying_unit))
+            rows.append(f'  ["{name}"] = "{pilot}",')
+        show_names = str(self.game.settings.live_pilots_enabled).lower()
+        preamble = (
+            f"ESCALATION_SHOW_PILOT_NAMES = {show_names}\n"
+            "ESCALATION_PILOTS = {\n" + "\n".join(rows) + "\n}\n"
+        )
+        trigger = TriggerStart(comment="Mission Log (pilot roster)")
+        trigger.add_action(DoScript(String(preamble)))
+        self.mission.triggerrules.triggers.append(trigger)
+        logging.info("Seeded %d pilots for the mission log", len(rows))
+
+    @staticmethod
+    def _addressed(flying_unit: "FlyingUnit") -> str:
+        """The pilot as the rest of the game addresses him: rank first, when he holds one.
+
+        The in-mission log is the one place a pilot is named while you are flying with
+        him, so it should call him what the Air Wing does. Live Pilots off means nobody
+        holds a rank and it is just his name.
+        """
+        pilot = flying_unit.pilot
+        assert pilot is not None
+        rank = flying_unit.flight.squadron.pilot_rank(pilot)
+        return pilot.name if rank is None else f"{rank.abbreviation} {pilot.name}"
 
     def generate_plugin_data(self) -> None:
         lua_data = LuaData("dcsRetribution")
@@ -214,6 +470,9 @@ class LuaGenerator:
 
         # Generate IADS Lua Item
         iads_object = lua_data.add_item("IADS")
+        iads_object.add_key_value(
+            "automaticTopology", self.game.theater.iads_network.advanced_iads
+        )
         # These should always be created even if they are empty.
         iads_object.get_or_create_item("BLUE")
         iads_object.get_or_create_item("RED")
@@ -226,65 +485,31 @@ class LuaGenerator:
             iads_type = coalition.get_or_create_item(node.iads_role.value)
             iads_element = iads_type.add_item()
             iads_element.add_key_value("dcsGroupName", node.dcs_name)
+            if node.radio_candidates is not None:
+                iads_element.add_key_value("topologyKey", node.topology_key)
+                candidates = iads_element.add_item("radioCandidates")
+                for name, distance in node.radio_candidates:
+                    candidate = candidates.add_item()
+                    candidate.add_key_value("name", name)
+                    candidate.add_key_value("distance", distance)
+            if node.power_only:
+                iads_element.add_key_value("powerOnly", True)
+            if node.static_members:
+                iads_element.add_data_array("staticMembers", node.static_members)
+            if node.independent_comms:
+                iads_element.add_key_value("independentComms", True)
+            if node.requires_power:
+                iads_element.add_key_value("requiresPower", True)
+            if node.local_power_sources:
+                iads_element.add_data_array(
+                    "localPowerSources", node.local_power_sources
+                )
             if node.iads_role in [IadsRole.SAM, IadsRole.SAM_AS_EWR]:
                 # add additional SkynetProperties to SAM Sites
                 for property, value in node.properties.items():
                     iads_element.add_key_value(property, value)
             for role, connections in node.connections.items():
                 iads_element.add_data_array(role, connections)
-
-        # Add artillery and support units info
-        artillery_object = lua_data.add_item("artilleryGroups")
-        ground_artillery_group_collection = artillery_object.get_or_create_item(
-            "groundArtillery"
-        )
-        ship_artillery_group_collection = artillery_object.get_or_create_item(
-            "shipArtillery"
-        )
-
-        # First add all artillery units that are theater objects (mostly ships)
-        for ground_object in self.game.theater.ground_objects:
-            for group in ground_object.groups:
-                # Check if first unit in group is ground-based or ship artillery
-                group_first_unit = group.units[0]
-                if group_first_unit.unit_type is None:
-                    continue
-                if group_first_unit.unit_type.unit_class == UnitClass.ARTILLERY:
-                    ground_artillery_group = (
-                        ground_artillery_group_collection.add_item()
-                    )
-                    ground_artillery_group.add_key_value("groupName", group.group_name)
-                elif group_first_unit.unit_type.unit_class in (
-                    UnitClass.CRUISER,
-                    UnitClass.DESTROYER,
-                    UnitClass.FRIGATE,
-                ):
-                    # TODO: we assume that these ship classes have guns... Which might not be the case.
-                    ship_artillery_group = ship_artillery_group_collection.add_item()
-                    ship_artillery_group.add_key_value("groupName", group.group_name)
-
-        # Add artillery that are frontline groups
-        for frontline_group in (
-            self.mission_data.player_frontline_groups
-            + self.mission_data.enemy_frontline_groups
-        ):
-            if frontline_group.unit_type.unit_class == UnitClass.ARTILLERY:
-                ground_artillery_group = ground_artillery_group_collection.add_item()
-                ground_artillery_group.add_key_value(
-                    "groupName", frontline_group.group_name
-                )
-
-        # Add forward observer (FO) (TODO: maybe adding new flight type "Foward Observer"?)
-        forward_observer_object = lua_data.add_item("forwardObserverUnits")
-        for flight in self.mission_data.flights:
-            if len(flight.client_units) == 0:
-                continue
-            if flight.flight_type != FlightType.ARMED_RECON:
-                continue
-
-            for client_unit in flight.client_units:
-                forward_observer = forward_observer_object.add_item()
-                forward_observer.add_key_value("unitName", client_unit.name)
 
         escorts_object = lua_data.add_item("Escorts")
         for escort in self.mission_data.escorts:
@@ -294,8 +519,28 @@ class LuaGenerator:
             escort_item.add_key_value(
                 "engagementRangeMeters", str(escort.engagement_range_meters)
             )
+            if escort.release_flag is not None:
+                escort_item.add_key_value("releaseFlag", escort.release_flag)
 
-        trigger = TriggerStart(comment="Set DCS Retribution data")
+        # Emits dcsRetribution.cruiseMissiles only when the setting is on and a live
+        # land-attack ship group still has missiles; the cruisemissiles plugin then
+        # fires the auto raids plus the F10 call-for-fire and mirrors what it spent
+        # back for the turn-boundary magazine debit.
+        populate_cruise_missiles_lua(lua_data, self.game)
+        # Cross-turn anti-ship magazines: emits the naval-magazine block only when the
+        # feature is on and a live naval group exists. The plugin releases ships to
+        # weapons-free across a window and counts real anti-ship shots against the
+        # campaign stock, mirroring the expenditure back for the turn-boundary debit.
+        # Its weapon set is disjoint from the cruise-missile one above, so a shot is
+        # never charged to both magazines.
+        populate_naval_magazines_lua(lua_data, self.game, self.mission_data)
+        # GPS jamming: hands the plugin every live jammer's position, reach and miss
+        # radius, plus the curated satellite-guided weapon patterns. Emits nothing
+        # unless the setting is on and a live jammer exists, so an ordinary mission
+        # carries no gpsJamming node at all and the plugin no-ops.
+        populate_gps_jamming_lua(lua_data, self.game, self.mission_data)
+
+        trigger = TriggerStart(comment="Set DCS Escalation data")
         trigger.add_action(DoScript(String(lua_data.create_operations_lua())))
         self.mission.triggerrules.triggers.append(trigger)
 
@@ -350,15 +595,19 @@ class LuaGenerator:
 
 class LuaValue:
     key: Optional[str]
-    value: str | list[str]
+    value: str | list[str] | bool | int
 
-    def __init__(self, key: Optional[str], value: str | list[str]):
+    def __init__(self, key: Optional[str], value: str | list[str] | bool | int):
         self.key = key
         self.value = value
 
     def serialize(self) -> str:
         serialized_value = self.key + " = " if self.key else ""
-        if isinstance(self.value, str):
+        if isinstance(self.value, bool):
+            serialized_value += "true" if self.value else "false"
+        elif isinstance(self.value, int):
+            serialized_value += str(self.value)
+        elif isinstance(self.value, str):
             serialized_value += f'"{escape_string_for_lua(self.value)}"'
         else:
             escaped_values = [f'"{escape_string_for_lua(v)}"' for v in self.value]
@@ -383,7 +632,7 @@ class LuaItem(ABC):
     def add_data_array(self, key: str, values: list[str]) -> None:
         self._add_value(LuaValue(key, values))
 
-    def add_key_value(self, key: str, value: str) -> None:
+    def add_key_value(self, key: str, value: str | bool | int) -> None:
         self._add_value(LuaValue(key, value))
 
     def _add_value(self, value: LuaValue) -> None:
@@ -459,6 +708,13 @@ class LuaData(LuaItem):
         if self.objects:
             # nested objects
             serialized_objects = [o.serialize(level + 1) for o in self.objects]
+            # A node's own key/value pairs used to be dropped whenever it also had
+            # children, because this branch emitted the children alone. They are
+            # entries of the same table, so emit them alongside -- pairs first. The
+            # naval magazines node lost its `stagger` and `metered` flags this way,
+            # which left the plugin reading nil and both features silently off.
+            pairs = self.value if isinstance(self.value, list) else [self.value]
+            serialized_objects = [v.serialize() for v in pairs] + serialized_objects
             if self.name:
                 if self.name is not self.base_name:
                     serialized_name += self.name + " = "

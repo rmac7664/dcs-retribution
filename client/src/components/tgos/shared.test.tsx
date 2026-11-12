@@ -1,0 +1,243 @@
+import { render } from "@testing-library/react";
+import { Tgo as TgoModel } from "../../api/liberationApi";
+import { renderWithProviders } from "../../testutils";
+import { waitFor } from "@testing-library/react";
+import MobileTgo from "./MobileTgo";
+import Tgo from "./Tgo";
+import { formatInventory, TgoTooltip } from "./shared";
+
+const mockMarker = jest.fn((_props: any) => null);
+jest.mock("react-leaflet", () => ({
+  Marker: (props: any) => {
+    mockMarker(props);
+    return null;
+  },
+  Polyline: () => null,
+  Tooltip: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+}));
+
+jest.mock("../../api/liberationApi", () => ({
+  useClearTgoDestinationMutation: () => [jest.fn()],
+  useOpenNewTgoPackageDialogMutation: () => [jest.fn()],
+  useOpenTgoInfoDialogMutation: () => [jest.fn()],
+  useSetTgoDestinationMutation: () => [jest.fn(), { isLoading: false }],
+}));
+
+const tgo = (overrides: Partial<TgoModel> = {}): TgoModel => ({
+  id: "tgo-id",
+  name: "Motorpool",
+  control_point_name: "Base",
+  category: "motorpool",
+  blue: true,
+  position: { lat: 0, lng: 0 },
+  units: [],
+  reserve_units: ["2228 | M1 Abrams", "2229 | M1 Abrams"],
+  expected_inventory: [
+    {
+      unit_type: "M-1 Abrams",
+      display_name: "M1 Abrams",
+      count: 2,
+    },
+  ],
+  unrendered_reserve: [],
+  in_transit_units: [],
+  threat_ranges: [],
+  detection_ranges: [],
+  dead: false,
+  // Required by the fork's Tgo type, which carries the repair and purchase state.
+  purchasable: false,
+  repairing: false,
+  sidc: "SFGPUCI----K---",
+  mobile: false,
+  ...overrides,
+});
+
+describe("formatInventory", () => {
+  it("returns None for an empty inventory", () => {
+    expect(formatInventory([])).toBe("None");
+  });
+
+  it("preserves one row for every unit, including duplicate types", () => {
+    expect(formatInventory(["2229 | M1 Abrams", "2228 | M1 Abrams"])).toBe(
+      "2229 | M1 Abrams\n2228 | M1 Abrams",
+    );
+  });
+});
+
+describe("TgoTooltip", () => {
+  it.each(["armor", "aa", "ewr"])(
+    "shows movement and destination for a moving %s group",
+    (category) => {
+      render(
+        <TgoTooltip
+          tgo={tgo({
+            category,
+            in_transit: true,
+            movement_destination_label: "Tonopah Test Range",
+          })}
+        />,
+      );
+      expect(document.body.textContent).toContain("Moving to Tonopah Test Range");
+    },
+  );
+
+  it.each([
+    "front line Tonopah / Groom Lake",
+    "N37.53200° W116.29400°",
+  ])("shows a front or GPS destination (%s)", (label) => {
+    render(
+      <TgoTooltip
+        tgo={tgo({
+          category: "armor",
+          in_transit: true,
+          movement_destination_label: label,
+        })}
+      />,
+    );
+    expect(document.body.textContent).toContain(`Moving to ${label}`);
+  });
+
+  it("removes movement text when the group stops even if its old label remains", () => {
+    const moving = tgo({
+      category: "armor",
+      in_transit: true,
+      movement_destination_label: "Tonopah",
+    });
+    const { rerender } = render(<TgoTooltip tgo={moving} />);
+    expect(document.body.textContent).toContain("Moving to Tonopah");
+    rerender(<TgoTooltip tgo={{ ...moving, in_transit: false }} />);
+    expect(document.body.textContent).not.toContain("Moving");
+  });
+
+  it("shows generic movement without exposing an enemy destination", () => {
+    render(
+      <TgoTooltip
+        tgo={tgo({
+          category: "armor",
+          blue: false,
+          in_transit: true,
+          movement_destination_label: "Secret destination",
+        })}
+      />,
+    );
+    expect(document.body.textContent).toContain("Moving");
+    expect(document.body.textContent).not.toContain("Secret destination");
+  });
+
+  it("supports a relocating SAM without destination metadata", () => {
+    render(
+      <TgoTooltip tgo={tgo({ category: "aa", iads_state: "relocating" })} />,
+    );
+    expect(document.body.textContent).toContain("Moving");
+    expect(document.body.textContent).not.toContain("Moving to");
+  });
+
+  it("renders count-only motorpool aggregates without fabricated ids", () => {
+    const { container } = render(
+      <TgoTooltip
+        tgo={tgo({
+          reserve_units: ["2228 | M1 Abrams"],
+          unrendered_reserve: [
+            { unit_type: "M-1 Abrams", display_name: "M1 Abrams", count: 3 },
+          ],
+          in_transit_units: [
+            { unit_type: "M-2 Bradley", display_name: "M2 Bradley", count: 2 },
+          ],
+        })}
+      />,
+    );
+
+    expect(container.innerHTML).toContain(
+      "Motorpool reserve:<br>2228 | M1 Abrams<br>Expected next turn:<br>2 × M1 Abrams<br>Unrendered reserve:<br>3 × M1 Abrams<br>In transit:<br>2 × M2 Bradley",
+    );
+    expect(container.textContent).not.toContain("0001 |");
+    expect(container.textContent).not.toContain("0002 |");
+  });
+
+  it("keeps empty reserve, unrendered, and transit inventories compact", () => {
+    const { container } = render(
+      <TgoTooltip
+        tgo={tgo({
+          reserve_units: [],
+          expected_inventory: [],
+          unrendered_reserve: [],
+          in_transit_units: [],
+        })}
+      />,
+    );
+
+    expect(container.innerHTML).toContain(
+      "Motorpool reserve: None<br>Expected next turn: None<br>Unrendered reserve: None<br>In transit: None",
+    );
+    expect(container.innerHTML).not.toContain("Motorpool reserve:<br>None");
+    expect(container.innerHTML).not.toContain("Unrendered reserve:<br>None");
+    expect(container.innerHTML).not.toContain("In transit:<br>None");
+  });
+
+  it("updates a mobile TGO marker when its streamed destination changes", async () => {
+    const firstDestination = { lat: 1, lng: 2 };
+    const secondDestination = { lat: 3, lng: 4 };
+    const initialTgo = tgo({
+      mobile: true,
+      position: { lat: 0, lng: 0 },
+      destination: firstDestination,
+    });
+    const { rerender } = renderWithProviders(<MobileTgo tgo={initialTgo} />);
+
+    expect(
+      mockMarker.mock.calls.some(
+        ([props]) => props?.position === firstDestination,
+      ),
+    ).toBe(true);
+
+    rerender(
+      <MobileTgo tgo={{ ...initialTgo, destination: secondDestination }} />,
+    );
+
+    await waitFor(() => {
+      expect(
+        mockMarker.mock.calls.some(
+          ([props]) => props?.position === secondDestination,
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("updates armor bar colour when its streamed transit state changes", () => {
+    mockMarker.mockClear();
+    const moving = tgo({
+      category: "armor",
+      sidc: "10031020001205000000",
+      in_transit: true,
+    });
+    const { rerender } = renderWithProviders(<Tgo tgo={moving} />);
+    const lastIconSvg = () => {
+      const props = mockMarker.mock.calls[mockMarker.mock.calls.length - 1][0];
+      const url = props.icon.options.iconUrl as string;
+      return decodeURIComponent(url.slice(url.indexOf(",") + 1));
+    };
+    expect(lastIconSvg()).toContain("rgb(70,160,255)");
+    rerender(<Tgo tgo={{ ...moving, in_transit: false }} />);
+    expect(lastIconSvg()).not.toContain("rgb(70,160,255)");
+    expect(lastIconSvg()).toContain("rgb(0,255,0)");
+  });
+
+  it("keeps legacy units for non-motorpool TGOs", () => {
+    render(
+      <TgoTooltip
+        tgo={tgo({
+          category: "ship",
+          units: ["F-16C"],
+          reserve_units: [],
+          unrendered_reserve: [],
+          in_transit_units: [],
+        })}
+      />,
+    );
+
+    expect(document.body.textContent).toContain("F-16C");
+    expect(document.body.textContent).not.toContain("Motorpool reserve:");
+  });
+});

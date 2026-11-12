@@ -1,17 +1,31 @@
 ---
 name: Syria - Full Map
 theater: Syria
-authors: Plob
+authors: Plob, modified by juanjux
 description: <p><p>A long campaign across the syria map, strap in.</p>
 recommended_player_faction: Bluefor Modern
 recommended_enemy_faction: Syria 2012'ish
 recommended_start_date: 2012-06-05
 miz: syria_full_map.miz
 performance: 3
+advanced_iads: true
 version: "10.5"
+# GPS jamming: one site on the enemy EWR marker whose 15 nm radius covers the
+# most of its own air defences. No radar on it, so it is a STRIKE target, not
+# SEAD, and a satellite-guided weapon aimed inside the bubble lands wide.
+ground_forces:
+  Ground-9: GPS Jamming Site (Red)
+  Blue GPS Jammer Incirlik: GPS Jamming Site (Blue, Unescorted)
 squadrons:
   # Incirlik
   16:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - MQ-9 Reaper
+      size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - KC-135 Stratotanker MPRS
@@ -243,6 +257,13 @@ squadrons:
         - Su-30 Flanker-C
   # Ramat David
   30:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - WingLoong-I
+      size: 2
+      pilots: 6
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
@@ -295,3 +316,8 @@ squadrons:
       secondary: air-to-ground
       aircraft:
         - AV-8B Harrier II Night Attack
+
+settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: true

@@ -15,8 +15,7 @@ from typing import Any, Dict, Iterator, List, Optional, TYPE_CHECKING, Type, Tup
 
 import dcs.vehicles
 from dcs import Mission, Point, unitgroup
-from dcs.action import DoScript, SceneryDestructionZone
-from dcs.condition import MapObjectIsDead
+from dcs.action import SceneryDestructionZone
 from dcs.countries import *
 from dcs.country import Country
 from dcs.point import StaticPoint, PointAction
@@ -44,16 +43,13 @@ from dcs.task import (
     OptROE,
 )
 from dcs.terrain import Airport
-from dcs.translation import String
 from dcs.triggers import (
-    Event,
-    TriggerOnce,
     TriggerStart,
     TriggerZone,
     TriggerZoneQuadPoint,
 )
 from dcs.unit import Unit, InvisibleFARP, BaseFARP, SingleHeliPad, FARP
-from dcs.unitgroup import MovingGroup, ShipGroup, StaticGroup, VehicleGroup
+from dcs.unitgroup import Group, MovingGroup, ShipGroup, StaticGroup, VehicleGroup
 from dcs.unittype import ShipType, VehicleType
 from dcs.vehicles import vehicle_map, Unarmed, Fortification as VehicleFortification
 
@@ -61,6 +57,7 @@ from game.missiongenerator.groundforcepainter import (
     NavalForcePainter,
     GroundForcePainter,
 )
+from game.mfd import shows_on_mfd
 from game.missiongenerator.missiondata import CarrierInfo, MissionData
 from game.point_with_heading import PointWithHeading
 from game.radio.RadioFrequencyContainer import RadioFrequencyContainer
@@ -83,6 +80,7 @@ from game.theater import (
 )
 from game.theater.theatergroundobject import (
     CarrierGroundObject,
+    CoastalSiteGroundObject,
     EwrGroundObject,
     GenericCarrierGroundObject,
     LhaGroundObject,
@@ -99,6 +97,12 @@ if TYPE_CHECKING:
 
 FARP_FRONTLINE_DISTANCE = 10000
 AA_CP_MIN_DISTANCE = 40000
+
+from game.data.missile_ranges import MISSILE_SITE_MIN_RANGE_M
+
+# How much of a launcher's nominal envelope is worth using. The last few per cent
+# are brochure range: the round leaves but does not arrive where it was sent.
+from game.data.missile_ranges import USABLE_RANGE_FRACTION
 
 # Offset (meters) from airport position to place the portable TACAN beacon
 _PORTABLE_TACAN_OFFSET_M = 50
@@ -288,8 +292,18 @@ class GroundObjectGenerator:
         return self.game.iads_considerate_culling(self.ground_object)
 
     def generate(self) -> None:
-        if self.culled:
+        if getattr(self.ground_object, "in_transit", False):
+            from game.missiongenerator.armormovement import generate_armor_movement
+
+            generate_armor_movement(self)
             return
+        # Culling skips what costs performance: spawned statics, vehicles and ships.
+        # It must NOT skip the scenery-objective apparatus below -- the map buildings
+        # backing a scenery objective exist whether or not the campaign spawns
+        # anything, so a culled trigger zone leaves a bombable, visibly collapsing
+        # target whose death is never recorded and the strike vanishes from the
+        # debrief. The zone, its kill-tracking rule and the IADS stand-in cost nothing.
+        culled = self.culled
         for group in self.ground_object.groups:
             vehicle_units = []
             ship_units = []
@@ -297,7 +311,7 @@ class GroundObjectGenerator:
             for unit in group.units:
                 if unit.is_static:
                     if isinstance(unit, SceneryUnit):
-                        # Special handling for scenery objects
+                        # Special handling for scenery objects: never culled.
                         self.add_trigger_zone_for_scenery(unit)
                         if (
                             self.game.settings.plugin_option("skynetiads")
@@ -306,7 +320,7 @@ class GroundObjectGenerator:
                         ):
                             # Generate a unit which can be controlled by skynet
                             self.generate_iads_command_unit(unit)
-                    else:
+                    elif not culled:
                         # Create a static group for each static unit
                         self.create_static_group(unit)
                 elif unit.is_vehicle and unit.alive:
@@ -315,6 +329,8 @@ class GroundObjectGenerator:
                 elif unit.is_ship and unit.alive:
                     # All alive Ships
                     ship_units.append(unit)
+            if culled:
+                continue
             if vehicle_units:
                 self.create_vehicle_group(group.group_name, vehicle_units)
             if ship_units:
@@ -346,7 +362,13 @@ class GroundObjectGenerator:
                 self.enable_eplrs(vehicle_group, unit.type)
                 self.enable_ewr(vehicle_group)
                 vehicle_group.units[0].name = unit.unit_name
-                self.set_alarm_state(vehicle_group)
+                reserve = getattr(self.ground_object, "reserve_from_base", False)
+                self.set_alarm_state(vehicle_group, force_red=reserve)
+                if reserve:
+                    vehicle_group.points[0].tasks.append(
+                        OptROE(OptROE.Values.WeaponFree)
+                    )
+                self.set_coastal_engagement(vehicle_group)
                 GroundForcePainter(faction, vehicle_group.units[0]).apply_livery()
             else:
                 vehicle_unit = self.m.vehicle(unit.unit_name, unit.type)
@@ -358,7 +380,9 @@ class GroundObjectGenerator:
             self._register_theater_unit(unit, vehicle_group.units[-1])
         if vehicle_group is None:
             raise RuntimeError(f"Error creating VehicleGroup for {group_name}")
-        vehicle_group.hidden_on_mfd = self.ground_object.hide_on_mfd
+        vehicle_group.hidden_on_mfd = not shows_on_mfd(
+            self.ground_object, self.game.settings
+        )
         return vehicle_group
 
     def create_ship_group(
@@ -396,7 +420,9 @@ class GroundObjectGenerator:
             self._register_theater_unit(unit, ship_group.units[-1])
         if ship_group is None:
             raise RuntimeError(f"Error creating ShipGroup for {group_name}")
-        ship_group.hidden_on_mfd = self.ground_object.hide_on_mfd
+        ship_group.hidden_on_mfd = not shows_on_mfd(
+            self.ground_object, self.game.settings
+        )
         return ship_group
 
     def sail_to_destination(self, destination: Point, group: ShipGroup) -> Heading:
@@ -441,15 +467,41 @@ class GroundObjectGenerator:
     def set_alarm_state(self, group: MovingGroup[Any], force_red: bool = False) -> None:
         # Ships pass force_red so they always defend; the perf toggle only exists
         # to let ground SAMs start "dark" for Skynet IADS, not to disarm fleets.
+        # Which is exactly why the Skynet radius has to be read here too.
         # EWR sites must likewise never start dark: a GREEN alarm state leaves the
         # radar passive (no emission), which would defeat the EWR() enroute task, so
         # they always come up RED regardless of the perf toggle. Skynet drives EWRs
         # live anyway, so this stays consistent with IADS control.
+        # A site outside the Skynet radius is not in the network, so nothing will
+        # ever wake it: at green it would sit there dark while a flight that strayed
+        # off the planned route flew over it. It comes up red and defends itself.
         ewr = isinstance(self.ground_object, EwrGroundObject)
-        if force_red or ewr or self.game.settings.perf_red_alert_state:
+        outside_the_network = self.game.settings.plugin_option(
+            "skynetiads"
+        ) and self.game.skynet_culled(self.ground_object)
+        if (
+            force_red
+            or ewr
+            or outside_the_network
+            or self.game.settings.perf_red_alert_state
+        ):
             group.points[0].tasks.append(OptAlarmState(2))
         else:
             group.points[0].tasks.append(OptAlarmState(1))
+
+    def set_coastal_engagement(self, group: MovingGroup[Any]) -> None:
+        # A coastal anti-ship battery engages the same way a fleet does (see
+        # set_ship_engagement): by OPTION, not by task. A forced RED alarm plus
+        # weapon-free ROE make it fire on its own at any enemy hull entering range;
+        # left on the DCS default it simply watches ships sail past. Off by default
+        # because a mod battery firing anti-ship missiles has crashed DCS before, so
+        # with the setting off this is byte-identical to not being here.
+        if not self.game.settings.coastal_batteries_engage_ships:
+            return
+        if not isinstance(self.ground_object, CoastalSiteGroundObject):
+            return
+        group.points[0].tasks.append(OptAlarmState(2))
+        group.points[0].tasks.append(OptROE(OptROE.Values.WeaponFree))
 
     def set_ship_engagement(self, group: ShipGroup) -> None:
         # Make fleets fight rather than sit passive. Ship weapons engagement in DCS is
@@ -460,6 +512,16 @@ class GroundObjectGenerator:
         # for a ship controller (DCS me_action_db offers ships only NoTask), and feeding
         # it to the naval AI crashed DCS (ACCESS_VIOLATION in AI::ControllerStack::start).
         # Upstream ships likewise engage on ROE/alarm alone.
+        #
+        # With the release stagger on, ships instead generate on ReturnFire and the
+        # navalmagazines plugin releases each group to weapons-free at its own moment
+        # inside a window: a modern anti-ship missile out-ranges the whole theatre, so
+        # "in range" is true at t=0 and an unstaggered fleet empties its tubes in the
+        # opening minute. ReturnFire and never WeaponHold -- the point is to delay who
+        # INITIATES, and a holding ship would be a defenceless one while it waits.
+        if self.game.settings.plugin_option_or("navalmagazines.releaseStagger", False):
+            group.points[0].tasks.append(OptROE(OptROE.Values.ReturnFire))
+            return
         group.points[0].tasks.append(OptROE(OptROE.Values.WeaponFree))
 
     def _register_theater_unit(
@@ -499,13 +561,16 @@ class GroundObjectGenerator:
                 color,
                 scenery.zone.properties,
             )
-        # DCS only visually shows a scenery object is dead when
-        # this trigger rule is applied.  Otherwise you can kill a
-        # structure twice.
+        # DCS only visually shows a scenery object is dead when this trigger
+        # rule is applied. Otherwise you can kill a structure twice.
+        #
+        # Live objectives get no trigger at all: the MapObjectIsDead rule that
+        # used to sit here could not fire, because it is true only once EVERY map
+        # object in the zone is dead and those polygons contain scenery that
+        # cannot be destroyed (a WOODPILE_01 reports a life of 1e38). Deaths are
+        # matched to the objective by position instead, in the base script.
         if not scenery.alive:
             self.generate_destruction_trigger_rule(trigger_zone)
-        else:
-            self.generate_on_dead_trigger_rule(trigger_zone)
 
         self.unit_map.add_scenery(scenery, trigger_zone)
 
@@ -515,17 +580,6 @@ class GroundObjectGenerator:
         t.actions.append(
             SceneryDestructionZone(destruction_level=100, zone=trigger_zone.id)
         )
-        self.m.triggerrules.triggers.append(t)
-
-    def generate_on_dead_trigger_rule(self, trigger_zone: TriggerZone) -> None:
-        # Add a TriggerRule with the MapObjectIsDead condition to recognize killed
-        # map objects and add them to the state.json with a DoScript
-        t = TriggerOnce(Event.NoEvent, f"MapObjectIsDead Trigger {trigger_zone.id}")
-        t.add_condition(MapObjectIsDead(trigger_zone.id))
-        script_string = String(
-            f'dead_events[#dead_events + 1] = "{trigger_zone.name}"\ndirty_state = true'
-        )
-        t.actions.append(DoScript(script_string))
         self.m.triggerrules.triggers.append(t)
 
     def generate_iads_command_unit(self, unit: SceneryUnit) -> None:
@@ -551,54 +605,119 @@ class MissileSiteGenerator(GroundObjectGenerator):
 
     def generate(self) -> None:
         super(MissileSiteGenerator, self).generate()
+        # The fire task waits for plan_fire_mission(). Aiming at a group rather than a
+        # coordinate means the target's group has to exist, and the generator walks the
+        # theater one control point at a time -- half of it does not exist yet.
 
+    def plan_fire_mission(self) -> None:
+        """Task the site, once every group in the theater has been generated.
+
+        Fired at a point, because that is the only offensive task DCS ground AI honours.
+        Naming the target group with AttackGroup was tried and measured: of seven sites,
+        the six given a group fired nothing all mission and the one that fell back to a
+        point fired three Scuds. The engine ignores it.
+
+        The aimpoint is a real objective rather than the control point's map coordinate,
+        which is what used to put these salvos in open country. And it is the objective
+        itself, with nothing added: a site holds three launchers all firing at the same
+        point, and DCS walks that salvo along the firing line for about a kilometre by
+        itself -- measured from the crater trail. Displacing the aimpoint by a CEP, as
+        this did, does not model that spread. It moves the whole trail off the target,
+        which is the one thing it can do.
+        """
         if not self.game.settings.generate_fire_tasks_for_missile_sites:
             return
 
         # Note : Only the SCUD missiles group can fire (V1 site cannot fire in game right now)
-        # TODO : Should be pre-planned ?
         for group in self.ground_object.groups:
             vg = self.m.find_group(group.group_name)
-            if vg is not None:
-                targets = self.possible_missile_targets()
-                if targets:
-                    target = random.choice(targets)
-                    real_target = target.point_from_heading(
-                        Heading.random().degrees, random.randint(0, 2500)
-                    )
-                    hold = ControlledTask(Hold())
-                    hold.stop_after_duration(
-                        random.randint(
-                            60,
-                            int(
-                                self.game.settings.desired_player_mission_duration.total_seconds()
-                            ),
-                        )
-                    )
-                    vg.points[0].add_task(hold)
-                    vg.points[0].add_task(FireAtPoint(real_target))
-                    logging.info("Set up fire task for missile group.")
-                else:
-                    logging.info(
-                        "Couldn't setup missile site to fire, no valid target in range."
-                    )
-            else:
+            if vg is None:
                 logging.info(
                     "Couldn't setup missile site to fire, group was not generated."
                 )
+                continue
 
-    def possible_missile_targets(self) -> List[Point]:
+            from game import missiletargets
+            from types import SimpleNamespace
+
+            assignment = missiletargets.stored(self.ground_object)
+            target: Any
+            if assignment is not None:
+                try:
+                    point = missiletargets.aimpoint(self.game, self.ground_object)
+                    if point is None or not missiletargets.in_range(
+                        self.game, self.ground_object, point, group.group_name
+                    ):
+                        continue
+                except ValueError:
+                    logging.info(
+                        "Missile site's assigned target is unavailable; holding fire"
+                    )
+                    continue
+                target = SimpleNamespace(position=point, name=assignment.name)
+            else:
+                targets = self.possible_missile_targets()
+                if not targets:
+                    logging.info("No valid missile-site target in range")
+                    continue
+                target = random.choice(targets)
+            hold = ControlledTask(Hold())
+            hold.stop_after_duration(
+                random.randint(
+                    60,
+                    int(
+                        self.game.settings.desired_player_mission_duration.total_seconds()
+                    ),
+                )
+            )
+            vg.points[0].add_task(hold)
+
+            vg.points[0].add_task(FireAtPoint(target.position))
+            logging.info(f"Missile site {vg.name} tasked at {target.name}")
+
+    def possible_missile_targets(self) -> List[TheaterGroundObject]:
+        """Enemy objectives this site can actually reach.
+
+        A control point's ``position`` is a campaign-map coordinate, not a target: for
+        an airfield it is the reference point, and nothing in particular stands there.
+        Aiming at it is why missile sites reliably cratered empty grass. Real ground
+        objects are the targets, bounded at both ends -- several of these launchers
+        have a minimum range as well, which nothing here used to respect.
         """
-        Find enemy control points in range
-        :return: List of possible missile targets
-        """
-        targets: List[Point] = []
+        minimum = self.missile_site_min_range
+        # Not the last metre of the envelope: an ATACMS tasked at 296 of its nominal
+        # 300 km flew over the aimpoint and came down 18 km beyond, measured in game.
+        # A launcher that can reach nothing worth shooting holds its fire, which beats
+        # cratering empty desert.
+        maximum = int(self.missile_site_range * USABLE_RANGE_FRACTION)
+        origin = self.ground_object.position
+        targets: List[TheaterGroundObject] = []
         for cp in self.game.theater.controlpoints:
-            if cp.captured != self.ground_object.control_point.captured:
-                distance = cp.position.distance_to_point(self.ground_object.position)
-                if distance < self.missile_site_range:
-                    targets.append(cp.position)
+            if cp.captured == self.ground_object.control_point.captured:
+                continue
+            for tgo in cp.ground_objects:
+                # Ships move; a fire mission aimed where one used to be is the old bug.
+                if tgo.is_dead or tgo.category == "ship":
+                    continue
+                if minimum <= tgo.position.distance_to_point(origin) < maximum:
+                    targets.append(tgo)
         return targets
+
+    @property
+    def missile_site_min_range(self) -> int:
+        """How close this site cannot shoot.
+
+        pydcs carries no minimum, so it comes from a table of what the units declare.
+        The least capable launcher on the site sets it: a battery is only as flexible
+        as the weapon that needs the most room.
+        """
+        site_min = 0
+        for group in self.ground_object.groups:
+            vg = self.m.find_group(group.group_name)
+            if vg is not None:
+                for u in vg.units:
+                    site_min = max(site_min, MISSILE_SITE_MIN_RANGE_M.get(u.type, 0))
+        return site_min
 
     @property
     def missile_site_range(self) -> int:
@@ -695,10 +814,15 @@ class GenericCarrierGenerator(GroundObjectGenerator):
                     tacan = self.tacan_registry.alloc_for_band(
                         TacanBand.X, TacanUsage.TransmitReceive
                     )
+                    # Persist back so subsequent turns reuse the same channel
+                    # and the UI (base dialog, tooltip) reflects the value
+                    # instead of "AUTO".
+                    self.control_point.tacan = tacan
                 else:
                     tacan = self.control_point.tacan
                 if self.control_point.tcn_name is None:
                     tacan_callsign = self.tacan_callsign()
+                    self.control_point.tcn_name = tacan_callsign
                 else:
                     tacan_callsign = self.control_point.tcn_name
                 link4 = None
@@ -719,7 +843,12 @@ class GenericCarrierGenerator(GroundObjectGenerator):
                     ship_group, tacan, tacan_callsign, icls, icls_name, link4
                 )
                 self.add_runway_data(
-                    brc or Heading.from_degrees(0), atc, tacan, tacan_callsign, icls
+                    brc or Heading.from_degrees(0),
+                    atc,
+                    tacan,
+                    tacan_callsign,
+                    icls,
+                    link4,
                 )
                 self.mission_data.carriers.append(
                     CarrierInfo(
@@ -795,6 +924,7 @@ class GenericCarrierGenerator(GroundObjectGenerator):
         tacan: TacanChannel,
         callsign: str,
         icls: Optional[int],
+        link4: Optional[RadioFrequency] = None,
     ) -> None:
         # This relies on one control point mapping exactly
         # to one LHA, carrier, or other usable "runway".
@@ -811,6 +941,7 @@ class GenericCarrierGenerator(GroundObjectGenerator):
             tacan=tacan,
             tacan_callsign=callsign,
             icls=icls,
+            link4=link4,
         )
 
     def red_crown_frequency(
@@ -1486,21 +1617,46 @@ class PortableTacanGenerator:
         assigner = RunwayAssigner(self.game.conditions)
         runway_data = assigner.get_preferred_runway(self.game.theater, airport)
         if runway_data.tacan is not None:
+            # Built-in TACAN from the terrain. Reflect it on the airfield so the
+            # base dialog, map tooltip and other UI surfaces show it just like
+            # they do for portable beacons; no portable beacon needs to be
+            # placed.
+            self.airfield.tacan = runway_data.tacan
+            self.airfield.tcn_name = runway_data.tacan_callsign
             return
 
-        # Allocate a TACAN channel from the X band.
-        try:
-            tacan = self.tacan_registry.alloc_for_band(
-                TacanBand.X, TacanUsage.TransmitReceive
-            )
-        except OutOfTacanChannelsError:
-            logging.warning(
-                "No TACAN channels available for portable beacon at %s",
-                self.airfield.name,
-            )
+        # No built-in beacon. If the portable-TACAN feature is disabled, leave
+        # this airfield without a TACAN at all -- don't allocate or place
+        # anything.
+        if not self.game.settings.generate_portable_tacans:
             return
 
-        callsign = self._derive_callsign(self.airfield.name)
+        # Re-use a previously assigned TACAN channel and callsign for this
+        # airfield if it has one (set by the player from the base dialog, or
+        # auto-allocated on an earlier turn). Otherwise allocate fresh and
+        # persist the choice on the airfield so it stays stable across turns
+        # and is visible in tooltips/briefings even before the next mission
+        # generation.
+        if self.airfield.tacan is not None:
+            tacan = self.airfield.tacan
+        else:
+            try:
+                tacan = self.tacan_registry.alloc_for_band(
+                    TacanBand.X, TacanUsage.TransmitReceive
+                )
+            except OutOfTacanChannelsError:
+                logging.warning(
+                    "No TACAN channels available for portable beacon at %s",
+                    self.airfield.name,
+                )
+                return
+            self.airfield.tacan = tacan
+
+        if self.airfield.tcn_name is not None:
+            callsign = self.airfield.tcn_name
+        else:
+            callsign = self._derive_callsign(self.airfield.name)
+            self.airfield.tcn_name = callsign
 
         # Place the portable TACAN beacon near the airport reference point.
         position = airport.position.point_from_heading(
@@ -1508,7 +1664,7 @@ class PortableTacanGenerator:
         )
         group = self.mission.vehicle_group(
             country=self.country,
-            name=f"{self.airfield.name} TACAN",
+            name=f"{self.airfield.name} TACAN {tacan} ({callsign})",
             _type=VehicleFortification.TACAN_beacon,
             position=position,
             group_size=1,
@@ -1611,6 +1767,8 @@ class TgoGenerator:
         # import cycle; hoisted here so it resolves once per call, not per TGO.
         from game.missiongenerator.motorpoolgenerator import MotorpoolGenerator
 
+        missile_sites: List[MissileSiteGenerator] = []
+
         for cp in self.game.theater.controlpoints:
             # Use neutral country for neutral control points
             if cp.captured is Player.NEUTRAL:
@@ -1689,6 +1847,7 @@ class TgoGenerator:
                     generator = MissileSiteGenerator(
                         ground_object, country, self.game, self.m, self.unit_map
                     )
+                    missile_sites.append(generator)
                 elif isinstance(ground_object, MotorpoolGroundObject):
                     generator = MotorpoolGenerator(
                         ground_object, country, self.game, self.m, self.unit_map
@@ -1699,13 +1858,11 @@ class TgoGenerator:
                     )
                 generator.generate()
 
-            # Place portable TACAN beacons at blue airfields without built-in
-            # TACAN, if the setting is enabled.
-            if (
-                self.game.settings.generate_portable_tacans
-                and isinstance(cp, Airfield)
-                and cp.captured.is_blue
-            ):
+            # Reflect built-in airfield TACAN (and, if the setting is on,
+            # place portable beacons at airfields without a built-in TACAN) so
+            # the UI surfaces (base dialog, map tooltip, briefing) can show
+            # the channel everywhere.
+            if isinstance(cp, Airfield) and cp.captured.is_blue:
                 portable_tacan_gen = PortableTacanGenerator(
                     self.m,
                     self.game,
@@ -1716,5 +1873,10 @@ class TgoGenerator:
                     self._portable_tacan_callsigns,
                 )
                 portable_tacan_gen.generate()
+
+        # Last, because a missile site names the enemy group it is shooting at and
+        # half the theater did not exist while the site itself was being built.
+        for missile_site in missile_sites:
+            missile_site.plan_fire_mission()
 
         self.mission_data.runways = list(self.runways.values())

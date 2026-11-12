@@ -5,7 +5,7 @@ import math
 import operator
 from collections.abc import Iterable, Iterator
 from random import randint
-from typing import TYPE_CHECKING, TypeVar
+from typing import Optional, TYPE_CHECKING, TypeVar
 
 from game.ato.closestairfields import ClosestAirfields, ObjectiveDistanceCache
 from game.theater import (
@@ -19,7 +19,6 @@ from game.theater import (
     NavalControlPoint,
     Player,
 )
-from game.ground_forces.ai_ground_planner import reserve_armor_for
 from game.theater.theatergroundobject import (
     BuildingGroundObject,
     IadsGroundObject,
@@ -226,8 +225,8 @@ class ObjectiveFinder:
         """Iterates over enemy motorpool depots worth striking this turn.
 
         A motorpool is a target only when it will actually render reserve armor,
-        so membership is gated on the live reserve pool (``reserve_armor_for``)
-        plus the motorpool being enabled with a positive spawn cap. Unlike
+        so membership is gated on its live shared-cap allocation plus the
+        motorpool being enabled with a positive spawn cap. Unlike
         :meth:`strike_targets`, ``is_dead`` is intentionally *not* used: the
         motorpool's groups are repopulated each mission *after* planning runs, so
         ``is_dead`` (which reads ``alive_unit_count``) reflects a stale render
@@ -239,12 +238,22 @@ class ObjectiveFinder:
         settings = self.game.settings
         if not settings.motorpool_enabled or settings.motorpool_spawn_cap <= 0:
             return
+        from game.missiongenerator.motorpoolpopulator import (
+            motorpool_rendered_unit_count,
+        )
+
         candidates: list[MotorpoolGroundObject] = []
         for enemy_cp in self.enemy_control_points():
-            if not reserve_armor_for(enemy_cp):
-                continue
             for ground_object in enemy_cp.ground_objects:
-                if isinstance(ground_object, MotorpoolGroundObject):
+                if (
+                    isinstance(ground_object, MotorpoolGroundObject)
+                    and motorpool_rendered_unit_count(
+                        ground_object,
+                        settings.motorpool_enabled,
+                        settings.motorpool_spawn_cap,
+                    )
+                    > 0
+                ):
                     candidates.append(ground_object)
         yield from self._targets_by_range(candidates)
 
@@ -338,12 +347,14 @@ class ObjectiveFinder:
             for transport in transports.travelling_to(
                 front_line.control_point_hostile_to(self.is_player)
             ):
+                if transport.is_friendly(self.is_player):
+                    continue
                 if id(transport) not in seen:
                     seen.add(id(transport))
                     yield transport
         reach = REAR_SUPPLY_RANGE.meters
         for transport in transports:
-            if id(transport) in seen:
+            if id(transport) in seen or transport.is_friendly(self.is_player):
                 continue
             if not any(t.supplies is not None for t in transport.transfers):
                 continue
@@ -360,22 +371,28 @@ class ObjectiveFinder:
             c for c in self.game.theater.controlpoints if c.is_friendly(self.is_player)
         )
 
-    def farthest_friendly_control_point(self) -> ControlPoint:
-        """Finds the friendly control point that is farthest from any threats."""
+    def farthest_friendly_airfield(self) -> Optional[ControlPoint]:
+        """The land base farthest from any threat: the theatre AEW&C station.
+
+        Land, because every boat already gets a station of its own. Taking this pick
+        from the fleet put the theatre station on a hull -- on one Syria turn the
+        amphib parked three miles from the carrier -- so a single squadron flew two
+        racetracks side by side and the airfield with the aircraft parked on it was
+        skipped. None when the coalition holds no land base, which is not an error: its
+        carriers are stations already.
+        """
         threat_zones = self.game.threat_zone_for(self.is_player.opponent)
 
         farthest = None
         max_distance = meters(0)
         for cp in self.friendly_control_points():
-            if isinstance(cp, OffMapSpawn):
+            if isinstance(cp, OffMapSpawn) or cp.is_fleet:
                 continue
             distance = threat_zones.distance_to_threat(cp.position)
             if distance > max_distance:
                 farthest = cp
                 max_distance = distance
 
-        if farthest is None:
-            raise RuntimeError("Found no friendly control points. You probably lost.")
         return farthest
 
     def closest_friendly_control_point(self) -> ControlPoint:

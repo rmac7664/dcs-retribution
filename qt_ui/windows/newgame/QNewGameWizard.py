@@ -5,7 +5,6 @@ import logging
 from PySide6 import QtGui, QtWidgets
 
 from game.campaignloader.campaign import Campaign
-from game.dcs.aircrafttype import AircraftType
 from game.theater.start_generator import GameGenerator, GeneratorSettings, ModSettings
 from qt_ui.windows.AirWingConfigurationDialog import AirWingConfigurationDialog
 from qt_ui.windows.newgame.WizardPages.QFactionSelection import FactionSelection
@@ -105,7 +104,6 @@ class NewGameWizard(QtWidgets.QWizard):
             f104_starfighter=self.field("f104_starfighter"),
             f105_thunderchief=self.field("f105_thunderchief"),
             f106_deltadart=self.field("f106_deltadart"),
-            hercules=self.field("hercules"),
             irondome=self.field("irondome"),
             oh_6=self.field("oh_6"),
             oh_6_vietnamassetpack=self.field("oh_6_vietnamassetpack"),
@@ -117,12 +115,17 @@ class NewGameWizard(QtWidgets.QWizard):
             su15_flagon=self.field("su15_flagon"),
             su30_flanker_h=self.field("su30_flanker_h"),
             su35s_flanker_m=self.field("su35s_flanker_m"),
+            f15ex=self.field("f15ex"),
+            f15cge=self.field("f15cge"),
+            eurofighter=self.field("eurofighter"),
             su57_felon=self.field("su57_felon"),
             ov10a_bronco=self.field("ov10a_bronco"),
             frenchpack=self.field("frenchpack"),
             high_digit_sams=self.field("high_digit_sams"),
+            high_digit_sams_ultimate=self.field("high_digit_sams_ultimate"),
             spanishnavypack=self.field("spanishnavypack"),
             swedishmilitaryassetspack=self.field("swedishmilitaryassetspack"),
+            germanymilitaryassetspack=self.field("germanymilitaryassetspack"),
             coldwarassets=self.field("coldwarassets"),
             SWPack=self.field("SWPack"),
             vietnamwarvessels=self.field("vietnamwarvessels"),
@@ -132,6 +135,7 @@ class NewGameWizard(QtWidgets.QWizard):
             usamilitaryassetspack=self.field("usamilitaryassetspack"),
             ukmilitaryassetspack=self.field("ukmilitaryassetspack"),
             ukrainemilitaryassetspack=self.field("ukrainemilitaryassetspack"),
+            turkeymilitaryassetspack=self.field("turkeymilitaryassetspack"),
             mig31bm_foxhound=self.field("mig31bm_foxhound"),
             mam=self.field("mam"),
             tornado_adv=self.field("tornado_adv"),
@@ -166,11 +170,6 @@ class NewGameWizard(QtWidgets.QWizard):
         AirWingConfigurationDialog(
             self.generatedGame, generator.generator_settings.squadrons_start_full, self
         ).exec_()
-
-        g = self.generatedGame
-        herc = AircraftType.named("C-130J-30 Super Hercules")
-        if herc in g.blue.air_wing.squadrons or herc in g.red.air_wing.squadrons:
-            g.settings.set_plugin_option("herculescargo", True)
 
         self.generatedGame.begin_turn_0(
             squadrons_start_full=generator_settings.squadrons_start_full

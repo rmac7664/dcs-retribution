@@ -1,13 +1,14 @@
 ---
 name: Syria - Operation Blackball
 theater: Syria
-authors: Fuzzle
+authors: Fuzzle, modified by juanjux
 description: <p>A lightweight fictional showcase of Cyprus for the Syria terrain. A US Navy force must deploy from a carrier group to push through the island. <strong>This is a purely naval campaign, meaning you will need to use the Air Assault mission type with transports to take the first FOB. Ensure you soften it up enough first!</strong></p><p><strong>Backstory:</strong> The world is at war. With the help of her eastern allies Russia has taken the Suez Canal and deployed a large naval force to the Mediterranean, trapping a US carrier group near the Turkish-Syrian border. Now they must break out by taking Cyprus back.</p>
 version: "10.7"
 recommended_player_faction: US Navy 2005
 recommended_enemy_faction: Russia 2010
 miz: operation_blackball.miz
 performance: 1
+advanced_iads: true
 recommended_start_date: 2006-05-17
 recommended_player_money: 1000
 recommended_enemy_money: 1200
@@ -16,11 +17,19 @@ recommended_enemy_income_multiplier: 0.7
 squadrons:
   # BLUFOR CVN
   Naval-1:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - OH-58D(R) Kiowa Warrior
+      size: 2
+      pilots: 6
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
         - VF-142
       size: 14
+      pilots: 18
     - primary: SEAD
       secondary: air-to-ground
       aircraft:
@@ -29,19 +38,23 @@ squadrons:
       aircraft:
         - VAW-125
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - VS-35 (Tanker)
       size: 4
+      pilots: 8
     - primary: Anti-ship
       secondary: air-to-ground
       aircraft:
         - VS-35
       size: 8
+      pilots: 12
     - primary: Transport
       aircraft:
         - HSM-40
       size: 2
+      pilots: 6
   # BLUFOR LHA
   Naval-2:
     - primary: BAI
@@ -49,16 +62,19 @@ squadrons:
       aircraft:
         - VMA-223
       size: 10
+      pilots: 14
     - primary: Transport
       secondary: air-to-ground
       aircraft:
         - HMLA-269 (UH-1H)
       size: 4
+      pilots: 8
     - primary: CAS
       secondary: air-to-ground
       aircraft:
         - HMLA-269 (AH-1W)
       size: 6
+      pilots: 10
   # OPFOR Start FOB
   FOB Andreas:
     - primary: CAS
@@ -66,6 +82,7 @@ squadrons:
       aircraft:
         - Ka-50 Hokum
       size: 6
+      pilots: 10
   # OPFOR CVN
   Naval-3:
     - primary: BARCAP
@@ -83,8 +100,16 @@ squadrons:
       aircraft:
         - Ka-50 Hokum
       size: 6
+      pilots: 10
   # Larnaca
   47:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "WingLoong-I"
+      size: 2
+      pilots: 6
     - primary: TARCAP
       secondary: any
       aircraft:
@@ -122,23 +147,28 @@ squadrons:
       aircraft:
         - Mi-28N Havoc
       size: 6
+      pilots: 10
     - primary: Strike
       secondary: air-to-ground
       aircraft:
       - Tu-160 Blackjack
       size: 6
+      pilots: 10
     - primary: AEW&C
       aircraft:
         - A-50
       size: 1
+      pilots: 5
     - primary: Refueling
       aircraft:
         - IL-78M
       size: 1
+      pilots: 5
     - primary: Transport
       aircraft:
         - IL-78MD
       size: 1
+      pilots: 5
   # OPFOR First FOB
   FOB Gecitkale:
     - primary: CAS
@@ -146,6 +176,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR Second FOB
   FOB Guzelyurt:
     - primary: Transport
@@ -153,8 +184,17 @@ squadrons:
       aircraft:
         - Mi-8MTV2 Hip
       size: 2
+      pilots: 6
     - primary: CAS
       secondary: air-to-ground
       aircraft:
         - Mi-24P Hind-F
       size: 4
+      pilots: 8
+settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: true
+
+ground_forces:
+  "FOB Gecitkale-26": GPS Jamming Site (Red, Unescorted)

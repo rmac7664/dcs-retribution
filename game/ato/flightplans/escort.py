@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Type
+from typing import Optional, Type, TYPE_CHECKING
+
+from dcs.mapping import Point
 
 from .airassault import AirAssaultLayout
 from .airlift import AirliftLayout
@@ -10,16 +12,40 @@ from .formationattack import (
     FormationAttackFlightPlan,
     FormationAttackLayout,
 )
+from .patrolling import PatrollingLayout
 from .waypointbuilder import WaypointBuilder
+from ..flightwaypoint import FlightWaypoint
 from .. import FlightType
 from ..packagewaypoints import PackageWaypoints
 from ...utils import feet
+
+if TYPE_CHECKING:
+    from ..flight import Flight
 
 
 class EscortFlightPlan(FormationAttackFlightPlan):
     @staticmethod
     def builder_type() -> Type[Builder]:
         return Builder
+
+    def request_escort_at(self) -> FlightWaypoint | None:
+        """Nobody is escorting the escort.
+
+        Inherited from the formation, this said "from my join to my split", which put
+        the escort into the package's own escort window -- so the package asked its
+        escort when its escorts are dismissed. The escort answers by asking the flight
+        it is protecting, and when that flight is a patrol, the patrol answers by
+        asking the package when its escorts are dismissed. Round it went until the
+        stack ran out, taking with it whatever request had asked the question: put an
+        escort on a TARCAP and the map went blank, because the one call that draws it
+        died in the loop.
+
+        The window belongs to what is being escorted. An escort is not it.
+        """
+        return None
+
+    def dismiss_escort_at(self) -> FlightWaypoint | None:
+        return None
 
     @property
     def split_time(self) -> datetime:
@@ -36,19 +62,41 @@ class EscortFlightPlan(FormationAttackFlightPlan):
 
 
 class Builder(FormationAttackBuilder[EscortFlightPlan, FormationAttackLayout]):
+    @property
+    def escorted_flight(self) -> Optional[Flight]:
+        """The flight this escort is protecting, or None if there is nobody to protect.
+
+        A package names its primary flight by mission-type priority and the escort
+        types sit at the bottom of that list, so a package that holds nothing but
+        escorts -- the first flight added to a new package, or one whose strikers were
+        all cancelled -- elects an escort as its own primary. Reading that flight's
+        plan while its plan is the one being built re-enters this builder, which is an
+        unbounded recursion rather than a plan. An escort with nobody but itself (or
+        another escort, which resolves back the same way) to escort protects nothing
+        in particular, so it flies the package's ordinary geometry instead.
+        """
+        primary = self.package.primary_flight
+        if primary is None or primary is self.flight:
+            return None
+        if primary.flight_type.is_escort_type:
+            return None
+        return primary
+
     def layout(self) -> FormationAttackLayout:
         non_formation_escort = False
-        if self.package.waypoints is None:
+        escorted = self.escorted_flight
+        if self.package.waypoints_need_regeneration():
             self.package.waypoints = PackageWaypoints.create(
                 self.package, self.coalition, dump_debug_info=False
             )
-            if self.package.primary_flight:
-                departure = self.package.primary_flight.flight_plan.layout.departure
+            if escorted:
+                departure = escorted.flight_plan.layout.departure
                 self.package.waypoints.join = departure.position.lerp(
                     self.package.target.position, 0.2
                 )
                 non_formation_escort = True
 
+        assert self.package.waypoints is not None
         builder = WaypointBuilder(self.flight)
         ingress, target = builder.escort(
             self.package.waypoints.ingress, self.package.target
@@ -70,14 +118,19 @@ class Builder(FormationAttackBuilder[EscortFlightPlan, FormationAttackLayout]):
 
         split = builder.split(self._get_split())
 
-        is_helo = builder.flight.is_helo
-        initial = builder.escort_hold(
-            target.position if is_helo else self.package.waypoints.initial,
-        )
+        # Protect patrols on their racetrack. Attack escorts wait at their ingress,
+        # not at the target-relative initial point inside the enemy defences.
+        racetrack_hold = self._racetrack_hold_point(escorted)
+        if racetrack_hold is not None:
+            initial = builder.escort_hold(racetrack_hold)
+        else:
+            initial = builder.escort_hold(ingress.position)
 
-        pf = self.package.primary_flight
-        if pf and pf.flight_type in [FlightType.AIR_ASSAULT, FlightType.TRANSPORT]:
-            layout = pf.flight_plan.layout
+        if escorted and escorted.flight_type in [
+            FlightType.AIR_ASSAULT,
+            FlightType.TRANSPORT,
+        ]:
+            layout = escorted.flight_plan.layout
             assert isinstance(layout, AirAssaultLayout) or isinstance(
                 layout, AirliftLayout
             )
@@ -124,6 +177,25 @@ class Builder(FormationAttackBuilder[EscortFlightPlan, FormationAttackLayout]):
             bullseye=builder.bullseye(),
             custom_waypoints=list(),
         )
+
+    @staticmethod
+    def _racetrack_hold_point(primary: Optional[Flight]) -> Optional[Point]:
+        """Center of the protected flight's racetrack, if it flies one.
+
+        AWACS and tanker flights orbit a racetrack that is stationed far from the
+        package's target reference (70-80 NM beyond the threat boundary). Returning
+        the racetrack center lets the escort hold on the orbit it is meant to
+        protect, instead of at the unrelated target-relative escort-hold geometry.
+        Returns None for other primaries, which use the ingress or transport route.
+        """
+        if primary is None:
+            return None
+        flight_plan = primary.flight_plan
+        if not flight_plan.is_patrol(flight_plan):
+            return None
+        layout = flight_plan.layout
+        assert isinstance(layout, PatrollingLayout)
+        return layout.patrol_start.position.midpoint(layout.patrol_end.position)
 
     def build(self, dump_debug_info: bool = False) -> EscortFlightPlan:
         return EscortFlightPlan(self.flight, self.layout())

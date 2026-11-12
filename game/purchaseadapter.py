@@ -1,12 +1,14 @@
 from abc import abstractmethod
-from typing import TypeVar, Generic, Any
+from typing import Any, Callable, Generic, Optional, TypeVar
 
 from game import Game
 from game.coalition import Coalition
 from game.dcs.aircrafttype import AircraftType
 from game.dcs.groundunittype import GroundUnitType
 from game.dcs.unittype import UnitType
+from game.highcommand.loans import LOAN_TRADE_ERROR, loan_for, require_owned_aircraft
 from game.squadrons import Squadron
+from game.resale import pending_aircraft_sale_values, resale_value
 from game.theater import ControlPoint, ParkingType
 
 ItemType = TypeVar("ItemType")
@@ -24,22 +26,42 @@ class PurchaseAdapter(Generic[ItemType]):
     def buy(self, item: ItemType, quantity: int) -> None:
         for _ in range(quantity):
             if self.has_pending_sales(item):
+                price = self.purchase_price_of(item)
                 self.do_cancel_sale(item)
             elif self.can_buy(item):
+                price = self.price_of(item)
                 self.do_purchase(item)
             else:
-                raise TransactionError(f"Cannot buy more {item}")
-            self.coalition.adjust_budget(-self.price_of(item))
+                raise TransactionError(
+                    f"Cannot buy more {item}: {self.why_cannot_buy(item)}"
+                )
+            self.coalition.adjust_budget(-price)
 
     def sell(self, item: ItemType, quantity: int) -> None:
+        price: float
         for _ in range(quantity):
             if self.has_pending_orders(item):
+                price = self.price_of(item)
                 self.do_cancel_purchase(item)
             elif self.can_sell(item):
+                price = self.sale_price_of(item)
                 self.do_sale(item)
             else:
                 raise TransactionError(f"Cannot sell more {item}")
-            self.coalition.adjust_budget(self.price_of(item))
+            self.coalition.adjust_budget(price)
+
+    def sale_price_of(self, item: ItemType) -> float:
+        return resale_value(self.coalition.game.settings, self.price_of(item))
+
+    def purchase_price_of(self, item: ItemType) -> float:
+        return self.price_of(item)
+
+    def sell_or_cancel_price_of(self, item: ItemType) -> float:
+        return (
+            self.price_of(item)
+            if self.has_pending_orders(item)
+            else self.sale_price_of(item)
+        )
 
     def has_pending_orders(self, item: ItemType) -> bool:
         return self.pending_delivery_quantity(item) > 0
@@ -58,6 +80,18 @@ class PurchaseAdapter(Generic[ItemType]):
 
     def can_buy(self, item: ItemType) -> bool:
         return self.coalition.budget >= self.price_of(item)
+
+    def why_cannot_buy(self, item: ItemType) -> str:
+        """Why can_buy() said no, for the error the user (or the LLM planner) reads.
+
+        "Cannot buy more X" on its own leaves no way to tell being broke apart from a
+        full apron or a squadron at its cap, which are three different decisions:
+        wait a turn, pick another base, or pick another squadron.
+        """
+        price = self.price_of(item)
+        if self.coalition.budget < price:
+            return f"costs {price}M each, budget is {self.coalition.budget:.1f}M"
+        return "not available"
 
     def can_sell_or_cancel(self, item: ItemType) -> bool:
         return self.can_sell(item) or self.has_pending_orders(item)
@@ -92,6 +126,23 @@ class AircraftPurchaseAdapter(PurchaseAdapter[Squadron]):
         super().__init__(control_point.coalition)
         self.control_point = control_point
 
+    @staticmethod
+    def _require_tradeable(item: Squadron) -> None:
+        try:
+            require_owned_aircraft(item)
+        except ValueError as exc:
+            raise TransactionError(str(exc)) from exc
+
+    def buy(self, item: Squadron, quantity: int) -> None:
+        # Check before pending-sale cancellation, which bypasses can_buy().
+        self._require_tradeable(item)
+        super().buy(item, quantity)
+
+    def sell(self, item: Squadron, quantity: int) -> None:
+        # Check before pending-order cancellation, which bypasses can_sell().
+        self._require_tradeable(item)
+        super().sell(item, quantity)
+
     def pending_delivery_quantity(self, item: Squadron) -> int:
         return item.pending_deliveries
 
@@ -99,6 +150,8 @@ class AircraftPurchaseAdapter(PurchaseAdapter[Squadron]):
         return item.owned_aircraft
 
     def can_buy(self, item: Squadron) -> bool:
+        if loan_for(item) is not None or self.control_point.sunk:
+            return False
         parking_type = ParkingType().from_squadron(item)
         unclaimed_parking = self.control_point.unclaimed_parking(parking_type)
         return (
@@ -107,22 +160,56 @@ class AircraftPurchaseAdapter(PurchaseAdapter[Squadron]):
             and item.has_aircraft_capacity_for(1)
         )
 
+    def why_cannot_buy(self, item: Squadron) -> str:
+        if loan_for(item) is not None:
+            return LOAN_TRADE_ERROR
+        if self.control_point.sunk:
+            return f"{self.control_point} has sunk"
+        price = self.price_of(item)
+        if self.coalition.budget < price:
+            return f"costs {price}M each, budget is {self.coalition.budget:.1f}M"
+        parking_type = ParkingType().from_squadron(item)
+        if self.control_point.unclaimed_parking(parking_type) <= 0:
+            return f"no free parking at {self.control_point}"
+        if not item.has_aircraft_capacity_for(1):
+            return (
+                f"squadron is at its cap of {item.max_size} "
+                f"({item.owned_aircraft} owned, {item.pending_deliveries} pending)"
+            )
+        return "not available"
+
     def can_sell(self, item: Squadron) -> bool:
-        return item.untasked_aircraft > 0
+        return loan_for(item) is None and item.untasked_aircraft > 0
+
+    def can_sell_or_cancel(self, item: Squadron) -> bool:
+        return loan_for(item) is None and super().can_sell_or_cancel(item)
 
     def do_purchase(self, item: Squadron) -> None:
+        self._require_tradeable(item)
         item.pending_deliveries += 1
 
     def do_cancel_purchase(self, item: Squadron) -> None:
+        self._require_tradeable(item)
         item.pending_deliveries -= 1
 
     def do_sale(self, item: Squadron) -> None:
+        self._require_tradeable(item)
+        item.pending_sale_values = pending_aircraft_sale_values(item) + [
+            self.sale_price_of(item)
+        ]
         item.untasked_aircraft -= 1
         item.pending_deliveries -= 1
 
     def do_cancel_sale(self, item: Squadron) -> None:
+        self._require_tradeable(item)
+        item.pending_sale_values = pending_aircraft_sale_values(item)[:-1]
         item.untasked_aircraft += 1
         item.pending_deliveries += 1
+
+    def purchase_price_of(self, item: Squadron) -> float:
+        if self.has_pending_sales(item):
+            return pending_aircraft_sale_values(item)[-1]
+        return self.price_of(item)
 
     def price_of(self, item: Squadron) -> int:
         return item.aircraft.price
@@ -140,11 +227,60 @@ class AircraftPurchaseAdapter(PurchaseAdapter[Squadron]):
 
 class GroundUnitPurchaseAdapter(PurchaseAdapter[GroundUnitType]):
     def __init__(
-        self, control_point: ControlPoint, coalition: Coalition, game: Game
+        self,
+        control_point: ControlPoint,
+        coalition: Coalition,
+        game: Game,
+        inventory_changed: Optional[Callable[[], None]] = None,
+        commands_the_coalition: bool = False,
     ) -> None:
         super().__init__(coalition)
         self.control_point = control_point
         self.game = game
+        self.inventory_changed = inventory_changed
+        #: Whether the caller IS this coalition rather than the player reaching across
+        #: to it. The enemy buy/sell setting is a cheat for the player's own UI, so it
+        #: has nothing to say to red's own commander -- which is what the OPFOR agent
+        #: is. Aircraft purchases never had the guard at all, so without this the API
+        #: could buy red a squadron but not a rifle company.
+        self.commands_the_coalition = commands_the_coalition
+
+    def _authorized(self) -> bool:
+        if self.commands_the_coalition:
+            return True
+        owner = self.control_point.captured
+        return owner.is_blue or (
+            owner.is_red and self.game.settings.enable_enemy_buy_sell
+        )
+
+    def buy(self, item: GroundUnitType, quantity: int) -> None:
+        if not self._authorized():
+            raise TransactionError("Ground unit purchases are not authorized")
+        pending_before = self.pending_delivery_quantity(item)
+        try:
+            super().buy(item, quantity)
+        finally:
+            if self.pending_delivery_quantity(item) != pending_before:
+                self._publish_motorpool_update()
+
+    def sell(self, item: GroundUnitType, quantity: int) -> None:
+        if not self._authorized():
+            raise TransactionError("Ground unit sales are not authorized")
+        pending_before = self.pending_delivery_quantity(item)
+        try:
+            super().sell(item, quantity)
+        finally:
+            if self.pending_delivery_quantity(item) != pending_before:
+                self._publish_motorpool_update()
+
+    def _publish_motorpool_update(self) -> None:
+        from game.server import EventStream
+        from game.sim import GameUpdateEvents
+
+        events = GameUpdateEvents().update_motorpools_at(self.control_point)
+        EventStream.put_nowait(events)
+        if self.inventory_changed is not None:
+            self.inventory_changed()
 
     def pending_delivery_quantity(self, item: GroundUnitType) -> int:
         return self.control_point.ground_unit_orders.pending_orders(item)
@@ -153,17 +289,26 @@ class GroundUnitPurchaseAdapter(PurchaseAdapter[GroundUnitType]):
         return self.control_point.base.total_units_of_type(item)
 
     def can_buy(self, item: GroundUnitType) -> bool:
-        return super().can_buy(item) and self.control_point.has_ground_unit_source(
-            self.game
+        return (
+            self._authorized()
+            and super().can_buy(item)
+            and self.control_point.has_ground_unit_source(self.game)
         )
 
     def can_sell(self, item: GroundUnitType) -> bool:
         return False
 
+    def can_sell_or_cancel(self, item: GroundUnitType) -> bool:
+        return self._authorized() and super().can_sell_or_cancel(item)
+
     def do_purchase(self, item: GroundUnitType) -> None:
+        if not self._authorized():
+            raise TransactionError("Ground unit purchases are not authorized")
         self.control_point.ground_unit_orders.order({item: 1})
 
     def do_cancel_purchase(self, item: GroundUnitType) -> None:
+        if not self._authorized():
+            raise TransactionError("Ground unit sales are not authorized")
         self.control_point.ground_unit_orders.sell({item: 1})
 
     def do_sale(self, item: GroundUnitType) -> None:

@@ -9,7 +9,6 @@
   "aircrafts": [
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "A-4E Skyhawk",
     "AH-1W SuperCobra",
     "F-15C Eagle",
@@ -17,7 +16,8 @@
     "F-16CM Fighting Falcon (Block 50)",
     "F-4E Phantom II",
     "F-4E-45MC Phantom II",
-    "UH-1H Iroquois"
+    "UH-1H Iroquois",
+    "CH-53E"
   ],
   "awacs": [
     "E-2C Hawkeye"

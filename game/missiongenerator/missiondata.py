@@ -94,6 +94,7 @@ class EscortInfo:
     escort_group_id: int
     escorted_group_id: int
     engagement_range_meters: int
+    release_flag: str | None = None
 
 
 @dataclass
@@ -152,3 +153,5 @@ class MissionData:
     #: Carrier name -> Red Crown frequency (its escort cruiser/destroyer group),
     #: when DCS-ATC is installed.
     red_crowns: dict[str, RadioFrequency] = field(default_factory=dict)
+    # Includes support infantry/MANPADS, independently of JTAC or inventory tracking.
+    frontline_visibility_groups: set[str] = field(default_factory=set)

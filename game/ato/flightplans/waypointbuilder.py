@@ -15,6 +15,7 @@ from typing import (
 )
 
 from dcs.mapping import Point, Vector2
+from shapely.geometry import LineString
 
 from game.ato.flightwaypoint import AltitudeReference, FlightWaypoint
 from game.ato.flightwaypointtype import FlightWaypointType
@@ -266,7 +267,7 @@ class WaypointBuilder:
             alt = self._adjust_altitude_for_clouds(alt)
 
         alt_type: AltitudeReference = "BARO"
-        if self.is_helo or self.flight.is_hercules:
+        if self.is_helo or self.flight.is_c130j:
             alt_type = "RADIO"
             alt = (
                 feet(self.flight.coalition.game.settings.heli_combat_alt_agl)
@@ -759,12 +760,23 @@ class WaypointBuilder:
         )
 
     def nav_path(
-        self, a: Point, b: Point, altitude: Distance, altitude_is_agl: bool = False
+        self,
+        a: Point,
+        b: Point,
+        altitude: Distance,
+        altitude_is_agl: bool = False,
+        *,
+        prune_threatened_detours: bool = False,
     ) -> List[FlightWaypoint]:
-        path = self.clean_nav_points(self.navmesh.shortest_path(a, b))
+        path = self.clean_nav_points(
+            self.navmesh.shortest_path(a, b),
+            prune_threatened_detours=prune_threatened_detours,
+        )
         return [self.nav(self.perturb(p), altitude, altitude_is_agl) for p in path]
 
-    def clean_nav_points(self, points: Iterable[Point]) -> Iterator[Point]:
+    def clean_nav_points(
+        self, points: Iterable[Point], *, prune_threatened_detours: bool = False
+    ) -> Iterator[Point]:
         # Examine a sliding window of three waypoints. `current` is the waypoint
         # being checked for prunability. `previous` is the last emitted waypoint
         # before `current`. `nxt` is the waypoint after `current`.
@@ -779,7 +791,12 @@ class WaypointBuilder:
                 current = nxt
                 continue
 
-            if self.nav_point_prunable(previous, current, nxt):
+            if self.nav_point_prunable(
+                previous,
+                current,
+                nxt,
+                prune_threatened_detours=prune_threatened_detours,
+            ):
                 current = nxt
                 continue
 
@@ -787,7 +804,24 @@ class WaypointBuilder:
             previous = current
             current = nxt
 
-    def nav_point_prunable(self, previous: Point, current: Point, nxt: Point) -> bool:
+    def nav_point_prunable(
+        self,
+        previous: Point,
+        current: Point,
+        nxt: Point,
+        *,
+        prune_threatened_detours: bool = False,
+    ) -> bool:
+        if prune_threatened_detours:
+            # Use NavMesh's 3x threat penalty on actual segment exposure, not
+            # just whether a leg touches any threat. Assault destinations are
+            # often inside a ring: a huge detour can otherwise be kept despite
+            # adding distance and spending longer inside the same threats.
+            def cost(points: tuple[Point, ...]) -> float:
+                line = LineString([(p.x, p.y) for p in points])
+                return line.length + 2 * line.intersection(self.threat_zones.all).length
+
+            return cost((previous, nxt)) <= cost((previous, current, nxt)) + 1e-6
         previous_threatened = self.threat_zones.path_threatened(previous, current)
         next_threatened = self.threat_zones.path_threatened(current, nxt)
         pruned_threatened = self.threat_zones.path_threatened(previous, nxt)
@@ -826,5 +860,5 @@ class WaypointBuilder:
             alt_type,
             description="Recovery tanker for aircraft carriers",
             pretty_name="Recovery",
-            only_for_player=True,  # for visual purposes in Retribution only
+            only_for_player=True,  # for visual purposes in Escalation only
         )

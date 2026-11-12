@@ -16,11 +16,50 @@ from PySide6.QtWidgets import (
 )
 
 from qt_ui import liberation_install, liberation_theme
+from qt_ui.widgets.controls import style_button
 from qt_ui.liberation_theme import THEMES, get_theme_index, set_theme_index
 
 
+class PreferencesPane(QFrame):
+    """Application preferences embedded in Settings > General."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        from qt_ui.widgets.cards import card
+
+        outer = QVBoxLayout(self)
+        holder = card()
+        layout = QVBoxLayout(holder)
+        layout.addWidget(QLabel("Application preferences"))
+        self.preferences = QLiberationPreferences()
+        layout.addWidget(self.preferences)
+        self.status = QLabel(
+            "Changes apply to this installation, not only this campaign."
+        )
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+        self.preferences.themeSelect.currentIndexChanged.connect(self.apply)
+        self.preferences.payloads_cb.toggled.connect(self.apply)
+        self.preferences.setup_every_start_cb.toggled.connect(self.apply)
+        self.preferences.port_input.valueChanged.connect(self.apply)
+        self.preferences.edit_saved_game_dir.textChanged.connect(self.apply)
+        self.preferences.edit_dcs_install_dir.textChanged.connect(self.apply)
+        outer.addWidget(holder)
+        outer.addStretch()
+
+    def apply(self) -> None:
+        if self.preferences.apply(silent=True):
+            self.status.setText(
+                "Saved. Theme and server port changes require a restart."
+            )
+        else:
+            self.status.setText(
+                "Not saved: enter valid Saved Games and DCS installation directories."
+            )
+
+
 class QLiberationPreferences(QFrame):
-    def __init__(self):
+    def __init__(self) -> None:
         super(QLiberationPreferences, self).__init__()
         self.saved_game_dir = ""
         self.dcs_install_dir = ""
@@ -35,9 +74,9 @@ class QLiberationPreferences(QFrame):
         self.edit_dcs_install_dir.setMinimumWidth(300)
         self.edit_saved_game_dir.setMinimumWidth(300)
 
-        self.browse_saved_game = QPushButton("Browse...")
+        self.browse_saved_game = style_button(QPushButton("Browse..."))
         self.browse_saved_game.clicked.connect(self.on_browse_saved_games)
-        self.browse_install_dir = QPushButton("Browse...")
+        self.browse_install_dir = style_button(QPushButton("Browse..."))
         self.browse_install_dir.clicked.connect(self.on_browse_installation_dir)
         self.themeSelect = QComboBox()
         [self.themeSelect.addItem(y["themeName"]) for x, y in THEMES.items()]
@@ -59,7 +98,7 @@ class QLiberationPreferences(QFrame):
 
         self.initUi()
 
-    def initUi(self):
+    def initUi(self) -> None:
         main_layout = QVBoxLayout()
         layout = QGridLayout()
         layout.addWidget(
@@ -124,7 +163,7 @@ class QLiberationPreferences(QFrame):
 
         self.setLayout(main_layout)
 
-    def on_browse_saved_games(self):
+    def on_browse_saved_games(self) -> None:
         saved_game_dir = str(
             QFileDialog.getExistingDirectory(self, "Select DCS Saved Game Directory")
         )
@@ -132,7 +171,7 @@ class QLiberationPreferences(QFrame):
             self.saved_game_dir = saved_game_dir
             self.edit_saved_game_dir.setText(saved_game_dir)
 
-    def on_browse_installation_dir(self):
+    def on_browse_installation_dir(self) -> None:
         install_dir = str(
             QFileDialog.getExistingDirectory(self, "Select DCS Installation Directory")
         )
@@ -140,13 +179,23 @@ class QLiberationPreferences(QFrame):
             self.dcs_install_dir = install_dir
             self.edit_dcs_install_dir.setText(install_dir)
 
-    def apply(self):
+    def apply(self, *, silent: bool = False) -> bool:
         self.saved_game_dir = self.edit_saved_game_dir.text()
         self.dcs_install_dir = self.edit_dcs_install_dir.text()
         self.prefer_liberation_payloads = self.payloads_cb.isChecked()
         self.setup_preferences_on_every_start = self.setup_every_start_cb.isChecked()
         self.port = self.port_input.value()
-        set_theme_index(self.themeSelect.currentIndex())
+
+        # Inline editing must not open modal warnings for incomplete paths.
+        if silent and (
+            not os.path.isdir(self.saved_game_dir)
+            or not os.path.isdir(self.dcs_install_dir)
+            or (
+                not os.path.isdir(os.path.join(self.dcs_install_dir, "Scripts"))
+                and os.path.isfile(os.path.join(self.dcs_install_dir, "bin", "DCS.exe"))
+            )
+        ):
+            return False
 
         if not os.path.isdir(self.saved_game_dir):
             error_dialog = QMessageBox.critical(
@@ -155,7 +204,6 @@ class QLiberationPreferences(QFrame):
                 self.saved_game_dir + " is not a valid directory",
                 QMessageBox.StandardButton.Ok,
             )
-            error_dialog.exec_()
             return False
 
         if self.install_dir_ignore_warning and self.dcs_install_dir == "":
@@ -163,9 +211,9 @@ class QLiberationPreferences(QFrame):
                 self,
                 "The DCS Installation directory was not set",
                 "You set an empty DCS Installation directory! "
-                "<br/><br/>Without this directory, DCS Retribution can not replace the MissionScripting.lua for you and will not work properly. "
+                "<br/><br/>Without this directory, DCS Escalation can not replace the MissionScripting.lua for you and will not work properly. "
                 "In this case, you need to edit the MissionScripting.lua yourself. The easiest way to do it is to replace the original file (&lt;dcs_installation_directory&gt;/Scripts/MissionScripting.lua) with the file in dcs-liberation distribution (&lt;dcs_liberation_installation&gt;/resources/scripts/MissionScripting.lua)."
-                "<br/><br/>You can find more information on how to manually change this file in the Retribution Wiki (Page: Dedicated Server Guide) on GitHub.</p>"
+                "<br/><br/>You can find more information on how to manually change this file in the Escalation Wiki (Page: Dedicated Server Guide) on GitHub.</p>"
                 "<br/><br/>Are you sure that you want to leave the installation directory empty?"
                 "<br/><br/><strong>This is only recommended for expert users!</strong>",
                 QMessageBox.StandardButton.Yes,
@@ -178,10 +226,10 @@ class QLiberationPreferences(QFrame):
                 self,
                 "Wrong DCS installation directory.",
                 self.dcs_install_dir
-                + " is not a valid directory. DCS Retribution requires the installation directory to replace the MissionScripting.lua"
-                "<br/><br/>If you ignore this Error, DCS Retribution can not work properly and needs your attention. "
+                + " is not a valid directory. DCS Escalation requires the installation directory to replace the MissionScripting.lua"
+                "<br/><br/>If you ignore this Error, DCS Escalation can not work properly and needs your attention. "
                 "In this case, you need to edit the MissionScripting.lua yourself. The easiest way to do it is to replace the original file (&lt;dcs_installation_directory&gt;/Scripts/MissionScripting.lua) with the file in dcs-liberation distribution (&lt;dcs_liberation_installation&gt;/resources/scripts/MissionScripting.lua)."
-                "<br/><br/>You can find more information on how to manually change this file in the Retribution Wiki (Page: Dedicated Server Guide) on GitHub.</p>"
+                "<br/><br/>You can find more information on how to manually change this file in the Escalation Wiki (Page: Dedicated Server Guide) on GitHub.</p>"
                 "<br/><br/><strong>This is only recommended for expert users!</strong>",
                 QMessageBox.StandardButton.Ignore,
                 QMessageBox.StandardButton.Ok,
@@ -198,9 +246,9 @@ class QLiberationPreferences(QFrame):
                 self.dcs_install_dir + " is not a valid DCS installation directory",
                 QMessageBox.StandardButton.Ok,
             )
-            error_dialog.exec_()
             return False
 
+        set_theme_index(self.themeSelect.currentIndex())
         liberation_install.setup(
             self.saved_game_dir,
             self.dcs_install_dir,

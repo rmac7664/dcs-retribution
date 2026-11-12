@@ -28,12 +28,14 @@ from game.radio.radios import RadioFrequency, RadioRegistry, MHz
 from game.radio.tacan import TacanRegistry
 from game.theater import Airfield
 from game.theater.bullseye import Bullseye
+from game.theater.theatergroundobject import MotorpoolGroundObject
 from game.unitmap import UnitMap
 from game.warehouse.plan import MissionWarehousePlan
 from .briefinggenerator import BriefingGenerator, MissionInfoGenerator
 from .cargoshipgenerator import CargoShipGenerator
 from .convoygenerator import ConvoyGenerator
 from .drawingsgenerator import DrawingsGenerator
+from game.weather.atmosxliveweather import LiveWeather, apply_weather
 from .environmentgenerator import EnvironmentGenerator
 from .flotgenerator import FlotGenerator
 from .forcedoptionsgenerator import ForcedOptionsGenerator
@@ -54,6 +56,23 @@ if TYPE_CHECKING:
     from game import Game
 
 CARCASS_SUPPRESS_RADIUS_M = 5.0
+
+
+def refresh_motorpool_target_flight_plans(game: Game) -> None:
+    """Rebuild flight plans for every package targeting a motorpool.
+
+    Motorpool groups are ephemeral: they are rendered only at mission
+    generation, after flight plans were first built (against empty groups)
+    at ATO planning time. Refreshing the affected plans lets their layouts
+    snapshot the freshly rendered units -- e.g. one player-facing waypoint
+    per parked vehicle for a motorpool STRIKE.
+    """
+    for coalition in game.coalitions:
+        for package in coalition.ato.packages:
+            if not isinstance(package.target, MotorpoolGroundObject):
+                continue
+            for flight in package.flights:
+                flight.refresh_flight_plan()
 
 
 class MissionGenerator:
@@ -103,7 +122,11 @@ class MissionGenerator:
         EnvironmentGenerator(
             self.mission, self.game.conditions, self.time, auto_fog
         ).generate()
-
+        # The observation is already this turn's weather; this writes the parts of it
+        # the game's weather model has nowhere to keep (visibility distance, dust).
+        weather = self.game.conditions.weather
+        if isinstance(weather, LiveWeather):
+            apply_weather(self.mission.weather, weather.vdata)
         tgo_generator = TgoGenerator(
             self.mission,
             self.game,
@@ -113,6 +136,7 @@ class MissionGenerator:
             self.mission_data,
         )
         MotorpoolPopulator(self.game).populate()
+        refresh_motorpool_target_flight_plans(self.game)
         tgo_generator.generate()
 
         ConvoyGenerator(self.mission, self.game, self.unit_map).generate()
@@ -135,8 +159,18 @@ class MissionGenerator:
         TriggerGenerator(self.mission, self.game).generate()
         ForcedOptionsGenerator(self.mission, self.game).generate()
         VisualsGenerator(self.mission, self.game).generate()
-        LuaGenerator(self.game, self.mission, self.mission_data).generate()
-        DrawingsGenerator(self.mission, self.game).generate()
+        LuaGenerator(
+            self.game, self.mission, self.mission_data, self.unit_map
+        ).generate()
+        DrawingsGenerator(self.mission, self.game, self.mission_data).generate()
+
+        # The cockpit's own copy of the threat rings and the front line. Not part of
+        # the mission: the player loads it from the DTC page in the rearm window.
+        if self.game.settings.dtc_cartridge:
+            from game.missiongenerator.dtc import write_cartridges
+            from game.persistency import data_cartridge_dir
+
+            write_cartridges(self.game, data_cartridge_dir(), self.mission_data)
 
         self.setup_combined_arms()
 
@@ -147,48 +181,31 @@ class MissionGenerator:
         if (plan := self.mission_data.warehouse_plan) is not None:
             plan.apply_to_mission(self.mission, self.mission_data)
             self.game.warehouse_logistics.pending_plan = plan
+
+        # Each aircraft has to name the cartridge it takes, and that has to be in the
+        # mission before it is written.
+        if self.game.settings.dtc_cartridge:
+            from game.missiongenerator.dtc import bind_to_units
+
+            bind_to_units(self.mission_data, output.stem)
+
         output.parent.mkdir(parents=True, exist_ok=True)
         self.mission.save(output)
 
+        # The A-10 has no cartridge at all: its navigation computer is written into
+        # the mission, at Avionics/<type>/<unit>/CDU/SETTINGS.lua.
+        from game.missiongenerator.a10cdu import write_into_mission as write_a10_cdu
+
+        write_a10_cdu(self.game, self.mission_data, output)
+
+        # The rest go inside the .miz, so the aircraft finds them without the player
+        # going to the DTC page for them.
+        if self.game.settings.dtc_cartridge:
+            from game.missiongenerator.dtc import write_into_mission
+
+            write_into_mission(self.game, self.mission_data, output)
+
         return self.unit_map
-
-    @staticmethod
-    def _configure_react_to_threat_for_ew_jamming_packages(
-        gen: AircraftGenerator,
-    ) -> None:
-        for groups in gen.ewrj_package_dict.values():
-            for group in groups:
-                start_point = [
-                    p for p in group.points if p.name in ["JOIN", "RACETRACK START"]
-                ]
-                if not start_point:
-                    sp = group.points[0]
-                else:
-                    sp = start_point[0]
-                MissionGenerator.set_react_to_threat(
-                    OptReactOnThreat.Values.PassiveDefense, sp
-                )
-                stop_point = [
-                    p for p in group.points if p.name in ["SPLIT", "RACETRACK END"]
-                ]
-                if not stop_point:
-                    sp = group.points[0]
-                else:
-                    sp = stop_point[0]
-                MissionGenerator.set_react_to_threat(
-                    OptReactOnThreat.Values.EvadeFire, sp
-                )
-
-    @staticmethod
-    def set_react_to_threat(
-        optrot: OptReactOnThreat.Values, start_point: MovingPoint
-    ) -> None:
-        tasks = start_point.tasks
-        for i in range(len(tasks)):
-            if isinstance(tasks[i], OptReactOnThreat):
-                tasks[i] = OptReactOnThreat(optrot)
-                return
-        tasks.append(OptReactOnThreat(optrot))
 
     def setup_mission_coalitions(self) -> None:
         self.mission.coalition["blue"] = Coalition(
@@ -299,6 +316,10 @@ class MissionGenerator:
 
     def generate_ground_conflicts(self) -> None:
         """Generate FLOTs and JTACs for each active front line."""
+        # Re-planned here rather than reused from the start of the turn: anything the
+        # player did since -- a transfer, most of all -- has already changed what each
+        # base owns, and the mission must deploy what is actually there.
+        self.game.plan_ground_war()
         for front_line in self.game.theater.conflicts():
             player_cp = front_line.blue_cp
             enemy_cp = front_line.red_cp
@@ -363,9 +384,6 @@ class MissionGenerator:
             if not flight.client_units:
                 continue
             flight.aircraft_type.assign_channels_for_flight(flight, self.mission_data)
-
-        if self.game.settings.plugins.get("ewrj"):
-            self._configure_react_to_threat_for_ew_jamming_packages(aircraft_generator)
 
     def _live_unit_positions(self) -> list[tuple[float, float]]:
         # World (x, z) of every live unit already spawned (TGO SAM/BAI, FARP depots,

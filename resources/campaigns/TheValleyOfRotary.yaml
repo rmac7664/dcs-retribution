@@ -10,10 +10,26 @@ recommended_player_money: 800
 recommended_enemy_money: 1000
 miz: TheValleyOfRotary.miz
 performance: 2
+advanced_iads: true
 version: "10.4"
 squadrons:
   # Shiraz International, BLUFOR start
+  "Northern Plains":
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - Mi-8MTV2 Hip
+      size: 2
+      pilots: 6
   19:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - Mi-17 Hip
+      size: 2
+      pilots: 6
     - primary: CAS
       aircraft:
         - Mi-24P Hind-F
@@ -65,3 +81,11 @@ squadrons:
   # Bagh, inverted start frontline south
   Bagh:
     - primary: Transport
+
+settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: true
+
+ground_forces:
+  "Blue GPS Jammer Shiraz Intl": GPS Jamming Site (Blue, Unescorted)

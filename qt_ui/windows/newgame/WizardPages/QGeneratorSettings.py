@@ -34,6 +34,26 @@ class BudgetInputs(QtWidgets.QGridLayout):
 
 
 class GeneratorOptions(QtWidgets.QWizardPage):
+    def _exclusive_hds(self, turned_on: bool, other: QtWidgets.QCheckBox) -> None:
+        """Keep the two High Digit SAMs builds from being selected together.
+
+        They are separate mods, not versions of one: each renames units the other
+        still uses, so a campaign built for one spawns sites with missing pieces on
+        the other -- silently, because DCS just drops a unit type it cannot resolve.
+        """
+        if not turned_on or not other.isChecked():
+            return
+        other.setChecked(False)
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Information)
+        box.setWindowTitle("Only one High Digit SAMs build")
+        box.setText(
+            "The original High Digit SAMs and the Ultimate Compilation rename each "
+            "other's units, so only one can be used at a time."
+        )
+        box.setInformativeText("The other one has been unselected.")
+        box.exec()
+
     def __init__(self, campaign: Campaign, parent=None):
         super().__init__(parent)
 
@@ -98,8 +118,6 @@ class GeneratorOptions(QtWidgets.QWizardPage):
         self.registerField("ea6b_prowler", self.ea6b_prowler)
         self.e7a_wedgetail = QtWidgets.QCheckBox()
         self.registerField("e7a_wedgetail", self.e7a_wedgetail)
-        self.hercules = QtWidgets.QCheckBox()
-        self.registerField("hercules", self.hercules)
         self.oh_6 = QtWidgets.QCheckBox()
         self.registerField("oh_6", self.oh_6)
         self.oh_6_vietnamassetpack = QtWidgets.QCheckBox()
@@ -148,6 +166,12 @@ class GeneratorOptions(QtWidgets.QWizardPage):
         self.registerField("su30_flanker_h", self.su30_flanker_h)
         self.su35s_flanker_m = QtWidgets.QCheckBox()
         self.registerField("su35s_flanker_m", self.su35s_flanker_m)
+        self.f15ex = QtWidgets.QCheckBox()
+        self.registerField("f15ex", self.f15ex)
+        self.f15cge = QtWidgets.QCheckBox()
+        self.registerField("f15cge", self.f15cge)
+        self.eurofighter = QtWidgets.QCheckBox()
+        self.registerField("eurofighter", self.eurofighter)
         self.su57_felon = QtWidgets.QCheckBox()
         self.registerField("su57_felon", self.su57_felon)
         self.ov10a_bronco = QtWidgets.QCheckBox()
@@ -156,6 +180,16 @@ class GeneratorOptions(QtWidgets.QWizardPage):
         self.registerField("frenchpack", self.frenchpack)
         self.high_digit_sams = QtWidgets.QCheckBox()
         self.registerField("high_digit_sams", self.high_digit_sams)
+        self.high_digit_sams_ultimate = QtWidgets.QCheckBox()
+        self.registerField("high_digit_sams_ultimate", self.high_digit_sams_ultimate)
+        # The two High Digit SAMs builds rename each other's units, so having both
+        # installed breaks either way round. Ticking one clears the other.
+        self.high_digit_sams.toggled.connect(
+            lambda on: self._exclusive_hds(on, self.high_digit_sams_ultimate)
+        )
+        self.high_digit_sams_ultimate.toggled.connect(
+            lambda on: self._exclusive_hds(on, self.high_digit_sams)
+        )
         self.swedishmilitaryassetspack = QtWidgets.QCheckBox()
         self.registerField("swedishmilitaryassetspack", self.swedishmilitaryassetspack)
         self.coldwarassets = QtWidgets.QCheckBox()
@@ -170,6 +204,8 @@ class GeneratorOptions(QtWidgets.QWizardPage):
         self.registerField("vietnamwarvessels", self.vietnamwarvessels)
         self.chinesemilitaryassetspack = QtWidgets.QCheckBox()
         self.registerField("chinesemilitaryassetspack", self.chinesemilitaryassetspack)
+        self.germanymilitaryassetspack = QtWidgets.QCheckBox()
+        self.registerField("germanymilitaryassetspack", self.germanymilitaryassetspack)
         self.iranmilitaryassetspack = QtWidgets.QCheckBox()
         self.registerField("iranmilitaryassetspack", self.iranmilitaryassetspack)
         self.russianmilitaryassetspack = QtWidgets.QCheckBox()
@@ -180,6 +216,8 @@ class GeneratorOptions(QtWidgets.QWizardPage):
         self.registerField("ukmilitaryassetspack", self.ukmilitaryassetspack)
         self.ukrainemilitaryassetspack = QtWidgets.QCheckBox()
         self.registerField("ukrainemilitaryassetspack", self.ukrainemilitaryassetspack)
+        self.turkeymilitaryassetspack = QtWidgets.QCheckBox()
+        self.registerField("turkeymilitaryassetspack", self.turkeymilitaryassetspack)
         self.mig31bm_foxhound = QtWidgets.QCheckBox()
         self.registerField("mig31bm_foxhound", self.mig31bm_foxhound)
         self.mam = QtWidgets.QCheckBox()
@@ -203,22 +241,25 @@ class GeneratorOptions(QtWidgets.QWizardPage):
             ("A-4E Skyhawk (v2.3.0)", self.a4_skyhawk),
             ("A-6A Intruder (v2.7.5.01)", self.a6a_intruder),
             ("A-7E Corsair II", self.a7e_corsair2),
-            ("C-130J-30 Super Hercules (v6.8.2)", self.hercules),
             ("Cold War Assets mod (v1.2)", self.coldwarassets),
             (
-                "CurrentHill Chinese Military Assets pack (1.1.4)",
+                "CurrentHill Chinese Military Assets pack (1.1.6)",
                 self.chinesemilitaryassetspack,
+            ),
+            (
+                "CurrentHill German Military Assets pack (1.5.0)",
+                self.germanymilitaryassetspack,
             ),
             (
                 "CurrentHill Iran Military Assets pack (2.1.0)",
                 self.iranmilitaryassetspack,
             ),
             (
-                "CurrentHill Russian Military Assets pack (2.0.0)",
+                "CurrentHill Russian Military Assets pack (2.0.1)",
                 self.russianmilitaryassetspack,
             ),
             (
-                "CurrentHill Swedish Military Assets pack (1.10)",
+                "CurrentHill Swedish Military Assets pack (1.5.0)",
                 self.swedishmilitaryassetspack,
             ),
             (
@@ -226,23 +267,30 @@ class GeneratorOptions(QtWidgets.QWizardPage):
                 self.usamilitaryassetspack,
             ),
             (
-                "CurrentHill UK Military Assets pack (1.1.2)",
+                "CurrentHill UK Military Assets pack (1.5.0)",
                 self.ukmilitaryassetspack,
             ),
             (
-                "CurrentHill Ukraine Military Assets pack (1.1.1)",
+                "CurrentHill Turkey Military Assets pack (2.0.0)",
+                self.turkeymilitaryassetspack,
+            ),
+            (
+                "CurrentHill Ukraine Military Assets pack (2.0.0)",
                 self.ukrainemilitaryassetspack,
             ),
             ("EA-6B Prowler (v2.9.4.102)", self.ea6b_prowler),
             ("E-7A Wedgetail (AI Only, EW Capable)", self.e7a_wedgetail),
+            ("Eurofighter Typhoon (v1.1.4 by Lechuzas Negras)", self.eurofighter),
             ("F-100 Super Sabre (v2.7.18.30765 patch 20.10.22)", self.f100_supersabre),
             ("F-104 Starfighter (v2.7.11.222.01)", self.f104_starfighter),
             ("F-105 Thunderchief (v2.7.12.23x)", self.f105_thunderchief),
             ("F-106 Delta Dart (v2.9.4.101)", self.f106_deltadart),
+            ("F-15C EG Golden Eagle (v1.5 by Spino)", self.f15cge),
             ("F-15D Baz (v1.0)", self.f15d_baz),
+            ("F-15EX / F-15EX (CFTs) / F-15IA (v3.0 by Spino)", self.f15ex),
             ("F-15I Ra'am (v1.0 by IDF Mods Project)", self.f_15_idf),
             ("F-16I Sufa & F-16D (v3.6 by IDF Mods Project)", self.f_16_idf),
-            ("F-22A Raptor (v2.0.0 released May 2025)", self.f22_raptor),
+            ("F-22A Raptor (v2.1.0)", self.f22_raptor),
             ("F-35A/B/C Lightning II (v2.9.2.103 FC3 EFM)", self.vsnf35),
             ("F-4B/C Phantom II (2.8.7.204)", self.f4bc_phantom),
             ("F-4E Expanded Weapons (v1.0.11)", self.f4e_expanded_weapons),
@@ -254,8 +302,12 @@ class GeneratorOptions(QtWidgets.QWizardPage):
                 "F/A-18E/F Super Hornet AI Tanker (version 2.4.5.260501.RC1)",
                 self.fa18ef_tanker,
             ),
-            ("Frenchpack (v4.9.1)", self.frenchpack),
-            ("High Digit SAMs (v1.4.0)", self.high_digit_sams),
+            ("Frenchpack (v5.0)", self.frenchpack),
+            ("High Digit SAMs (v2.1.0, Auranis)", self.high_digit_sams),
+            (
+                "High Digit SAMs - Ultimate Compilation (v1.4.4, dcs-sams)",
+                self.high_digit_sams_ultimate,
+            ),
             ("IDF Assets Pack (v1.1 by IDF Mods Project)", self.irondome),
             ("JAS 39 Gripen (v1.8.5-beta)", self.jas39_gripen),
             ("MiG-31BM (v2.62)", self.mig31bm_foxhound),
@@ -265,11 +317,11 @@ class GeneratorOptions(QtWidgets.QWizardPage):
             ("OH-6 Vietnam Asset Pack (v1.0)", self.oh_6_vietnamassetpack),
             ("OV-10A Bronco", self.ov10a_bronco),
             ("Saab 105/SK-60B (v1.2.1)", self.sk_60),
-            ("Spanish Naval Assets pack (desdemicabina 3.2.0)", self.spanishnavypack),
+            ("Spanish Naval Assets pack (desdemicabina 3.3.0)", self.spanishnavypack),
             ("Star Wars Modpack 2.54+", self.SWPack),
             ("Su-15 Flagon (v1.0)", self.su15_flagon),
             ("Su-30 Flanker-H (v2.8.04b + CWS 3.72)", self.su30_flanker_h),
-            ("Su-35S Flanker-M (v2.0.27b)", self.su35s_flanker_m),
+            ("Su-35S Flanker-M (v2.0.37b)", self.su35s_flanker_m),
             ("Su-57 Felon (build-04)", self.su57_felon),
             ("Super Étendard (v2.5.5)", self.super_etendard),
             ("Tornado F3 ADV (1.0)", self.tornado_adv),
@@ -309,7 +361,7 @@ class GeneratorOptions(QtWidgets.QWizardPage):
         self.no_lha.setChecked(s.get("no_lha", False))
         self.no_player_navy.setChecked(s.get("no_player_navy", False))
         self.no_enemy_navy.setChecked(s.get("no_enemy_navy", False))
-        self.squadrons_start_full.setChecked(s.get("squadron_start_full", False))
+        self.squadrons_start_full.setChecked(s.get("squadrons_start_full", False))
 
         self.f9f_panther.setChecked(s.get("f9f_panther", False))
         self.a4_skyhawk.setChecked(s.get("a4_skyhawk", False))
@@ -317,7 +369,6 @@ class GeneratorOptions(QtWidgets.QWizardPage):
         self.a7e_corsair2.setChecked(s.get("a7e_corsair2", False))
         self.ea6b_prowler.setChecked(s.get("ea6b_prowler", False))
         self.e7a_wedgetail.setChecked(s.get("e7a_wedgetail", False))
-        self.hercules.setChecked(s.get("hercules", False))
         self.uh_60l.setChecked(s.get("uh_60l", False))
         self.f4bc_phantom.setChecked(s.get("f4bc_phantom", False))
         self.f4e_expanded_weapons.setChecked(s.get("f4e_expanded_weapons", False))
@@ -341,6 +392,9 @@ class GeneratorOptions(QtWidgets.QWizardPage):
         self.ov10a_bronco.setChecked(s.get("ov10a_bronco", False))
         self.frenchpack.setChecked(s.get("frenchpack", False))
         self.high_digit_sams.setChecked(s.get("high_digit_sams", False))
+        self.high_digit_sams_ultimate.setChecked(
+            s.get("high_digit_sams_ultimate", False)
+        )
         self.spanishnavypack.setChecked(s.get("spanishnavypack", False))
         self.irondome.setChecked(s.get("irondome", False))
         self.swedishmilitaryassetspack.setChecked(
@@ -350,12 +404,18 @@ class GeneratorOptions(QtWidgets.QWizardPage):
         self.chinesemilitaryassetspack.setChecked(
             s.get("chinesemilitaryassetspack", False)
         )
+        self.germanymilitaryassetspack.setChecked(
+            s.get("germanymilitaryassetspack", False)
+        )
         self.iranmilitaryassetspack.setChecked(s.get("iranmilitaryassetspack", False))
         self.russianmilitaryassetspack.setChecked(
             s.get("russianmilitaryassetspack", False)
         )
         self.usamilitaryassetspack.setChecked(s.get("usamilitaryassetspack", False))
         self.ukmilitaryassetspack.setChecked(s.get("ukmilitaryassetspack", False))
+        self.turkeymilitaryassetspack.setChecked(
+            s.get("turkeymilitaryassetspack", False)
+        )
         self.ukrainemilitaryassetspack.setChecked(
             s.get("ukrainemilitaryassetspack", False)
         )
@@ -365,3 +425,11 @@ class GeneratorOptions(QtWidgets.QWizardPage):
         self.oh_6.setChecked(s.get("oh_6", False))
         self.oh_6_vietnamassetpack.setChecked(s.get("oh_6_vietnamassetpack", False))
         self.mam.setChecked(s.get("mam", False))
+        self.eurofighter.setChecked(s.get("eurofighter", False))
+        self.f15ex.setChecked(s.get("f15ex", False))
+        self.f15cge.setChecked(s.get("f15cge", False))
+        self.su35s_flanker_m.setChecked(s.get("su35s_flanker_m", False))
+        self.su15_flagon.setChecked(s.get("su15_flagon", False))
+        self.fa18ef_tanker.setChecked(s.get("fa18ef_tanker", False))
+        self.coldwarassets.setChecked(s.get("coldwarassets", False))
+        self.SWPack.setChecked(s.get("SWPack", False))

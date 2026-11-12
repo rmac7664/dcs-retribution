@@ -20,18 +20,28 @@ squadrons:
       aircraft:
         - Fw 190 D-9 Dora
       size: 12
+      pilots: 16
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Ju 88 A-4
       size: 12
+      pilots: 16
   # Conches
   40:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - Fw 190 A-8 Anton
+      size: 2
+      pilots: 6
     - primary: BARCAP
       secondary: any
       aircraft:
         - Bf 109 K-4 Kurfürst
       size: 4
+      pilots: 8
   # Carpiquet
   19:
     - primary: CAS
@@ -40,33 +50,46 @@ squadrons:
         - Thunderbolt Mk.II (Late)
         - P-47D-40 Thunderbolt
       size: 12
+      pilots: 16
     - primary: BARCAP
       secondary: any
       aircraft:
         - Spitfire LF Mk IX
       size: 12
+      pilots: 16
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - MosquitoFBMkVI
       size: 12
+      pilots: 16
     - primary: OCA/Runway
       secondary: air-to-ground
       aircraft:
         - Boston Mk.III  
         - A-20G Havoc
       size: 10
+      pilots: 14
   # Ford_AF
   31:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - P-51D-25-NA Mustang
+      size: 2
+      pilots: 6
     - primary: Escort
       secondary: air-to-air
       aircraft:
         - Mustang Mk.IV (Early)
         - P-51D-25-NA Mustang
       size: 10
+      pilots: 14
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Fortress Mk.III
         - B-17G Flying Fortress
       size: 10
+      pilots: 14

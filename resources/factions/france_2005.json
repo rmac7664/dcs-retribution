@@ -9,17 +9,18 @@
   "aircrafts": [
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "Mirage 2000-5",
     "Mirage 2000C",
     "Mirage-F1B",
     "Mirage-F1CE",
     "Mirage-F1C-200",
+    "Mirage-F1CR",
     "Mirage-F1CT",
     "Super Étendard",
     "SA 342L Gazelle",
     "SA 342M Gazelle",
-    "SA 342M Gazelle Mistral"
+    "SA 342M Gazelle Mistral",
+    "RQ-1A Predator"
   ],
   "awacs": [
     "E-2C Hawkeye",
@@ -55,10 +56,13 @@
     "Infantry M4",
     "MANPADS Stinger"
   ],
-  "air_defense_units": [],
+  "air_defense_units": [
+    "EWR AN/FPS-117 Radar"
+  ],
   "preset_groups": [
     "Hawk",
-    "Roland"
+    "Roland",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "DDG Arleigh Burke IIa",

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from game.server.controlpoints.models import ControlPointJs
 from game.server.flights.models import FlightJs
 from game.server.frontlines.models import FrontLineJs
+from game.server.highcommand.models import HighCommandMarkJs
 from game.server.iadsnetwork.models import IadsNetworkJs
 from game.server.leaflet import LeafletPoint
 from game.server.mapzones.models import (
@@ -22,6 +23,45 @@ if TYPE_CHECKING:
     from game import Game
 
 
+class MapLayersJs(BaseModel):
+    """The web client's map-layer panel state, persisted with the save.
+
+    `state` is an opaque JSON string the client owns end to end; the backend only
+    stores and returns it so the user's layer choices survive turns and reloads.
+    """
+
+    state: str | None = None
+
+
+class WindLevelJs(BaseModel):
+    """The turn's wind at one of the three levels DCS models. It is the same
+    everywhere on the map at that level."""
+
+    altitude_m: int
+    #: Where the wind blows to, in degrees, as DCS keeps it.
+    blows_to: float
+    speed_mps: float
+
+    class Config:
+        title = "WindLevel"
+
+    @staticmethod
+    def for_game(game: Game) -> list[WindLevelJs]:
+        wind = game.conditions.weather.wind
+        return [
+            WindLevelJs(
+                altitude_m=altitude,
+                blows_to=at.direction or 0,
+                speed_mps=at.speed or 0,
+            )
+            for altitude, at in (
+                (0, wind.at_0m),
+                (2000, wind.at_2000m),
+                (8000, wind.at_8000m),
+            )
+        ]
+
+
 class GameJs(BaseModel):
     control_points: list[ControlPointJs]
     tgos: list[TgoJs]
@@ -34,6 +74,7 @@ class GameJs(BaseModel):
     map_center: LeafletPoint | None
     unculled_zones: list[UnculledZoneJs]
     map_zones: MapZonesJs
+    high_command: list[HighCommandMarkJs]
 
     class Config:
         title = "Game"
@@ -54,4 +95,5 @@ class GameJs(BaseModel):
             ),
             unculled_zones=UnculledZoneJs.from_game(game),
             map_zones=MapZonesJs.from_game(game),
+            high_command=HighCommandMarkJs.all_in_game(game),
         )

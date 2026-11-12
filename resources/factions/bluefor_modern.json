@@ -4,6 +4,11 @@
   "authors": "Khopa",
   "description": "<p>A generic bluefor modern faction. This also includes many redfor units and is meant to be a faction that has access to most modern flyable modules.</p>",
   "aircrafts": [
+    "F-15EX Eagle II",
+    "F-15EX Eagle II (CFTs)",
+    "F-15IA",
+    "F-15C EG Golden Eagle",
+    "Eurofighter Typhoon",
     "A-10A Thunderbolt II",
     "A-10C Thunderbolt II (Suite 3)",
     "A-10C Thunderbolt II (Suite 7)",
@@ -16,7 +21,6 @@
     "B-52H Stratofortress",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "CH-47D",
     "CH-47F Block I",
     "F-14B Tomcat",
@@ -74,7 +78,9 @@
     "UH-1H Iroquois",
     "UH-60A",
     "UH-60L",
-    "MH-60L DAP"
+    "MH-60L DAP",
+    "MQ-9 Reaper",
+    "RQ-1A Predator"
   ],
   "awacs": [
     "E-2D Advanced Hawkeye",
@@ -117,7 +123,9 @@
   "preset_groups": [
     "Hawk",
     "Patriot",
-    "NASAMS AIM-120C"
+    "NASAMS AIM-120C",
+    "SAMP/T",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "DDG Arleigh Burke IIa",

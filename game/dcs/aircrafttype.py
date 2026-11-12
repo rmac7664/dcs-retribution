@@ -16,8 +16,13 @@ from dcs.unittype import FlyingType
 from dcs.weapons_data import weapon_ids
 
 from game.ato import FlightType
+from game.dcs.afaccapabilities import capabilities_for
 from game.data.units import UnitClass
-from game.dcs.aircraftproperties import PropertyDateGate
+from game.dcs.aircraftproperties import (
+    NightVision,
+    PropertyDateGate,
+    night_vision_support,
+)
 from game.dcs.lasercodeconfig import LaserCodeConfig
 from game.dcs.unittype import UnitType
 from game.persistency import user_custom_weapon_injections_dir
@@ -59,6 +64,12 @@ from game.utils import (
     kph,
     nautical_miles,
 )
+from game.dcs.payload_loading import install_resilient_payload_loading
+
+# Make pydcs tolerate a single unparseable payload .lua (common with hand-written
+# third-party mod files) instead of dropping every payload for the airframe.
+# Installed here because this module is imported before any payload is loaded.
+install_resilient_payload_loading()
 
 if TYPE_CHECKING:
     from game.missiongenerator.aircraft.flightdata import FlightData
@@ -236,12 +247,9 @@ class AircraftType(UnitType[Type[FlyingType]]):
     # when no TGP is mounted on any station.
     has_built_in_target_pod: bool
 
-    # indicates if the aircraft has a built-in jammer allowing Defensive EWJamming to be used
-    # without the need for a jamming pod
+    # Legacy aircraft metadata retained for data compatibility. Mission generation
+    # no longer uses these flags; native ECM is controlled by waypoint options.
     has_built_in_ecm: bool
-
-    # Indicates if the aircraft has a built in jammer allowing Offensive EWJamming to be used
-    # without the need for a jamming pod
     has_built_in_jamming: bool
 
     task_priorities: dict[FlightType, int]
@@ -249,6 +257,10 @@ class AircraftType(UnitType[Type[FlyingType]]):
 
     use_f15e_waypoint_names: bool
 
+    #: Tasks the aircraft is capable of but that are not auto-assignable by default
+    #: (the squadron's mission-type checkbox starts unchecked). Still selectable
+    #: manually. Each must also appear in ``tasks`` to supply its priority.
+    secondary_tasks: frozenset[FlightType] = frozenset()
     #: Date gate for era-specific payload-editor properties (e.g. the helmet-mounted
     #: cueing selection), built from the aircraft data file's
     #: ``date_gated_properties`` block. Empty (gates nothing) for the many airframes
@@ -274,6 +286,9 @@ class AircraftType(UnitType[Type[FlyingType]]):
 
     def __post_init__(self) -> None:
         enrich = {}
+        if capabilities_for(self.dcs_id) is not None:
+            enrich[FlightType.AFAC_AREA] = 10
+            enrich[FlightType.AFAC_FRONTLINE] = 10
         if FlightType.SEAD_SWEEP not in self.task_priorities:
             if (value := self.task_priorities.get(FlightType.SEAD)) or (
                 value := self.task_priorities.get(FlightType.SEAD_ESCORT)
@@ -305,6 +320,12 @@ class AircraftType(UnitType[Type[FlyingType]]):
     @property
     def flyable(self) -> bool:
         return self.dcs_unit_type.flyable
+
+    @cached_property
+    def night_vision(self) -> NightVision | None:
+        if self.flyable:
+            return night_vision_support(self.dcs_id, self.dcs_unit_type.properties)
+        return None
 
     @property
     def helicopter(self) -> bool:
@@ -467,6 +488,9 @@ class AircraftType(UnitType[Type[FlyingType]]):
             "F-15E Strike Eagle (AI)": "F-15E Strike Eagle",
             "[CH] Tu-95MSM": "Tu-95MS Bear-H",
             "[CH] Mi-28N AH": "Mi-28N Havoc",
+            # Anubis' C-130 mod is gone; a save that flew it reads the stock
+            # C-130J-30, which is the same airframe without the mod's stores.
+            "C-130J-30 Super Hercules": "C-130J-30",
         }
 
     @classmethod
@@ -579,6 +603,9 @@ class AircraftType(UnitType[Type[FlyingType]]):
             cls._set_props_overrides(prop_overrides, aircraft)
 
         task_priorities = cls.get_task_priorities(data)
+        secondary_tasks = frozenset(
+            FlightType(t) for t in data.get("secondary_tasks", [])
+        )
 
         cls._custom_weapon_injections(aircraft, data)
         cls._user_weapon_injections(aircraft)
@@ -619,6 +646,7 @@ class AircraftType(UnitType[Type[FlyingType]]):
             cabin_size=data.get("cabin_size", 10 if aircraft.helicopter else 0),
             can_carry_crates=data.get("can_carry_crates", aircraft.helicopter),
             task_priorities=task_priorities,
+            secondary_tasks=secondary_tasks,
             has_built_in_target_pod=data.get("has_built_in_target_pod", False),
             has_built_in_ecm=data.get("has_built_in_ecm", False),
             has_built_in_jamming=data.get("has_built_in_jamming", False),

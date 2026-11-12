@@ -28,7 +28,8 @@
     "Tu-142 Bear-F",
     "Tu-160 Blackjack",
     "Tu-22M3 Backfire-C",
-    "Tu-95MS Bear-H"
+    "Tu-95MS Bear-H",
+    "WingLoong-I"
   ],
   "awacs": [
     "A-50"
@@ -73,7 +74,8 @@
     "SA-20/S-300PMU-1",
     "SA-20B/S-300PMU-2",
     "SA-23/S-300VM",
-    "Russian Navy"
+    "Russian Navy",
+    "GPS Jamming Site (Red)"
   ],
   "naval_units": [
     "Frigate 1135M Rezky",

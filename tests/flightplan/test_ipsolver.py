@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import math
 import pytest
 from dcs.terrain import Caucasus
 from shapely import Point, MultiPolygon, Polygon, unary_union
@@ -99,3 +100,84 @@ def test_fuzz_ipsolver(fuzzed_solver: IpSolver, run_number: int) -> None:
 
 def test_can_construct_solver_with_empty_threat() -> None:
     IpSolver(Point(0, 0), Point(0, 0), ALL_DOCTRINES[0], MultiPolygon([]))
+
+
+def test_raising_max_ingress_distance_pushes_ip_out_to_standoff_range() -> None:
+    # Regression for issue #34: stand-off-armed flights should ingress from their
+    # weapon's launch range. PackageWaypoints raises the doctrine's max ingress
+    # distance to the stand-off range, which must move the IP out to that distance.
+    from dataclasses import replace
+
+    def distance_from_target(ip: Point) -> Distance:
+        return meters(math.hypot(ip.x - target.x, ip.y - target.y))
+
+    doctrine = ALL_DOCTRINES[0]
+    departure = Point(0, 0)
+    target = point_at_heading(departure, Heading.from_degrees(0), nautical_miles(300))
+
+    default_solver = IpSolver(departure, target, doctrine, MultiPolygon([]))
+    default_distance = distance_from_target(default_solver.solve())
+    assert default_distance.nautical_miles == pytest.approx(
+        doctrine.max_ingress_distance.nautical_miles, abs=1
+    )
+
+    standoff = nautical_miles(160)
+    standoff_doctrine = replace(doctrine, max_ingress_distance=standoff)
+    standoff_solver = IpSolver(departure, target, standoff_doctrine, MultiPolygon([]))
+    standoff_distance = distance_from_target(standoff_solver.solve())
+    assert standoff_distance.nautical_miles == pytest.approx(
+        standoff.nautical_miles, abs=1
+    )
+
+
+def test_ip_stays_on_route_when_ingress_distance_exceeds_route_length() -> None:
+    # Regression for Druss99's PR #888 review concern: an unclamped max ingress
+    # distance far longer than the departure-target leg (as PackageWaypoints.create
+    # would pass if it didn't cap the stand-off range to the route length) must not
+    # push the IP past the departure point or off the map. PackageWaypoints clamps the
+    # doctrine before calling IpSolver, so this pins IpSolver's own behavior: the IP
+    # should never end up farther from the target than the departure point is.
+    from dataclasses import replace
+
+    doctrine = ALL_DOCTRINES[0]
+    departure = Point(0, 0)
+    route_length = nautical_miles(100)
+    target = point_at_heading(departure, Heading.from_degrees(0), route_length)
+
+    # A cruise-missile range several times longer than the route itself.
+    oversized_doctrine = replace(doctrine, max_ingress_distance=nautical_miles(2000))
+    solver = IpSolver(departure, target, oversized_doctrine, MultiPolygon([]))
+    ip = solver.solve()
+
+    ip_distance_from_departure = meters(math.hypot(ip.x, ip.y))
+    assert ip_distance_from_departure.nautical_miles <= route_length.nautical_miles + 1
+
+
+def test_a_target_nearer_than_the_minimum_ingress_distance_can_still_be_planned() -> (
+    None
+):
+    """CAS from a base nine and a half miles from the front line.
+
+    The solver looks for the IP in the ring between the doctrine's minimum ingress
+    distance and its maximum. PackageWaypoints lowers that maximum to the reach of the
+    weapons, and where the target is nearer than the doctrine's own minimum the floor
+    comes down with it -- a ring of no width holds no points, and every strategy
+    failed on a geometry that is perfectly solvable.
+    """
+    from game.ato.packagewaypoints import PackageWaypoints
+
+    doctrine = ALL_DOCTRINES[0]
+    reach = doctrine.min_ingress_distance - nautical_miles(0.5)
+    departure = Point(0, 0)
+    target = point_at_heading(departure, Heading.from_degrees(90), reach)
+
+    planned = PackageWaypoints.doctrine_for_weapon_range(
+        doctrine, nautical_miles(100), reach
+    )
+    ip = IpSolver(departure, target, planned, MultiPolygon([])).solve()
+
+    assert ip is not None
+    # And it is in the ring that was asked for, rather than flung behind the departure
+    # because the only ring on offer was the doctrine's own.
+    away = meters(math.hypot(ip.x - target.x, ip.y - target.y))
+    assert planned.min_ingress_distance <= away <= planned.max_ingress_distance

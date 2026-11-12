@@ -1,20 +1,37 @@
 import os
 from typing import Dict
 
+from PySide6.QtCore import QSettings
 from PySide6.QtGui import QPixmap
 
 from .liberation_theme import get_theme_icons
 
+#: Where the code, the issues and the builds of THIS fork are, and where the things
+#: it does not have its own copy of still live. The manual and the forum thread stay
+#: upstream on purpose: that documentation is real and ours would be an empty wiki.
 URLS: Dict[str, str] = {
     "Manual": "https://github.com/dcs-retribution/dcs-retribution/wiki",
-    "Repository": "https://github.com/dcs-retribution/dcs-retribution",
+    "Repository": "https://github.com/juanjux/dcs-escalation",
     "ForumThread": "https://forum.dcs.world/topic/368593-dcs-retribution-dynamic-campaign-generator/",
-    "Issues": "https://github.com/dcs-retribution/dcs-retribution/issues",
-    "Releases": "https://github.com/dcs-retribution/dcs-retribution/releases",
+    "Issues": "https://github.com/juanjux/dcs-escalation/issues",
+    "Releases": "https://github.com/juanjux/dcs-escalation/releases",
 }
 
 LABELS_OPTIONS = ["Full", "Abbreviated", "Dot Only", "Neutral Dot", "Off"]
 SKILL_OPTIONS = ["Average", "Good", "High", "Excellent"]
+
+#: Where Qt remembers window sizes, positions and the odd preference. It keeps the
+#: name the fork had when the player's were written: this is a key in his registry
+#: rather than anything he ever reads, and renaming it would put every window back to
+#: its default size and lose the command palette's history on the next launch.
+QSETTINGS_ORGANISATION = "DCS Retribution"
+QSETTINGS_APPLICATION = "Qt UI"
+
+
+def app_settings() -> QSettings:
+    """The store the windows remember themselves in."""
+    return QSettings(QSETTINGS_ORGANISATION, QSETTINGS_APPLICATION)
+
 
 AIRCRAFT_ICONS: Dict[str, QPixmap] = {}
 VEHICLES_ICONS: Dict[str, QPixmap] = {}
@@ -32,9 +49,6 @@ def load_icons():
         "./resources/ui/misc/" + get_theme_icons() + "/github.png"
     )
     ICONS["Ukraine"] = QPixmap("./resources/ui/misc/ukraine.png")
-    ICONS["Pretense"] = QPixmap("./resources/ui/misc/pretense.png")
-    ICONS["Pretense_discord"] = QPixmap("./resources/ui/misc/pretense_discord.png")
-    ICONS["Pretense_generate"] = QPixmap("./resources/ui/misc/pretense_generate.png")
 
     ICONS["Control Points"] = QPixmap(
         "./resources/ui/misc/" + get_theme_icons() + "/circle.png"
@@ -80,6 +94,7 @@ def load_icons():
         "./resources/ui/misc/" + get_theme_icons() + "/money_icon.png"
     )
     ICONS["Campaign Management"] = ICONS["Money"]
+
     ICONS["Campaign Doctrine"] = QPixmap("./resources/ui/misc/blue-sam.png")
     ICONS["PassTurn"] = QPixmap(
         "./resources/ui/misc/" + get_theme_icons() + "/hourglass.png"
@@ -113,6 +128,9 @@ def load_icons():
         "./resources/ui/misc/" + get_theme_icons() + "/pluginsoptions.png"
     )
     ICONS["Notes"] = QPixmap("./resources/ui/misc/" + get_theme_icons() + "/notes.png")
+    ICONS["Live Pilots"] = QPixmap(
+        "./resources/ui/misc/" + get_theme_icons() + "/pilots.png"
+    )
     ICONS["Reload"] = QPixmap(
         "./resources/ui/misc/" + get_theme_icons() + "/reload.png"
     )
@@ -210,7 +228,13 @@ def load_aircraft_icons():
     AIRCRAFT_ICONS["F-16A MLU"] = AIRCRAFT_ICONS["F-16A"]
     AIRCRAFT_ICONS["FA-18C_hornet"] = AIRCRAFT_ICONS["FA-18C"]
     AIRCRAFT_ICONS["A-10C_2"] = AIRCRAFT_ICONS["A-10C"]
-    f1_refuel = ["Mirage-F1CT", "Mirage-F1EE", "Mirage-F1M-EE", "Mirage-F1EQ"]
+    f1_refuel = [
+        "Mirage-F1CR",
+        "Mirage-F1CT",
+        "Mirage-F1EE",
+        "Mirage-F1M-EE",
+        "Mirage-F1EQ",
+    ]
     for f1 in f1_refuel:
         AIRCRAFT_ICONS[f1] = AIRCRAFT_ICONS["Mirage-F1C-200"]
     AIRCRAFT_ICONS["Mirage-F1M-CE"] = AIRCRAFT_ICONS["Mirage-F1CE"]

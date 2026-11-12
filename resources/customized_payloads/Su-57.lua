@@ -13,7 +13,7 @@ local unitPayloads = {
 					["num"] = 1,
 				},
 				[3] = {
-					["CLSID"] = "{KH_59MK2}",
+					["CLSID"] = "{4D13E282-DF46-4B23-864A-A9423DFDE504}",
 					["num"] = 2,
 				},
 				[4] = {
@@ -21,35 +21,35 @@ local unitPayloads = {
 					["num"] = 3,
 				},
 				[5] = {
-					["CLSID"] = "{KH_59MK2}",
+					["CLSID"] = "{4D13E282-DF46-4B23-864A-A9423DFDE504}",
 					["num"] = 11,
 				},
 				[6] = {
-					["CLSID"] = "{KH_59MK2}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 9,
 				},
 				[7] = {
-					["CLSID"] = "{KH_59MK2}",
+					["CLSID"] = "{4D13E282-DF46-4B23-864A-A9423DFDE504}",
 					["num"] = 4,
 				},
 				[8] = {
-					["CLSID"] = "{KH_59MK2}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 8,
 				},
 				[9] = {
-					["CLSID"] = "{KH_59MK2}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 5,
 				},
 				[10] = {
-					["CLSID"] = "{KH_59MK2}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 6,
 				},
 				[11] = {
-					["CLSID"] = "{KH_59MK2}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 7,
 				},
 				[12] = {
-					["CLSID"] = "{FBC29BFE-3D24-4C64-B81D-941239D12249}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 10,
 				},
 			},
@@ -77,23 +77,23 @@ local unitPayloads = {
 					["num"] = 2,
 				},
 				[5] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 7,
 				},
 				[6] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 6,
 				},
 				[7] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 8,
 				},
 				[8] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 5,
 				},
 				[9] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 4,
 				},
 				[10] = {
@@ -101,11 +101,11 @@ local unitPayloads = {
 					["num"] = 3,
 				},
 				[11] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 9,
 				},
 				[12] = {
-					["CLSID"] = "{FBC29BFE-3D24-4C64-B81D-941239D12249}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 10,
 				},
 			},
@@ -137,31 +137,31 @@ local unitPayloads = {
 					["num"] = 11,
 				},
 				[6] = {
-					["CLSID"] = "{KH_59MK2}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 9,
 				},
 				[7] = {
-					["CLSID"] = "{KH_59MK2}",
+					["CLSID"] = "{4D13E282-DF46-4B23-864A-A9423DFDE504}",
 					["num"] = 4,
 				},
 				[8] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 8,
 				},
 				[9] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 5,
 				},
 				[10] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 6,
 				},
 				[11] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 7,
 				},
 				[12] = {
-					["CLSID"] = "{FBC29BFE-3D24-4C64-B81D-941239D12249}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 10,
 				},
 			},
@@ -193,7 +193,7 @@ local unitPayloads = {
 					["num"] = 11,
 				},
 				[6] = {
-					["CLSID"] = "{F72F47E5-C83A-4B85-96ED-D3E46671EE9A}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 9,
 				},
 				[7] = {
@@ -201,23 +201,23 @@ local unitPayloads = {
 					["num"] = 4,
 				},
 				[8] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 8,
 				},
 				[9] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 5,
 				},
 				[10] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 6,
 				},
 				[11] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 7,
 				},
 				[12] = {
-					["CLSID"] = "{FBC29BFE-3D24-4C64-B81D-941239D12249}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 10,
 				},
 			},
@@ -249,23 +249,23 @@ local unitPayloads = {
 					["num"] = 11,
 				},
 				[6] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 8,
 				},
 				[7] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 5,
 				},
 				[8] = {
-					["CLSID"] = "{FBC29BFE-3D24-4C64-B81D-941239D12249}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 10,
 				},
 				[9] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 7,
 				},
 				[10] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 6,
 				},
 			},
@@ -298,27 +298,27 @@ local unitPayloads = {
 					["num"] = 11,
 				},
 				[6] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 8,
 				},
 				[7] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 5,
 				},
 				[8] = {
-					["CLSID"] = "{FBC29BFE-3D24-4C64-B81D-941239D12249}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 10,
 				},
 				[9] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 7,
 				},
 				[10] = {
-					["CLSID"] = "{RVV-AE}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 6,
 				},
 				[11] = {
-					["CLSID"] = "{35B698AC-9FEF-4EC4-AD29-484A0085F62B}",
+					["CLSID"] = "{RVV-PD}",
 					["num"] = 9,
 				},
 				[12] = {
@@ -329,6 +329,63 @@ local unitPayloads = {
 			["tasks"] = {
 				[1] = 11,
 				[2] = 34,
+			},
+		},
+		[7] = {
+			["displayName"] = "Retribution DEAD",
+			["name"] = "Retribution DEAD",
+			["pylons"] = {
+				[1] = {
+					["CLSID"] = "{FBC29BFE-3D24-4C64-B81D-941239D12249}",
+					["num"] = 12,
+				},
+				[2] = {
+					["CLSID"] = "{FBC29BFE-3D24-4C64-B81D-941239D12249}",
+					["num"] = 1,
+				},
+				[3] = {
+					["CLSID"] = "{B4FC81C9-B861-4E87-BBDC-A1158E648EBF}",
+					["num"] = 2,
+				},
+				[4] = {
+					["CLSID"] = "{FBC29BFE-3D24-4C64-B81D-941239D12249}",
+					["num"] = 3,
+				},
+				[5] = {
+					["CLSID"] = "{B4FC81C9-B861-4E87-BBDC-A1158E648EBF}",
+					["num"] = 11,
+				},
+				[6] = {
+					["CLSID"] = "{RVV-PD}",
+					["num"] = 4,
+				},
+				[7] = {
+					["CLSID"] = "{RVV-PD}",
+					["num"] = 5,
+				},
+				[8] = {
+					["CLSID"] = "{RVV-PD}",
+					["num"] = 6,
+				},
+				[9] = {
+					["CLSID"] = "{RVV-PD}",
+					["num"] = 7,
+				},
+				[10] = {
+					["CLSID"] = "{RVV-PD}",
+					["num"] = 8,
+				},
+				[11] = {
+					["CLSID"] = "{RVV-PD}",
+					["num"] = 9,
+				},
+				[12] = {
+					["CLSID"] = "{RVV-PD}",
+					["num"] = 10,
+				},
+			},
+			["tasks"] = {
+				[1] = 31,
 			},
 		},
 	},

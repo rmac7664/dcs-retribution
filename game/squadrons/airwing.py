@@ -3,6 +3,7 @@ from __future__ import annotations
 import itertools
 from collections import defaultdict
 from typing import Iterator, Optional, Sequence, TYPE_CHECKING, Any
+from uuid import UUID
 
 from game.ato.closestairfields import ObjectiveDistanceCache
 from game.dcs.aircrafttype import AircraftType
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from game.game import Game
     from game.theater.player import Player
     from ..ato.flighttype import FlightType
+    from .pilot import Pilot
     from .squadron import Squadron
 
 
@@ -38,6 +40,13 @@ class AirWing:
                 state["player"] = Player.RED
 
         self.__dict__.update(state)
+
+    def claim_squadron_def(self, squadron: Squadron) -> None:
+        """Mark this squadron's preset taken again, after putting the squadron back."""
+        if squadron.aircraft in self.squadron_defs:
+            for squadron_def in self.squadron_defs[squadron.aircraft]:
+                if squadron_def.name == squadron.name:
+                    squadron_def.claimed = True
 
     def unclaim_squadron_def(self, squadron: Squadron) -> None:
         if squadron.aircraft in self.squadron_defs:
@@ -67,7 +76,23 @@ class AirWing:
         this_turn: bool,
         preferred_type: Optional[AircraftType] = None,
         ignore_range: bool = False,
+        preferred_squadron: Optional[Squadron] = None,
     ) -> list[Squadron]:
+        # A caller that named a squadron gets that squadron or nothing. Narrowing by
+        # aircraft type is not the same thing: two squadrons flying the same airframe
+        # both pass the type filter, and the ranking then picks whichever is nearer
+        # the target -- so a request for one of them quietly spent the other's
+        # aircraft, and the flights that had been counted against it were scrubbed
+        # later for having none left.
+        if preferred_squadron is not None:
+            if preferred_squadron.player != self.player:
+                return []
+            if not preferred_squadron.can_auto_assign_mission(
+                location, task, size, heli, this_turn, ignore_range
+            ):
+                return []
+            return [preferred_squadron]
+
         airfield_cache = ObjectiveDistanceCache.get_closest_airfields(location)
         best_aircraft = AircraftType.priority_list_for_task(task)
         ordered: list[Squadron] = []
@@ -119,9 +144,17 @@ class AirWing:
         this_turn: bool,
         preferred_type: Optional[AircraftType] = None,
         ignore_range: bool = False,
+        preferred_squadron: Optional[Squadron] = None,
     ) -> Optional[Squadron]:
         for squadron in self.best_squadrons_for(
-            location, task, size, heli, this_turn, preferred_type, ignore_range
+            location,
+            task,
+            size,
+            heli,
+            this_turn,
+            preferred_type,
+            ignore_range,
+            preferred_squadron,
         ):
             return squadron
         return None
@@ -160,6 +193,20 @@ class AirWing:
 
     def iter_squadrons(self) -> Iterator[Squadron]:
         return itertools.chain.from_iterable(self.squadrons.values())
+
+    def pilot_index(self) -> dict[UUID, tuple[Squadron, Pilot]]:
+        """Every pilot in the wing by id, for turning a friendship into a man.
+
+        Built on the spot rather than kept: the roster changes whenever anybody is
+        recruited, killed, transferred or thrown out, and an index that has gone stale
+        answers with a man who is not there any more. A wing is a few hundred pilots,
+        so building one is cheaper than keeping one honest.
+        """
+        index: dict[UUID, tuple[Squadron, Pilot]] = {}
+        for squadron in self.iter_squadrons():
+            for pilot in squadron.current_roster:
+                index[pilot.id] = (squadron, pilot)
+        return index
 
     def squadron_at_index(self, index: int) -> Squadron:
         return list(self.iter_squadrons())[index]

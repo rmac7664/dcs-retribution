@@ -1,0 +1,567 @@
+"""UI state and roster regression checks for mission planning dialogs."""
+
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Callable, Iterator
+from unittest.mock import Mock
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(scope="module")
+def qt_app() -> Any:
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def environment(tmp_path: Path, monkeypatch: Any) -> Iterator[None]:
+    from game import persistency
+    from PySide6.QtGui import QIcon
+    from qt_ui.uiconstants import EVENT_ICONS
+
+    persistency.setup(str(tmp_path), False, 16897)
+    monkeypatch.setitem(EVENT_ICONS, "strike", QIcon())
+    errors: list[Any] = []
+    monkeypatch.setattr(sys, "excepthook", lambda *args: errors.append(args))
+    yield
+    assert not errors, errors
+
+
+class Named(SimpleNamespace):
+    def __str__(self) -> str:
+        return str(self.name)
+
+
+def make_creator(
+    monkeypatch: Any,
+    available: bool = True,
+    *,
+    configure: Callable[[Any, Any], None] | None = None,
+    is_ownfor: bool = True,
+) -> Any:
+    from game.ato.flighttype import FlightType
+    from game.ato.loadouts import Loadout
+    from game.ato.starttype import StartType
+    from game.dcs.aircrafttype import AircraftType
+    from game.settings import Settings
+    from game.squadrons.pilot import Pilot
+    from game.theater import Player
+    from qt_ui.windows.mission.flight.QFlightCreator import QFlightCreator
+
+    aircraft = AircraftType.named("F/A-18C Hornet (Lot 20)")
+    settings = Settings()
+    settings.default_start_type = StartType.COLD
+    settings.default_start_type_client = StartType.COLD
+    base = Named(
+        name="Home base",
+        captured=Player.BLUE,
+        required_aircraft_start_type=None,
+        runway_is_operational=lambda: True,
+        can_operate=lambda _: True,
+        distance_to=lambda _: 10000,
+    )
+    squadron = Named(
+        name="Squadron 001",
+        location=base,
+        aircraft=aircraft,
+        primary_task=FlightType.STRIKE,
+        untasked_aircraft=4,
+        capable_of=lambda _: True,
+        can_auto_assign=lambda _: True,
+        player=Player.BLUE,
+        morale_in_play=False,
+        friendship_in_play=False,
+        pilot_rank=lambda _: None,
+        pilot_skill=lambda _: "Excellent",
+        rank_order=lambda _: (),
+        settings=settings,
+        available_pilots=[Pilot(f"Pilot {i + 1}") for i in range(4)],
+    )
+    squadron.claim_available_pilot = lambda alongside=(): (
+        squadron.available_pilots.pop(0) if squadron.available_pilots else None
+    )
+    squadron.claim_pilot = lambda pilot: squadron.available_pilots.remove(pilot)
+    squadron.return_pilot = lambda pilot: squadron.available_pilots.append(pilot)
+    squadron.return_pilots = lambda pilots: squadron.available_pilots.extend(pilots)
+    wing = SimpleNamespace(
+        best_available_aircrafts_for=lambda _: [aircraft] if available else [],
+        squadrons_for=lambda _: [squadron] if available else [],
+    )
+    game: Any = SimpleNamespace(
+        theater=SimpleNamespace(controlpoints=[base]),
+        settings=settings,
+        blue=SimpleNamespace(air_wing=wing),
+        red=SimpleNamespace(air_wing=wing),
+    )
+    package: Any = SimpleNamespace(
+        target=Named(
+            name="Training target",
+            mission_types=lambda **_: [FlightType.STRIKE, FlightType.ANTISHIP],
+        )
+    )
+    first = Loadout.empty_loadout()
+    second = Loadout.empty_loadout()
+    first.name, second.name = "Strike preset", "Alternative preset"
+    monkeypatch.setattr(Loadout, "iter_for_aircraft", lambda _: iter([first, second]))
+    monkeypatch.setattr(
+        "qt_ui.windows.mission.flight.QFlightCreator.get_default_loadout_override",
+        lambda *_: None,
+    )
+    if configure is not None:
+        configure(game, squadron)
+    return QFlightCreator(game, package, is_ownfor)
+
+
+@pytest.fixture
+def creator(qt_app: Any, monkeypatch: Any) -> Iterator[Any]:
+    dialog = make_creator(monkeypatch)
+    yield dialog
+    dialog.reject()
+    dialog.deleteLater()
+    qt_app.processEvents()
+
+
+def test_creator_roster_resize_player_and_cancel(creator: Any) -> None:
+    squadron = creator.squadron_selector.currentData()
+    assert not squadron.available_pilots
+    creator.flight_size_spinner.setValue(2)
+    assert len(squadron.available_pilots) == 2
+    assert "2/2 pilots assigned" in creator.crew_summary.text()
+    creator.roster_editor.pilot_controls[0].player_checkbox.click()
+    assert "1 player slot" in creator.crew_summary.text()
+    creator.cancel_button.click()
+    assert len(squadron.available_pilots) == 4
+
+
+def test_loadout_search_and_task_changes_preserve_roster(creator: Any) -> None:
+    from qt_ui.widgets.searchablecombo import SearchableComboBox
+
+    assert isinstance(creator.loadout_selector, SearchableComboBox)
+    assert creator.loadout_selector.threshold == 2
+    creator.loadout_selector.setCurrentIndex(1)
+    assert creator.current_loadout().name == "Alternative preset"
+    creator.task_selector.setCurrentIndex(1)
+    assert len(list(creator.roster_editor.roster.iter_pilots())) == 4
+    assert creator.verify_form() is None
+
+
+@pytest.mark.parametrize("is_ownfor", [True, False])
+def test_creator_only_uses_player_default_for_own_side(
+    creator: Any, monkeypatch: Any, is_ownfor: bool
+) -> None:
+    from game.ato.loadouts import Loadout
+
+    creator.is_ownfor = is_ownfor
+    lookup = Mock(return_value="Alternative preset")
+    monkeypatch.setattr(
+        "qt_ui.windows.mission.flight.QFlightCreator.get_default_loadout_override",
+        lookup,
+    )
+    monkeypatch.setattr(
+        Loadout,
+        "default_loadout_names_for",
+        classmethod(lambda cls, task: iter(["Strike preset"])),
+    )
+    creator._init_loadout_selector()
+    assert creator.current_loadout().name == (
+        "Alternative preset" if is_ownfor else "Strike preset"
+    )
+    assert lookup.call_count == int(is_ownfor)
+
+
+@pytest.mark.parametrize("method", ["save_as_task_default", "clear_task_default"])
+def test_enemy_payload_editor_cannot_change_player_defaults(method: str) -> None:
+    from game.theater import Player
+    from qt_ui.windows.mission.flight.payload.QLoadoutEditor import QLoadoutEditor
+
+    # Only the coalition is available: accessing dialogs or persistence would fail.
+    editor: Any = SimpleNamespace(flight=SimpleNamespace(blue=Player.RED))
+    getattr(QLoadoutEditor, method)(editor)
+
+
+def test_creator_required_start_and_empty_air_wing(
+    creator: Any, qt_app: Any, monkeypatch: Any
+) -> None:
+    from game.ato.starttype import StartType
+
+    creator.squadron_selector.currentData().location.required_aircraft_start_type = (
+        StartType.IN_FLIGHT
+    )
+    creator.roster_editor.pilots_changed.emit()
+    assert creator.start_type.currentData() == StartType.IN_FLIGHT
+    assert not creator.start_type.isEnabled()
+    assert "Required" in creator.start_hint.text()
+    empty = make_creator(monkeypatch, available=False)
+    assert not empty.create_button.isEnabled()
+    assert empty.task_selector.count() == 0
+    assert not empty.task_selector.isEnabled()
+    assert "No missions" in empty.selection_summary.text()
+    empty.reject()
+    empty.deleteLater()
+
+
+def test_creator_hides_unavailable_tasks_and_selects_the_first_available(
+    qt_app: Any, monkeypatch: Any
+) -> None:
+    from game.ato.flighttype import FlightType
+
+    def configure(game: Any, squadron: Any) -> None:
+        squadron.capable_of = lambda task: task == FlightType.ANTISHIP
+        game.blue.air_wing.best_available_aircrafts_for = lambda task: (
+            [squadron.aircraft] if task == FlightType.ANTISHIP else []
+        )
+
+    dialog = make_creator(monkeypatch, configure=configure)
+    try:
+        assert dialog.task_selector.count() == 1
+        assert dialog.task_selector.currentData() == FlightType.ANTISHIP
+        assert dialog.squadron_selector.currentData() is not None
+        assert dialog.create_button.isEnabled()
+    finally:
+        dialog.reject()
+        dialog.deleteLater()
+
+
+@pytest.mark.parametrize("unavailable", ["tasked", "runway", "incapable"])
+def test_creator_hides_tasks_without_a_selectable_squadron(
+    qt_app: Any, monkeypatch: Any, unavailable: str
+) -> None:
+    def configure(game: Any, squadron: Any) -> None:
+        if unavailable == "tasked":
+            squadron.untasked_aircraft = 0
+        elif unavailable == "runway":
+            squadron.location.runway_is_operational = lambda: False
+        else:
+            squadron.capable_of = lambda _: False
+
+    dialog = make_creator(monkeypatch, configure=configure)
+    try:
+        assert dialog.task_selector.count() == 0
+        assert not dialog.create_button.isEnabled()
+        assert dialog.roster_editor.roster is None
+    finally:
+        dialog.reject()
+        dialog.deleteLater()
+
+
+@pytest.mark.parametrize("is_ownfor", [True, False])
+def test_creator_task_availability_uses_only_its_coalition(
+    qt_app: Any, monkeypatch: Any, is_ownfor: bool
+) -> None:
+    def configure(game: Any, squadron: Any) -> None:
+        empty = SimpleNamespace(
+            best_available_aircrafts_for=lambda _: [], squadrons_for=lambda _: []
+        )
+        if is_ownfor:
+            game.blue.air_wing = empty
+        else:
+            game.red.air_wing = empty
+
+    dialog = make_creator(monkeypatch, configure=configure, is_ownfor=is_ownfor)
+    try:
+        assert dialog.task_selector.count() == 0
+        assert not dialog.create_button.isEnabled()
+    finally:
+        dialog.reject()
+        dialog.deleteLater()
+
+
+def make_package_dialog() -> Any:
+    from game.ato.package import Package
+    from game.db import Database
+    from qt_ui.models import PackageModel
+    from qt_ui.windows.mission.QPackageDialog import QEditPackageDialog
+
+    target: Any = Named(name="Training target")
+    package: Any = Package(target, Database(), auto_asap=True)
+    package.time_over_target = datetime(2026, 1, 1, 12, 30)
+    package.set_tot_asap = lambda _: None
+    gm: Any = SimpleNamespace(
+        sim_controller=Mock(), allocated_freqs=[], is_ownfor=True, ato_model=Mock()
+    )
+    return QEditPackageDialog(gm, PackageModel(package, gm))
+
+
+@pytest.fixture
+def package_dialog(qt_app: Any) -> Iterator[Any]:
+    dialog = make_package_dialog()
+    yield dialog
+    dialog.deleteLater()
+    qt_app.processEvents()
+
+
+def insert_flight(dialog: Any) -> Any:
+    from PySide6.QtCore import QModelIndex
+    from game.ato.flighttype import FlightType
+
+    flight = SimpleNamespace(
+        count=4,
+        client_count=1,
+        missing_pilots=0,
+        departure=Named(name="Home base"),
+        squadron=Named(name="Squadron 001"),
+        unit_type=SimpleNamespace(
+            display_name="F/A-18C Hornet (Lot 20)", dcs_id="FA-18C_hornet"
+        ),
+        flight_type=FlightType.STRIKE,
+        flight_plan=SimpleNamespace(
+            takeoff_time=lambda: datetime(2026, 1, 1, 12),
+            ingress_time=datetime(2026, 1, 1, 12, 25),
+            landing_time=datetime(2026, 1, 1, 13, 10),
+        ),
+        state=SimpleNamespace(is_waiting_for_start=True),
+    )
+    model = dialog.package_model
+    model.beginInsertRows(QModelIndex(), 0, 0)
+    model.package.flights.append(flight)
+    model.endInsertRows()
+    return flight
+
+
+def test_package_empty_population_and_edit_action(
+    package_dialog: Any, monkeypatch: Any
+) -> None:
+    from PySide6.QtCore import QModelIndex
+
+    dialog = package_dialog
+    assert dialog.flight_stack.currentIndex() == 1
+    assert dialog.auto_create_button.isEnabled()
+    assert not dialog.edit_flight_button.isEnabled()
+    insert_flight(dialog)
+    assert dialog.flight_stack.currentIndex() == 0
+    assert not dialog.auto_create_button.isEnabled()
+    assert "4 aircraft" in dialog.package_context.text()
+    dialog.package_view.setCurrentIndex(dialog.package_model.index(0))
+    edit = Mock()
+    monkeypatch.setattr(dialog.package_view, "edit_flight", edit)
+    dialog.edit_flight_button.click()
+    edit.assert_called_once()
+    model = dialog.package_model
+    model.beginRemoveRows(QModelIndex(), 0, 0)
+    model.package.flights.clear()
+    model.endRemoveRows()
+    assert dialog.flight_stack.currentIndex() == 1
+    assert not dialog.delete_flight_button.isEnabled()
+
+
+def test_package_timing_and_name_controls(package_dialog: Any) -> None:
+    from PySide6.QtCore import QTime
+
+    dialog = package_dialog
+    assert not dialog.tot_spinner.isEnabled()
+    dialog.auto_asap.click()
+    assert dialog.tot_spinner.isEnabled()
+    dialog.tot_spinner.setTime(QTime(14, 15, 16))
+    assert dialog.package_model.package.time_over_target.hour == 14
+    dialog.package_name_text.setText("Custom package")
+    assert dialog.package_model.package.custom_name == "Custom package"
+    flight = insert_flight(dialog)
+    flight.state.is_waiting_for_start = False
+    dialog.package_model.dataChanged.emit(
+        dialog.package_model.index(0), dialog.package_model.index(0)
+    )
+    assert not dialog.auto_asap.isEnabled()
+    assert not dialog.tot_spinner.isEnabled()
+    assert "locked" in dialog.timing_hint.text()
+
+
+def test_shared_route_checkbox_has_matching_card_inset(
+    package_dialog: Any, qt_app: Any
+) -> None:
+    from PySide6.QtCore import QPoint
+
+    dialog = package_dialog
+    dialog.show()
+    qt_app.processEvents()
+    checkbox = dialog.shared_route_checkbox
+    assert (
+        checkbox.mapTo(dialog, QPoint(0, 0)).x()
+        == dialog.freq_widget.mapTo(dialog, QPoint(0, 0)).x() + 14
+    )
+    margins = checkbox.parentWidget().layout().itemAt(2).layout().contentsMargins()
+    assert (margins.left(), margins.top(), margins.right(), margins.bottom()) == (
+        14,
+        6,
+        14,
+        4,
+    )
+
+
+def test_shared_route_checkbox_defaults_and_incompatibility(
+    package_dialog: Any,
+) -> None:
+    from game.ato.flighttype import FlightType
+    from tests.test_shared_package_route import _package, FlightStub
+
+    dialog = package_dialog
+    assert not dialog.shared_route_checkbox.isEnabled()
+    flight = insert_flight(dialog)
+    flight = FlightStub(**vars(flight))
+    dialog.package_model.package.flights[0] = flight
+    flight.flight_type = FlightType.BARCAP
+    # Keep the timing fake used by the dialog; give it a real patrol layout.
+    plan = _package().flights[0].flight_plan
+    flight.flight_plan.layout = plan.layout
+    flight.flight_plan.waypoints = plan.waypoints
+    dialog.update_package_context()
+    assert dialog.shared_route_checkbox.isChecked()
+    assert dialog.shared_route_checkbox.isEnabled()
+    dialog.shared_route_checkbox.click()
+    assert (
+        getattr(dialog.package_model.package, "single_route_for_all_flights") is False
+    )
+    assert not dialog.shared_route_checkbox.isChecked()
+    dialog.shared_route_checkbox.click()
+    assert getattr(dialog.package_model.package, "single_route_for_all_flights") is True
+    assert dialog.shared_route_checkbox.isChecked()
+    flight.flight_type = FlightType.ESCORT
+    dialog.update_package_context()
+    assert not dialog.shared_route_checkbox.isChecked()
+    assert not dialog.shared_route_checkbox.isEnabled()
+    assert "dedicated waypoints" in dialog.shared_route_checkbox.toolTip()
+
+
+def test_accept_results_refresh_tolerates_a_cleared_package(
+    package_dialog: Any,
+) -> None:
+    dialog = package_dialog
+    insert_flight(dialog)
+    model = dialog.package_model
+    index = model.index(0)
+    dialog.package_view.setCurrentIndex(index)
+    assert dialog.package_view.selected_item is not None
+
+    # Turn processing clears campaign flights before the GUI replaces ATO models.
+    model.package.flights.clear()
+    assert index.isValid()
+    assert dialog.package_view.selected_item is None
+    model.tot_changed.emit()
+    assert not dialog.edit_flight_button.isEnabled()
+    assert not dialog.delete_flight_button.isEnabled()
+    assert dialog.flight_stack.currentIndex() == 1
+
+
+def test_stale_flight_index_cannot_edit_clone_or_cancel(
+    package_dialog: Any,
+    monkeypatch: Any,
+) -> None:
+    from qt_ui.dialogs import Dialog
+
+    dialog = package_dialog
+    insert_flight(dialog)
+    model = dialog.package_model
+    index = model.index(0)
+    model.package.flights.clear()
+    edit = Mock()
+    cancel = Mock()
+    monkeypatch.setattr(Dialog, "open_edit_flight_dialog", edit)
+    monkeypatch.setattr(model, "cancel_or_abort_flight", cancel)
+    assert model.data(index) is None
+    dialog.package_view.edit_flight(index)
+    dialog.package_view.clone_flight(index)
+    model.cancel_or_abort_flight_at_index(index)
+    edit.assert_not_called()
+    cancel.assert_not_called()
+
+
+def test_invalid_or_foreign_index_does_not_resolve_to_a_flight(
+    package_dialog: Any,
+) -> None:
+    from PySide6.QtCore import QModelIndex
+    from qt_ui.models import PackageModel
+
+    dialog = package_dialog
+    flight = insert_flight(dialog)
+    model = dialog.package_model
+    assert model.flight_at_index(QModelIndex()) is None
+    model.cancel_or_abort_flight_at_index(QModelIndex())
+    assert model.package.flights == [flight]
+    foreign = PackageModel(model.package, dialog.game_model)
+    assert model.flight_at_index(foreign.index(0)) is None
+    assert model.flight_at_index(model.index(0)) is flight
+
+
+def test_rebinding_list_disconnects_the_previous_packages_deleted_signal(
+    package_dialog: Any,
+) -> None:
+    from qt_ui.models import PackageModel
+
+    dialog = package_dialog
+    view = dialog.package_view
+    previous = dialog.package_model
+    replacement = PackageModel(previous.package, dialog.game_model)
+    view.set_package(replacement)
+    previous.deleted.emit()
+    assert view.package_model is replacement
+    replacement.deleted.emit()
+    assert view.package_model is None
+    assert view.selected_item is None
+    assert view.model().rowCount() == 0
+
+
+def test_package_editor_closes_when_turn_replacement_releases_its_model(
+    package_dialog: Any,
+) -> None:
+    dialog = package_dialog
+    dialog.show()
+    assert dialog.isVisible()
+    dialog.package_model.deleted.emit()
+    assert not dialog.isVisible()
+    assert dialog.package_view.package_model is None
+    # A signal already queued before retirement must remain harmless.
+    dialog.package_model.on_sim_update(None)
+
+
+@pytest.mark.parametrize("save", [False, True])
+def test_new_package_save_and_cancel(
+    package_dialog: Any, qt_app: Any, monkeypatch: Any, save: bool
+) -> None:
+    from game.db import Database
+    from qt_ui.windows.mission.QPackageDialog import QNewPackageDialog
+
+    gm = package_dialog.game_model
+    gm.game = SimpleNamespace(db=SimpleNamespace(flights=Database()))
+    dialog = QNewPackageDialog(gm, package_dialog.package_model.mission_target)
+    assert dialog.auto_coordinated.isChecked()
+    assert not dialog.auto_asap.isChecked()
+    assert not dialog.tot_spinner.isEnabled()
+    monkeypatch.setattr(dialog.package_model.package, "set_tot_asap", lambda _: None)
+    if save:
+        dialog.save_button.click()
+        gm.ato_model.add_package.assert_called_once_with(dialog.package_model.package)
+    else:
+        dialog.cancel_button.click()
+        gm.ato_model.add_package.assert_not_called()
+    dialog.deleteLater()
+    qt_app.processEvents()
+
+
+def test_package_timing_modes_are_exclusive_and_allow_manual_time(
+    package_dialog: Any,
+) -> None:
+    dialog = package_dialog
+    dialog.auto_coordinated.click()
+    assert dialog.package_model.package.auto_coordinated
+    assert not dialog.auto_asap.isChecked()
+    assert not dialog.tot_spinner.isEnabled()
+    dialog.auto_asap.click()
+    assert not dialog.package_model.package.auto_coordinated
+    assert not dialog.auto_coordinated.isChecked()
+    dialog.auto_asap.click()
+    assert dialog.tot_spinner.isEnabled()
+
+
+def test_package_tot_redraw_does_not_write_the_spinner_back(
+    package_dialog: Any,
+) -> None:
+    package_dialog.package_model.set_tot = Mock()
+    package_dialog.package_model.package.time_over_target = datetime(2026, 1, 1, 13, 30)
+    package_dialog.update_tot()
+    package_dialog.package_model.set_tot.assert_not_called()

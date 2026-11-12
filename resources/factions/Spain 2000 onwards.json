@@ -7,6 +7,7 @@
     "es_ES"
   ],
   "aircrafts": [
+    "Eurofighter Typhoon",
     "EF-18A+ Hornet",
     "F-5E Tiger II",
     "Mirage-F1BE",
@@ -18,13 +19,13 @@
     "C-101CC Aviojet",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "An-26B",
     "UH-1H Iroquois",
     "CH-47D",
     "CH-47F Block I",
     "UH-60L",
-    "AH-1J SeaCobra"
+    "AH-1J SeaCobra",
+    "MQ-9 Reaper"
   ],
   "awacs": [
     "E-3A"
@@ -64,9 +65,6 @@
   ],
   "air_defense_units": [
     "EWR AN/FPS-117 Radar",
-    "M1097 Heavy HMMWV Avenger",
-    "2 cm Flak 38",
-    "AAA ZU-23 Emplacement",
     "MANPADS Stinger"
   ],
   "missiles": [],
@@ -75,7 +73,8 @@
     "Hawk",
     "Roland",
     "Patriot",
-    "NASAMS AIM-120B"
+    "NASAMS AIM-120B",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "L61 Juan Carlos I",

@@ -11,9 +11,9 @@
     "AH-1W SuperCobra",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "CF-188 Hornet",
-    "UH-1H Iroquois"
+    "UH-1H Iroquois",
+    "OH-58D(R) Kiowa Warrior"
   ],
   "awacs": [
     "E-3A"
@@ -41,7 +41,8 @@
     "MANPADS Stinger"
   ],
   "preset_groups": [
-    "Hawk"
+    "Hawk",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "DDG Arleigh Burke IIa",
@@ -52,9 +53,7 @@
     "EWR AN/FPS-117 Radar",
     "M1097 Heavy HMMWV Avenger"
   ],
-  "requirements": {
-    "C-130J-30 Super Hercules Mod by Anubis": "https://forums.eagle.ru/topic/252075-dcs-super-hercules-mod-by-anubis/"
-  },
+  "requirements": {},
   "carrier_names": [],
   "helicopter_carrier_names": [],
   "has_jtac": true,
@@ -63,9 +62,6 @@
     "CF-188 Hornet": [
       "Canada 409th Squadron",
       "Canada 425th Squadron"
-    ],
-    "C-130J-30 Super Hercules": [
-      "Royal Canadian AF CC-130J"
     ]
   },
   "unrestricted_satnav": true

@@ -9,12 +9,12 @@
   "aircrafts": [
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "Mirage 2000-5",
     "Mirage 2000C",
     "Mirage-F1B",
     "Mirage-F1CE",
     "Mirage-F1C-200",
+    "Mirage-F1CR",
     "Mirage-F1CT",
     "Super Étendard",
     "SA 342L Gazelle",
@@ -58,7 +58,8 @@
   ],
   "preset_groups": [
     "Hawk",
-    "Roland"
+    "Roland",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "FFG Oliver Hazard Perry",

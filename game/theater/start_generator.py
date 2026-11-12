@@ -11,6 +11,7 @@ from dcs.countries import country_dict
 
 from game import Game
 from game.factions.faction import Faction
+from game.layout.layout import LayoutException
 from game.naming import namegen
 from game.scenery_group import SceneryGroup
 from game.theater import (
@@ -93,7 +94,6 @@ class ModSettings:
     f105_thunderchief: bool = False
     f106_deltadart: bool = False
     f111c: bool = False
-    hercules: bool = False
     irondome: bool = False
     oh_6: bool = False
     oh_6_vietnamassetpack: bool = False
@@ -106,10 +106,17 @@ class ModSettings:
     su15_flagon: bool = False
     su30_flanker_h: bool = False
     su35s_flanker_m: bool = False
+    f15ex: bool = False
+    f15cge: bool = False
+    eurofighter: bool = False
     su57_felon: bool = False
     tornado_adv: bool = False
     frenchpack: bool = False
     high_digit_sams: bool = False
+    #: The Ultimate Compilation is a different mod, not a newer HDS: it renames
+    #: units the original still uses, so the two cannot be installed together and
+    #: the wizard does not let both be selected.
+    high_digit_sams_ultimate: bool = False
     ov10a_bronco: bool = False
     spanishnavypack: bool = False
     swedishmilitaryassetspack: bool = False
@@ -117,11 +124,13 @@ class ModSettings:
     SWPack: bool = False
     vietnamwarvessels: bool = False
     chinesemilitaryassetspack: bool = False
+    germanymilitaryassetspack: bool = False
     iranmilitaryassetspack: bool = False
     russianmilitaryassetspack: bool = False
     usamilitaryassetspack: bool = False
     ukmilitaryassetspack: bool = False
     ukrainemilitaryassetspack: bool = False
+    turkeymilitaryassetspack: bool = False
     mig31bm_foxhound: bool = False
     VSN_F35: bool = False
 
@@ -229,6 +238,43 @@ class ControlPointGroundObjectGenerator:
         self.generate_navy()
         return True
 
+    def get_unit_group_for_task(
+        self, position: PresetLocation, task: GroupTask
+    ) -> Optional[ForceGroup]:
+        tgo_config = self.generator_settings.tgo_config
+        fg = tgo_config[position.original_name]
+        valid_fg = (
+            fg
+            and task in fg.tasks
+            and all([u in self.faction.accessible_units for u in fg.units])
+        )
+        unit_group: Optional[ForceGroup] = None
+        if valid_fg:
+            assert fg
+            # Filled the same way a preset group is when the faction adopts it.
+            # The hand-rolled loop this replaces searched faction.ground_units --
+            # artillery, frontline and logistics -- so a layout group asking for
+            # SHORAD or AAA found nothing, because air defence lives in
+            # air_defense_units. Every pinned site came out without its point
+            # defence. possible_types_for_faction reads accessible_units, which is
+            # the same list the gate above checks.
+            try:
+                unit_group = fg.initialize_for_faction(self.faction)
+            except LayoutException as error:
+                logging.warning(
+                    "Override in ground_forces at %s cannot be fielded by %s: %s",
+                    position.original_name,
+                    self.faction_name,
+                    error,
+                )
+        if unit_group is None:
+            if fg:
+                logging.warning(
+                    f"Override in ground_forces failed for {fg} at {position.original_name}"
+                )
+            unit_group = self.armed_forces.random_group_for_task(task)
+        return unit_group
+
     def generate_ground_object_from_group(
         self,
         unit_group: ForceGroup,
@@ -254,7 +300,11 @@ class ControlPointGroundObjectGenerator:
         if self.control_point.captured.is_red and skip_enemy_navy:
             return
         for position in self.control_point.preset_locations.ships:
-            unit_group = self.armed_forces.random_group_for_task(GroupTask.NAVY)
+            # Honour the campaign's ground_forces override, the same way the air-defence
+            # sites do. Without it a fleet is whatever the faction rolls per marker, so a
+            # designer cannot say "this group is the heavy one and that one is the
+            # patrol boats". Falls back to a random group when nothing is pinned.
+            unit_group = self.get_unit_group_for_task(position, GroupTask.NAVY)
             if not unit_group:
                 logging.warning(f"{self.faction_name} has no ForceGroup for Navy")
                 return
@@ -340,7 +390,17 @@ class CarrierGroundObjectGenerator(GenericCarrierGroundObjectGenerator):
             )
             return False
 
-        unit_group = self.armed_forces.random_group_for_task(GroupTask.AIRCRAFT_CARRIER)
+        # Honour the campaign's ground_forces override, keyed by the control
+        # point's name -- a designer picking which hull sails as which ship has
+        # nowhere else to say it. Falls back to a random group when unpinned.
+        unit_group = self.get_unit_group_for_task(
+            PresetLocation(
+                self.control_point.name,
+                self.control_point.position,
+                self.control_point.heading,
+            ),
+            GroupTask.AIRCRAFT_CARRIER,
+        )
         if not unit_group:
             logging.error(f"{self.faction_name} has no access to AircraftCarrier")
             return False
@@ -391,8 +451,16 @@ class LhaGroundObjectGenerator(GenericCarrierGroundObjectGenerator):
             )
             return False
 
-        unit_group = self.armed_forces.random_group_for_task(
-            GroupTask.HELICOPTER_CARRIER
+        # Honour the campaign's ground_forces override, keyed by the control
+        # point's name -- a designer picking which hull sails as which ship has
+        # nowhere else to say it. Falls back to a random group when unpinned.
+        unit_group = self.get_unit_group_for_task(
+            PresetLocation(
+                self.control_point.name,
+                self.control_point.position,
+                self.control_point.heading,
+            ),
+            GroupTask.HELICOPTER_CARRIER,
         )
         if not unit_group:
             logging.error(f"{self.faction_name} has no access to HelicopterCarrier")
@@ -439,34 +507,6 @@ class AirbaseGroundObjectGenerator(ControlPointGroundObjectGenerator):
         self.generate_missile_sites()
         self.generate_coastal_sites()
 
-    def get_unit_group_for_task(
-        self, position: PresetLocation, task: GroupTask
-    ) -> Optional[ForceGroup]:
-        tgo_config = self.generator_settings.tgo_config
-        fg = tgo_config[position.original_name]
-        valid_fg = (
-            fg
-            and task in fg.tasks
-            and all([u in self.faction.accessible_units for u in fg.units])
-        )
-        if valid_fg:
-            assert fg
-            for layout in fg.layouts:
-                for lg in layout.groups:
-                    for ug in lg.unit_groups:
-                        if not fg.has_unit_for_layout_group(ug) and ug.fill:
-                            for g in self.faction.ground_units:
-                                if g.unit_class in ug.unit_classes:
-                                    fg.units.append(g)
-            unit_group: Optional[ForceGroup] = fg
-        else:
-            if fg:
-                logging.warning(
-                    f"Override in ground_forces failed for {fg} at {position.original_name}"
-                )
-            unit_group = self.armed_forces.random_group_for_task(task)
-        return unit_group
-
     def generate_armor_groups(self) -> None:
         for position in self.control_point.preset_locations.armor_groups:
             unit_group = self.get_unit_group_for_task(position, GroupTask.BASE_DEFENSE)
@@ -494,8 +534,13 @@ class AirbaseGroundObjectGenerator(ControlPointGroundObjectGenerator):
 
     def generate_ewrs(self) -> None:
         for position in self.control_point.preset_locations.ewrs:
-            unit_group = self.armed_forces.random_group_for_task(
-                GroupTask.EARLY_WARNING_RADAR
+            # Through get_unit_group_for_task like every other band, so a campaign can
+            # pin an EWR marker in ground_forces. Going straight to the random roll
+            # meant an override on an EWR marker was read, matched and then ignored --
+            # silently, since nothing on this path logs. It falls back to the same
+            # random roll when the campaign pins nothing.
+            unit_group = self.get_unit_group_for_task(
+                position, GroupTask.EARLY_WARNING_RADAR
             )
             if not unit_group:
                 logging.error(f"{self.faction_name} has no ForceGroup for EWR")

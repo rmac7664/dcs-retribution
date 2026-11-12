@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import typing
 from datetime import timedelta
+from itertools import chain
 from typing import TYPE_CHECKING, Any
 
 from dcs.countries import countries_by_name
@@ -12,9 +14,10 @@ from game.ato.flightplans.formation import FormationLayout
 from game.ato.flightplans.waypointbuilder import WaypointBuilder
 from game.ato.packagewaypoints import PackageWaypoints
 from game.data.doctrine import MODERN_DOCTRINE, COLDWAR_DOCTRINE, WWII_DOCTRINE
-from game.theater import ParkingType, SeasonalConditions, Airfield
+from game.squadrons import morale
+from game.theater import SeasonalConditions, Airfield
 from game.theater.player import Player
-from game.theater.theatergroundobject import ShipGroundObject
+from game.theater.theatergroundobject import ShipGroundObject, TheaterGroundObject
 
 if TYPE_CHECKING:
     from game import Game
@@ -38,21 +41,38 @@ class Migrator:
         self._update_packagewaypoints()
         self._update_package_attributes()
         self._update_factions()
+        self._update_f15ex_v3()
         self._update_flights()
         self._update_squadrons()
+        self._remove_captured_aircraft()
+        self._cancel_relocations_off_damaged_runways()
         self._update_transfers()
         self._release_untasked_flights()
+        self._reconcile_available_pilots()
+        self._clear_leave_requests_from_the_wounded()
+        self._restate_the_morale_numbers()
+        self._collapse_the_tanker_options()
         self._update_weather()
         self._update_tgos()
+        self._relabel_formation_waypoints()
         try_set_attr(self.game.settings, "motorpool_enabled", True)
         try_set_attr(self.game.settings, "motorpool_spawn_cap", 10)
         self._ensure_motorpool_tgos()
+        self._register_new_tgos()
+        self._rebuild_iads_topology()
         self._reload_terrain()
         self._update_theater()
         self._update_campaign_name()
 
         # TODO: remove in due time as this is supposedly fixed
         self.game.settings.nevatim_parking_fix = False
+
+        from game.missiongenerator.motorpoolpopulator import MotorpoolPopulator
+
+        # Re-home only. Upstream #960 made the motorpool groups ephemeral on purpose:
+        # they are filled at mission generation (and on demand by the serializer), not
+        # written into the save, so populating here would persist them.
+        MotorpoolPopulator(self.game)._rehome_motorpools()
 
     def _update_doctrine(self) -> None:
         doctrines = [
@@ -77,6 +97,8 @@ class Migrator:
             for p in c.ato.packages:
                 if p.waypoints and not hasattr(p.waypoints, "initial"):
                     p.waypoints = PackageWaypoints.create(p, c, False)
+                if p.waypoints:
+                    try_set_attr(p.waypoints, "standoff_range")
 
     def _update_package_attributes(self) -> None:
         for c in self.game.coalitions:
@@ -133,6 +155,66 @@ class Migrator:
                 builder = WaypointBuilder(f, [])
                 layout.join = builder.join(f.package.waypoints.join)
 
+    def _update_f15ex_v3(self) -> None:
+        """Drop unsupported tasks and replace incompatible pre-v3 aircraft loads."""
+        from game.ato.loadouts import Loadout
+        from game.data.weapons import Pylon
+        from game.dcs.aircrafttype import AircraftType
+
+        ids = {"F15EX", "F15EX_CFT", "F15IA"}
+        for coalition in self.game.coalitions:
+            if any(a.dcs_id == "F15EX" for a in coalition.faction.aircraft):
+                coalition.faction.aircraft.add(
+                    AircraftType.named("F-15EX Eagle II (CFTs)")
+                )
+            for squadron in coalition.air_wing.iter_squadrons():
+                if squadron.aircraft.dcs_id not in ids:
+                    continue
+                aircraft = squadron.aircraft
+                try_set_attr(squadron, "primary_task", FlightType.INTERCEPTION)
+                if not aircraft.capable_of(squadron.primary_task):
+                    squadron.primary_task = FlightType.INTERCEPTION
+                previous_tasks = squadron.auto_assignable_mission_types
+                squadron.set_auto_assignable_mission_types(previous_tasks)
+                if previous_tasks and not squadron.auto_assignable_mission_types:
+                    squadron.set_auto_assignable_mission_types({squadron.primary_task})
+
+            for package in list(coalition.ato.packages):
+                for flight in list(package.flights):
+                    aircraft = flight.unit_type
+                    if aircraft.dcs_id not in ids:
+                        continue
+                    if (
+                        flight.flight_type != FlightType.FERRY
+                        and not aircraft.capable_of(flight.flight_type)
+                    ):
+                        logging.info(
+                            "Cancelled unsupported F-15EX v3 %s flight %s",
+                            flight.flight_type,
+                            flight.id,
+                        )
+                        package.remove_flight(flight)
+                        if not package.flights:
+                            coalition.ato.remove_package(package)
+                        continue
+
+                    flight.fuel = min(
+                        getattr(flight, "fuel", aircraft.max_fuel), aircraft.max_fuel
+                    )
+                    for member in flight.roster.members:
+                        if all(
+                            number in aircraft.dcs_unit_type.pylons
+                            and Pylon.for_aircraft(aircraft, number).can_equip(weapon)
+                            for number, weapon in member.loadout.pylons.items()
+                            if weapon is not None
+                        ):
+                            continue
+                        member.loadout = Loadout.default_for(flight).clone()
+                        member.use_custom_loadout = False
+                        logging.info(
+                            "Updated incompatible F-15EX v3 loadout: %s", flight.id
+                        )
+
     def _update_flights(self) -> None:
         to_remove = []
         for f in self.game.db.flights.objects.values():
@@ -159,10 +241,185 @@ class Migrator:
                     if f.squadron == s:
                         count += f.count
                 s.return_all_pilots_and_aircraft()
-                new_claim = min(count, s.owned_aircraft)
+                new_claim = min(count, s.untasked_aircraft)
                 s.claim_inventory(new_claim)
                 for i in range(new_claim):
                     s.claim_available_pilot()
+
+    def _restate_the_morale_numbers(self) -> None:
+        """Move a campaign in progress onto the re-weighed morale figures.
+
+        Event sizes are settings and settings live in the save, so a campaign started
+        before the re-weighing would keep the old ones. Only values still sitting on a
+        previous default are moved; anything the player set himself is left alone.
+
+        """
+        settings = self.game.settings
+        moved = []
+        for event in morale.MORALE_EVENTS:
+            olds = morale.PREVIOUS_DEFAULTS.get(event.key, ())
+            held = getattr(settings, event.key, event.default)
+            if held == event.default or held not in olds:
+                continue  # already current, or he set it himself
+            setattr(settings, event.key, event.default)
+            moved.append(f"{event.key} {held} -> {event.default}")
+        if moved:
+            logging.info("Morale event sizes brought up to date: %s", "; ".join(moved))
+
+    #: The three per-task tanker options this replaced.
+    TANKER_OPTIONS = (
+        "autoplan_tankers_for_strike",
+        "autoplan_tankers_for_oca",
+        "autoplan_tankers_for_dead",
+    )
+
+    def _collapse_the_tanker_options(self) -> None:
+        """Replace the three per-task tanker options with the single one.
+
+        The three never had any effect, but a player who turned them all off said what
+        he wanted, so the replacement starts off for him.
+
+        """
+        settings = self.game.settings
+        held = [getattr(settings, name, None) for name in self.TANKER_OPTIONS]
+        for name in self.TANKER_OPTIONS:
+            if hasattr(settings, name):
+                delattr(settings, name)
+        if held and all(value is False for value in held):
+            settings.plan_refuelling_when_needed = False
+            logging.info("Tanker auto-planning was off in all three tasks; kept off")
+
+    def _clear_leave_requests_from_the_wounded(self) -> None:
+        """Clear the leave request of a wounded pilot.
+
+        Being wounded clears the request now and the turn's housekeeping will not let a
+        wounded pilot ask, but saves made before both still carry the flag.
+
+        """
+        for coalition in (self.game.blue, self.game.red):
+            for squadron in coalition.air_wing.iter_squadrons():
+                for pilot in squadron.current_roster:
+                    if pilot.wounded and pilot.wants_leave:
+                        logging.info(
+                            f"{pilot.name} of {squadron} was asking for leave while "
+                            "wounded; request dropped"
+                        )
+                        pilot.wants_leave = False
+                        pilot.leave_turns_requested = 0
+
+    def _reconcile_available_pilots(self) -> None:
+        """Make the pool of available pilots agree with the roster and the ATO.
+
+        The pool is a stored list rebuilt from the roster only between turns, so
+        anything that moved a pilot during one could leave it holding too many or too
+        few.
+
+        """
+        for coalition in (self.game.blue, self.game.red):
+            assigned = {
+                id(pilot)
+                for package in coalition.ato.packages
+                for flight in package.flights
+                for pilot in flight.roster.iter_pilots()
+                if pilot is not None
+            }
+            for squadron in coalition.air_wing.iter_squadrons():
+                should_be = [
+                    pilot
+                    for pilot in squadron.active_pilots
+                    if id(pilot) not in assigned
+                    and not (squadron.morale_in_play and pilot.refuses_to_fly)
+                ]
+                wanted = {id(pilot) for pilot in should_be}
+                seen: set[int] = set()
+                # Keep whoever was already listed in the order they were listed in,
+                # then append the ones that went missing.
+                pool = []
+                for pilot in squadron.available_pilots:
+                    if id(pilot) in wanted and id(pilot) not in seen:
+                        seen.add(id(pilot))
+                        pool.append(pilot)
+                missing = [p for p in should_be if id(p) not in seen]
+                pool.extend(missing)
+                if len(pool) != len(squadron.available_pilots) or missing:
+                    dropped = len(squadron.available_pilots) - (
+                        len(pool) - len(missing)
+                    )
+                    if dropped:
+                        logging.info(
+                            f"{squadron}: {dropped} pilot(s) were available and unable "
+                            "to fly at the same time; corrected"
+                        )
+                    if missing:
+                        logging.info(
+                            f"{squadron}: {len(missing)} fit pilot(s) had gone missing "
+                            f"from the pool ({', '.join(p.name for p in missing)}); "
+                            "returned"
+                        )
+                    squadron.available_pilots = pool
+
+    def _remove_captured_aircraft(self) -> None:
+        """Remove legacy inventory left behind after a recorded base capture."""
+        from game.aircraftmaintenance import remove_damaged, repairs
+
+        for coalition in self.game.coalitions:
+            for squadron in coalition.air_wing.iter_squadrons():
+                base = squadron.location
+                if (
+                    getattr(base, "last_capture_turn", None) is None
+                    or base.captured.is_neutral
+                    or base.is_friendly(coalition.player)
+                    or squadron.owned_aircraft <= 0
+                ):
+                    continue
+                # Do not discard inventory backing a saved active mission.
+                if any(
+                    flight.squadron is squadron
+                    for package in coalition.ato.packages
+                    for flight in package.flights
+                ):
+                    logging.warning(
+                        "Retaining aircraft at captured base %s: %s has saved flights",
+                        base.name,
+                        squadron,
+                    )
+                    continue
+                count = squadron.owned_aircraft
+                if squadron.pending_deliveries:
+                    squadron.refund_orders()
+                if repairs(squadron):
+                    remove_damaged(self.game, squadron, refund=False)
+                squadron.owned_aircraft = 0
+                squadron.untasked_aircraft = 0
+                # The capture already paid the new owner. Do not pay it again.
+                logging.info(
+                    "Removed %s captured aircraft retained by %s at %s",
+                    count,
+                    squadron,
+                    base.name,
+                )
+
+    def _cancel_relocations_off_damaged_runways(self) -> None:
+        """A squadron with aircraft could be ordered off a damaged runway. Its ferry
+        flights were left out of the mission and it arrived at the end of the turn
+        all the same, so an order like that still in a save is cancelled."""
+        for coalition in (self.game.blue, self.game.red):
+            for squadron in coalition.air_wing.iter_squadrons():
+                aircraft_remaining = squadron.owned_aircraft + min(
+                    0, squadron.pending_deliveries
+                )
+                if (
+                    squadron.destination is None
+                    or aircraft_remaining <= 0
+                    or squadron.location.runway_is_operational()
+                ):
+                    continue
+                squadron.cancel_ferry_flights()
+                squadron.destination = None
+                logging.info(
+                    f"Cancelled the relocation of {squadron}: the runway at "
+                    f"{squadron.location} is damaged"
+                )
 
     def _update_squadrons(self) -> None:
         country_dict = {
@@ -185,15 +442,10 @@ class Migrator:
                     c = country_dict.get(s.country, s.country)
                     s.country = countries_by_name[c]()
 
-                # code below is used to fix corruptions wrt overpopulation
-                parking_type = ParkingType().from_squadron(s)
-                if (
-                    s.owned_aircraft < 0
-                    or s.location.unclaimed_parking(parking_type) < 0
-                ):
-                    s.owned_aircraft = max(
-                        0, s.location.unclaimed_parking(parking_type) + s.owned_aircraft
-                    )
+                # Parking overflow is resolved through sales or relocation. Loading
+                # must not remove owned airframes while keeping their flights and
+                # workshop jobs. Only negative inventory is invalid save data.
+                s.owned_aircraft = max(0, s.owned_aircraft)
 
                 if self.is_liberation:
                     s.set_auto_assignable_mission_types(s.auto_assignable_mission_types)
@@ -204,21 +456,53 @@ class Migrator:
                     try_set_attr(sdef, "radio_presets", {})
 
     def _update_transfers(self) -> None:
+        # Track transfers across all coalitions to detect the same object in
+        # more than one coalition's containers.
+        global_seen: set[int] = set()
         for coalition in self.game.coalitions:
-            transfers = coalition.transfers
-            for transfer in transfers.pending_transfers:
-                self._normalize_transfer_player(transfer)
-            for convoy in transfers.convoys:
-                for transfer in convoy.transfers:
-                    self._normalize_transfer_player(transfer)
-            for cargo_ship in transfers.cargo_ships:
-                for transfer in cargo_ship.transfers:
-                    self._normalize_transfer_player(transfer)
+            self._normalize_transfers_for_coalition(coalition, global_seen)
+
+    def _normalize_transfers_for_coalition(
+        self, coalition: Any, global_seen: set[int]
+    ) -> None:
+        """Normalize transfer player ownership for a coalition's transfers.
+
+        Traverses the pending list plus convoy/cargo aliases, deduplicating
+        transfer objects by identity. Missing and legacy-boolean owners are set
+        from the containing coalition. An existing enum owner that conflicts
+        with its sole container, or the same transfer reachable from more than
+        one coalition, fails with a diagnostic.
+        """
+        transfers = coalition.transfers
+        aliased = chain.from_iterable(c.transfers for c in transfers.convoys)
+        shipped = chain.from_iterable(c.transfers for c in transfers.cargo_ships)
+        seen: set[int] = set()
+        all_transfers: list[Any] = []
+        for transfer in chain(transfers.pending_transfers, aliased, shipped):
+            if id(transfer) not in seen:
+                seen.add(id(transfer))
+                all_transfers.append(transfer)
+
+        for transfer in all_transfers:
+            if id(transfer) in global_seen:
+                raise RuntimeError(
+                    f"Transfer {transfer} is reachable from more than one coalition"
+                )
+            global_seen.add(id(transfer))
+
+        for transfer in all_transfers:
+            self._normalize_single_transfer_player(transfer, coalition)
 
     @staticmethod
-    def _normalize_transfer_player(transfer: Any) -> None:
-        if hasattr(transfer, "player") and isinstance(transfer.player, bool):
-            transfer.player = Player.BLUE if transfer.player else Player.RED
+    def _normalize_single_transfer_player(transfer: Any, coalition: Any) -> None:
+        owner = getattr(transfer, "player", None)
+        if owner is None or isinstance(owner, bool):
+            transfer.player = coalition.player
+        elif owner != coalition.player:
+            raise RuntimeError(
+                f"Transfer {transfer} has owner {owner} but is in the "
+                f"{coalition.player} coalition"
+            )
 
     @typing.no_type_check
     def _update_factions(self) -> None:
@@ -277,12 +561,34 @@ class Migrator:
     def _update_tgos(self) -> None:
         for go in self.game.theater.ground_objects:
             try_set_attr(go, "task", None)
-            try_set_attr(go, "hide_on_mfd", False)
+            # A tri-state now: None means the campaign settings decide. Every
+            # old value was the default or the four preset SAMs the settings now
+            # cover, so the whole map follows them.
+            go.hide_on_mfd = None
+            try_set_attr(go, "mfd_seen_at", None)
             # Movable-ship state added after some saves were written; pickle
             # bypasses __init__, so back-fill it or finish_turn's movement pass
             # raises AttributeError on pre-feature saves.
             if isinstance(go, ShipGroundObject):
                 try_set_attr(go, "target_position", None)
+
+    def _rebuild_iads_topology(self) -> None:
+        """Discard saved links after current objectives and groups are restored."""
+        self.game.theater.iads_network.initialize_network(
+            iter(self.game.theater.ground_objects)
+        )
+
+    def _relabel_formation_waypoints(self) -> None:
+        """Rename join and split on flights that are their whole package.
+
+        Such a flight has nobody to meet, so those waypoints read as nav points now.
+        Flight plans are saved with the game, so existing ones keep the old names until
+        they are rebuilt.
+
+        """
+        for coalition in (self.game.blue, self.game.red):
+            for package in coalition.ato.packages:
+                package.label_formation_waypoints()
 
     def _ensure_motorpool_tgos(self) -> None:
         from game.data.groups import GroupTask
@@ -292,25 +598,78 @@ class Migrator:
 
         if not self.game.settings.motorpool_enabled:
             return
-        for cp in self.game.theater.controlpoints:
-            locations = getattr(cp.preset_locations, "motorpools", [])
-            if not locations:
-                continue
-            if any(isinstance(go, MotorpoolGroundObject) for go in cp.ground_objects):
-                continue
-            for location in locations:
+        control_points = self.game.theater.controlpoints
+        from game.missiongenerator.motorpoolpopulator import motorpool_identity
+
+        authored = {
+            motorpool_identity(location.original_name, location)
+            for cp in control_points
+            for location in getattr(cp.preset_locations, "motorpools", [])
+        }
+        existing: dict[tuple[str, float, float, float], MotorpoolGroundObject] = {}
+        identity: tuple[str, float, float, float]
+        for cp in control_points:
+            for tgo in cp.ground_objects:
+                if not isinstance(tgo, MotorpoolGroundObject):
+                    continue
+                identity = (
+                    tgo.original_name,
+                    tgo.position.x,
+                    tgo.position.y,
+                    tgo.heading.degrees,
+                )
+                if identity in authored:
+                    existing.setdefault(identity, tgo)
+
+        # Remove stale and duplicate persisted references before ensuring every
+        # current authored marker has exactly one surviving TGO.
+        seen: set[MotorpoolGroundObject] = set()
+        for cp in control_points:
+            retained: list[TheaterGroundObject] = []
+            for tgo in cp.connected_objectives:
+                if not isinstance(tgo, MotorpoolGroundObject):
+                    retained.append(tgo)
+                    continue
+                identity = (
+                    tgo.original_name,
+                    tgo.position.x,
+                    tgo.position.y,
+                    tgo.heading.degrees,
+                )
+                if existing.get(identity) is tgo and tgo not in seen:
+                    retained.append(tgo)
+                    seen.add(tgo)
+            cp.connected_objectives[:] = retained
+
+        for cp in control_points:
+            for location in getattr(cp.preset_locations, "motorpools", []):
+                identity = motorpool_identity(location.original_name, location)
+                if identity in existing:
+                    continue
                 name = namegen.random_objective_name()
                 warn_if_motorpool_inside_capture_zone(name, location, cp)
-                cp.connected_objectives.append(
-                    MotorpoolGroundObject(
-                        # Codename like every other TGO; the "motorpool" category
-                        # label already says what it is.
-                        name,
-                        location,
-                        cp,
-                        GroupTask.MOTORPOOL,
-                    )
+                tgo = MotorpoolGroundObject(
+                    # Codename like every other TGO; the "motorpool" category
+                    # label already says what it is.
+                    name,
+                    location,
+                    cp,
+                    GroupTask.MOTORPOOL,
                 )
+                cp.connected_objectives.append(tgo)
+                existing[identity] = tgo
+
+    def _register_new_tgos(self) -> None:
+        """Put every objective into the lookup the map and the API read.
+
+        db.tgos is filled once, at turn 0, so an objective added to a campaign already
+        under way was never in it and could not be opened from the map.
+
+        """
+        for cp in self.game.theater.controlpoints:
+            for tgo in cp.connected_objectives:
+                if tgo.id not in self.game.db.tgos.objects:
+                    self.game.db.tgos.add(tgo.id, tgo)
 
     def _reload_terrain(self) -> None:
         t = self.game.theater.terrain

@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, TYPE_CHECKING, TypeGuard, TypeVar
 
 from game.ato.flightplans.standard import StandardFlightPlan, StandardLayout
 from game.typeguard import self_type_guard
-from game.utils import Distance, Speed
+from game.utils import Distance, Speed, nautical_miles
 from .uizonedisplay import UiZone, UiZoneDisplay
+from .. import prerefuel
 
 if TYPE_CHECKING:
     from ..flightwaypoint import FlightWaypoint
@@ -21,11 +22,25 @@ class PatrollingLayout(StandardLayout):
     patrol_start: FlightWaypoint
     patrol_end: FlightWaypoint
 
+    #: Set only when the fuel estimate says the patrol cannot fly its laps on what it
+    #: takes off with. It lives here rather than on TARCAP alone because a BARCAP is
+    #: the flight that orbits longest, so it is the one most likely to want a tanker.
+    #:
+    #: Defaulted, and read through the class attribute on a save that predates it, so
+    #: an in-progress campaign unpickles without a migrator. Keyword-only so a subclass
+    #: (CAS has an ingress point) can still add fields of its own without a default.
+    refuel: FlightWaypoint | None = field(default=None, kw_only=True)
+    pre_push_refuel: FlightWaypoint | None = field(default=None, kw_only=True)
+
     def iter_waypoints(self) -> Iterator[FlightWaypoint]:
         yield self.departure
         yield from self.nav_to
+        if self.pre_push_refuel is not None:
+            yield self.pre_push_refuel
         yield self.patrol_start
         yield self.patrol_end
+        if self.refuel is not None:
+            yield self.refuel
         yield from self.nav_from
         yield self.arrival
         if self.divert is not None:
@@ -33,11 +48,31 @@ class PatrollingLayout(StandardLayout):
         yield self.bullseye
         yield from self.custom_waypoints
 
+    def delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        if waypoint is self.pre_push_refuel:
+            self.pre_push_refuel = None
+            return True
+        if waypoint == self.refuel:
+            self.refuel = None
+            return True
+        return super().delete_waypoint(waypoint)
+
+    def can_delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        return waypoint is self.pre_push_refuel or super().can_delete_waypoint(waypoint)
+
 
 LayoutT = TypeVar("LayoutT", bound=PatrollingLayout)
 
 
 class PatrollingFlightPlan(StandardFlightPlan[LayoutT], UiZoneDisplay, ABC):
+    def total_time_between_waypoints(
+        self, a: FlightWaypoint, b: FlightWaypoint
+    ) -> timedelta:
+        duration = super().total_time_between_waypoints(a, b)
+        if a is self.layout.pre_push_refuel:
+            duration += prerefuel.tanking_time(self.flight)
+        return duration
+
     @property
     @abstractmethod
     def patrol_duration(self) -> timedelta:
@@ -79,6 +114,20 @@ class PatrollingFlightPlan(StandardFlightPlan[LayoutT], UiZoneDisplay, ABC):
         if waypoint == self.layout.patrol_end:
             return self.patrol_end_time
         return None
+
+    def fuel_burn_distance_between_points(
+        self, a: FlightWaypoint, b: FlightWaypoint
+    ) -> Distance:
+        # The patrol leg is flown as laps of the racetrack for patrol_duration, not
+        # as one straight transit, so charge the distance actually covered on station
+        # (never less than the track itself). Without this the entire on-station burn
+        # -- most of a CAP's fuel -- was missing from every consumer of the fuel
+        # model: the kneeboard ladder, the RTB margin and the sim.
+        if a is self.layout.patrol_start and b is self.layout.patrol_end:
+            hours = self.patrol_duration.total_seconds() / 3600.0
+            laps = nautical_miles(self.patrol_speed.knots * hours)
+            return max(laps, super().fuel_burn_distance_between_points(a, b))
+        return super().fuel_burn_distance_between_points(a, b)
 
     def takeoff_time(self) -> datetime:
         return self.patrol_start_time - self._travel_time_to_waypoint(self.tot_waypoint)

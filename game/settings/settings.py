@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from dataclasses import Field, dataclass, field, fields
 from datetime import timedelta
 from enum import Enum, unique
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Dict, Optional
 
 from dcs.forcedoptions import ForcedOptions
 
@@ -11,9 +11,19 @@ from .boundedfloatoption import bounded_float_option
 from .boundedintoption import bounded_int_option
 from .choicesoption import choices_option
 from .minutesoption import minutes_option
+from .textoption import text_option
 from .optiondescription import OptionDescription, SETTING_DESCRIPTION_KEY
-from .skilloption import skill_option
+from .skilloption import pilot_skill_option, skill_option
+from .textoption import text_option
 from ..ato.starttype import StartType
+from game.coordinates import CoordinateFormat
+from game.dcs.skills import (
+    DEFAULT_RANK_AVERAGE_XP,
+    DEFAULT_RANK_GOOD_XP,
+    DEFAULT_RANK_HIGH_XP,
+    DEFAULT_RANK_EXCELLENT_XP,
+)
+from game.mfd import MfdIntel
 
 Views = ForcedOptions.Views
 
@@ -27,6 +37,19 @@ class AutoAtoBehavior(Enum):
 
 
 @unique
+class CloudPresetPack(Enum):
+    """A community cloud-preset weather mod whose presets the mission generator may
+    use. Only one can be active at a time: the packs share the same preset keys
+    (Preset35+) but map them to different clouds, so they must not be mixed."""
+
+    NONE = "None (stock DCS presets)"
+    BANDIT = "Bandit's Cloud Presets"
+    WEATHER2 = "Weather 2.0 (Bandit)"
+    ATMOSX = "ATMOS-X"
+
+
+@unique
+@unique
 class NightMissions(Enum):
     DayAndNight = "nightmissions_nightandday"
     OnlyDay = "nightmissions_onlyday"
@@ -34,28 +57,13 @@ class NightMissions(Enum):
 
 
 @unique
-class FastForwardStopCondition(Enum):
-    DISABLED = "Fast forward disabled"
-    FIRST_CONTACT = "First contact"
-    PLAYER_TAKEOFF = "Player takeoff time"
-    PLAYER_TAXI = "Player taxi time"
-    PLAYER_STARTUP = "Player startup time"
-    PLAYER_AT_IP = "Player at IP"
-    MANUAL = "Manual fast forward control"
-
-
-@unique
-class CombatResolutionMethod(Enum):
-    PAUSE = "Pause simulation"
-    RESOLVE = "Resolve combat"
-    SKIP = "Skip combat"
-
-
-@unique
 class DefaultPlayerLaserCode(Enum):
     DEFAULT_1688 = "Default (1688)"
     ALLOCATE_OWN = "Allocate own (unique per flight)"
 
+
+GENERAL_PAGE = "General"
+GENERAL_PAGE_SECTION = "General"
 
 DIFFICULTY_PAGE = "Difficulty"
 
@@ -68,17 +76,51 @@ CAMPAIGN_MANAGEMENT_PAGE = "Campaign Management"
 GENERAL_SECTION = "General"
 PILOTS_AND_SQUADRONS_SECTION = "Pilots and Squadrons"
 HQ_AUTOMATION_SECTION = "HQ Automation"
+PERSISTENT_DAMAGE_SECTION = "Persistent damage & repairs"
+AIRCRAFT_REPAIRS_BOX = "Aircraft damage and workshops"
+SHIP_BUILDING_REPAIRS_BOX = "Ship and building damage"
+REPAIR_TIMES_BOX = "Destroyed units, buildings and runways"
+DEFAULT_RUNWAY_REPAIR_TURNS = 4
+DEFAULT_PERSISTENT_DAMAGE_REPAIR_PERCENT = 34
+OPFOR_AI_SECTION = "OPFOR AI commander"
+HIGH_COMMAND_SECTION = "High Command"
 FLIGHT_PLANNER_AUTOMATION = "Flight Planner Automation"
 LOGISTICS_SECTION = "Logistics (fuel & munitions)"
+GROUND_OBJECT_REPAIR_TUNING_SECTION = "Ground Object Repairs"
+BUILDING_REPAIR_TUNING_SECTION = "Building Repairs"
 
 CAMPAIGN_DOCTRINE_PAGE = "Campaign Doctrine"
 DOCTRINE_DISTANCES_SECTION = "Doctrine distances"
 
-PRETENSE_PAGE = "Pretense"
 
 MISSION_GENERATOR_PAGE = "Mission Generator"
+MFD_SECTION = "Threats on the MFD"
+
+#: The same three answers for every band of mobile air defence.
+MFD_INTEL_CHOICES = {
+    "Not shown": MfdIntel.NEVER,
+    "Shown where it is now": MfdIntel.CURRENT,
+    "Shown where it was last turn": MfdIntel.LAST_TURN,
+}
+
+LIVE_PILOTS_PAGE = "Live Pilots"
+LIVE_PILOTS_RANKS_SECTION = "Ranks"
+LIVE_PILOTS_SURVIVAL_SECTION = "Survival Chance"
+LIVE_PILOTS_MORALE_SECTION = "Morale"
+LIVE_PILOTS_MORALE_STATES_SECTION = "Morale States"
+LIVE_PILOTS_MORALE_EVENTS_SECTION = "Morale Event Values"
+LIVE_PILOTS_HARDENING_SECTION = "Hardening"
+LIVE_PILOTS_FRIENDSHIP_SECTION = "Friendship"
+LIVE_PILOTS_FRIENDSHIP_BANDS_SECTION = "Friendship levels"
+LIVE_PILOTS_FRIENDSHIP_DRIFT_SECTION = "Per turn random variation"
+LIVE_PILOTS_FRIENDSHIP_EVENTS_SECTION = "What changes it"
+LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION = "What it does"
+
 
 GAMEPLAY_SECTION = "Gameplay"
+MISSION_START_SECTION = "Mission Start"
+AI_BEHAVIOUR_SECTION = "AI"
+KNEEBOARD_SECTION = "Kneeboard"
 
 # TODO: Make sections a type and add headers.
 # This section had the header: "Disabling settings below may improve performance, but
@@ -86,23 +128,49 @@ GAMEPLAY_SECTION = "Gameplay"
 PERFORMANCE_SECTION = "Performance"
 
 
+def _atmosx_pack_selected(settings: Any) -> bool:
+    """The ATMOS-X live-weather options only mean anything with that pack selected."""
+    return settings.cloud_preset_pack is CloudPresetPack.ATMOSX
+
+
 @dataclass
 class Settings:
+    coordinate_format: CoordinateFormat = choices_option(
+        "Coordinate format",
+        page=GENERAL_PAGE,
+        section=GENERAL_PAGE_SECTION,
+        default=CoordinateFormat.DDM,
+        choices={
+            "Degrees, minutes, seconds (N42°03'12\" E042°03'12\")": CoordinateFormat.DMS,
+            "Degrees, minutes, seconds with decimals (N42°03'12.34\")": (
+                CoordinateFormat.DMS_DECIMAL
+            ),
+            "Degrees, decimal minutes (N42°03.200' E042°03.200')": CoordinateFormat.DDM,
+            "Decimal degrees (N42.05333° E042.05333°)": CoordinateFormat.DD,
+            "MGRS (38T MM 96228 13049)": CoordinateFormat.MGRS,
+        },
+        detail=(
+            "How coordinates are written wherever Escalation shows them: the objective"
+            " dialog and the map's coordinate picker."
+        ),
+    )
     version: Optional[str] = None
 
     # Difficulty settings
     # AI Difficulty
-    player_skill: str = skill_option(
+    player_skill: str = pilot_skill_option(
         "Player coalition skill",
         page=DIFFICULTY_PAGE,
         section=AI_DIFFICULTY_SECTION,
         default="High",
+        detail="Using Cadet is strongly recommended if you are enabling Live Pilots.",
     )
-    enemy_skill: str = skill_option(
+    enemy_skill: str = pilot_skill_option(
         "Enemy coalition skill",
         page=DIFFICULTY_PAGE,
         section=AI_DIFFICULTY_SECTION,
         default="High",
+        detail="Using Cadet is strongly recommended if you are enabling Live Pilots.",
     )
     enemy_vehicle_skill: str = skill_option(
         "Enemy AA and vehicles skill",
@@ -144,6 +212,29 @@ class Settings:
         page=DIFFICULTY_PAGE,
         section=MISSION_DIFFICULTY_SECTION,
         default=True,
+        detail=(
+            "Add vehicle-based MANPADS teams on each side of each front. Each team "
+            "has one launcher and a rifleman when the faction has one. Teams are "
+            "independent of infantry squad generation and defend their initial "
+            "positions near host vehicles. Existing deployed MANPADS count toward "
+            "the allowance."
+        ),
+    )
+    frontline_manpad_vehicles_per_team: int = bounded_int_option(
+        "Combat vehicles per MANPADS team (0 disables additional teams)",
+        page=DIFFICULTY_PAGE,
+        section=MISSION_DIFFICULTY_SECTION,
+        default=8,
+        min=0,
+        max=100,
+        detail=(
+            "The vehicle count on each side of each front is divided by this value "
+            "and rounded to the nearest team (halves round up). At 8, fifteen "
+            "combat vehicles receive two teams. Trucks, infantry and MANPADS do "
+            "not increase the allowance. Requires Manpads on frontlines. Zero "
+            "disables additional teams, not MANPADS already in the base inventory. "
+            "Generated support teams are currently recreated for each mission."
+        ),
     )
     night_day_missions: NightMissions = choices_option(
         "Night/day mission options",
@@ -177,6 +268,146 @@ class Settings:
         },
         default=Views.All,
     )
+    resale_depreciation_enabled: bool = boolean_option(
+        "Reduce equipment resale value",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GENERAL_SECTION,
+        default=True,
+        detail="Applies to both coalitions when selling aircraft or replacing/disbanding purchasable groups. Cancelling unfulfilled purchases or repairs still refunds their full cost. Disable to sell at full value.",
+    )
+    resale_value_percent: int = bounded_int_option(
+        "Equipment resale value (% of new price)",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GENERAL_SECTION,
+        default=85,
+        min=0,
+        max=100,
+        enabled_when=lambda s: s.resale_depreciation_enabled,
+        detail="Percentage of the new price received on sale. Also applied to the workshop's separate damaged-aircraft valuation.",
+    )
+    aircraft_maintenance_enabled: bool = boolean_option(
+        "Persistent aircraft damage and workshops",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=PERSISTENT_DAMAGE_SECTION,
+        subsection=AIRCRAFT_REPAIRS_BOX,
+        default=False,
+        detail="Recovered damaged aircraft occupy parking but cannot fly until repaired. Applies to both coalitions. Old missions without telemetry create no repairs. Disabling releases existing repairs at the next turn boundary.",
+    )
+    aircraft_slots_per_mechanic: int = bounded_int_option(
+        "Get one mechanic per each N parking slots in the base, where N is…",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=PERSISTENT_DAMAGE_SECTION,
+        subsection=AIRCRAFT_REPAIRS_BOX,
+        default=10,
+        min=1,
+        max=100,
+        detail="Determines initial workshop staff, not parking capacity. Count all physical aircraft and helicopter parking slots, divide by N and round up, with at least two mechanics per base. With N = 10, 100 slots give 10 mechanics and 51 slots give 6. Mechanics are shared between all squadrons at the base.",
+        enabled_when=lambda s: s.aircraft_maintenance_enabled,
+    )
+    aircraft_repair_percent: float = bounded_float_option(
+        "Maximum aircraft health repaired per turn (%)",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=PERSISTENT_DAMAGE_SECTION,
+        subsection=AIRCRAFT_REPAIRS_BOX,
+        default=50,
+        min=1,
+        max=100,
+        divisor=10,
+        prefix="",
+        decimals=1,
+        detail="Maximum health restored by EACH mechanic per working turn. One mechanic works on one aircraft at a time. Spare mechanics help aircraft already assigned, adding their repair capacity: at 50%, two mechanics can restore up to 100% in one working turn. Aircraft are assigned in admission order; unknown numerical damage takes one working turn.",
+        enabled_when=lambda s: s.aircraft_maintenance_enabled,
+    )
+    damaged_aircraft_sale_percent: int = bounded_int_option(
+        "Damaged aircraft resale value (%)",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=PERSISTENT_DAMAGE_SECTION,
+        subsection=AIRCRAFT_REPAIRS_BOX,
+        default=50,
+        min=0,
+        max=100,
+        detail="Percentage of the normal aircraft price received when selling a damaged airframe from the workshop or confirming a squadron relocation. Also multiplied by equipment resale value when that option is enabled.",
+        enabled_when=lambda s: s.aircraft_maintenance_enabled,
+    )
+    aircraft_mechanic_cost: int = bounded_int_option(
+        "Cost per additional aircraft mechanic ($)",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=PERSISTENT_DAMAGE_SECTION,
+        subsection=AIRCRAFT_REPAIRS_BOX,
+        default=50_000,
+        min=0,
+        max=10_000_000,
+        detail="Price in dollars to permanently hire one additional mechanic at a base. The default is $50,000.",
+        enabled_when=lambda s: s.aircraft_maintenance_enabled,
+    )
+    opfor_ai_enabled: bool = boolean_option(
+        "Allow OPFOR AI control (external LLM plays red)",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=OPFOR_AI_SECTION,
+        default=False,
+        detail=(
+            "Expose the live game over a local API so an external LLM (e.g. ChatGPT, "
+            "Claude, et cetera) plans the enemy turns instead of the scripted "
+            "commander. Check the toolbar OPFOR AI button for more info when enabling "
+            "this."
+        ),
+    )
+    high_command_enabled: bool = boolean_option(
+        "Enable the High Command",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=HIGH_COMMAND_SECTION,
+        default=True,
+        detail=(
+            "Each turn the High Command requests enemy objectives taken, each with "
+            "a prize for taking it before the request runs out. Requests are "
+            "optional: ignoring one, or letting it run out, has no negative effect."
+        ),
+    )
+    high_command_orders: int = bounded_int_option(
+        "Requests open at once",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=HIGH_COMMAND_SECTION,
+        default=3,
+        min=1,
+        max=6,
+        detail=(
+            "One from each tier of the enemy's objectives ranked by difficulty plus "
+            "importance: with three, a hard, a middling and an easy one."
+        ),
+    )
+    high_command_shortest_order: int = bounded_int_option(
+        "Shortest request, in turns",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=HIGH_COMMAND_SECTION,
+        default=2,
+        min=1,
+        max=10,
+        detail=(
+            "The fewest turns a request stays open. Each new request is given a "
+            "number of turns between this and the longest; when they run out, the "
+            "request closes and another from the same tier takes its place."
+        ),
+    )
+    high_command_longest_order: int = bounded_int_option(
+        "Longest request, in turns",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=HIGH_COMMAND_SECTION,
+        default=5,
+        min=1,
+        max=10,
+        detail="The most turns a request stays open.",
+    )
+    high_command_report_enemy: bool = boolean_option(
+        "Report enemy completed High Command requests in the debriefing",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=HIGH_COMMAND_SECTION,
+        default=True,
+        detail=(
+            "With OPFOR AI control on, the enemy gets High Command requests too. "
+            "With this on, the debriefing also lists the ones it achieved in the "
+            "mission and what each paid."
+        ),
+    )
     external_views_allowed: bool = boolean_option(
         "Allow external views",
         DIFFICULTY_PAGE,
@@ -201,6 +432,19 @@ class Settings:
     )
 
     # CAMPAIGN DOCTRINE
+    ignore_non_combat_air_losses: bool = boolean_option(
+        "Non-combat (crash) aircraft losses don't count",
+        page=CAMPAIGN_DOCTRINE_PAGE,
+        section=GENERAL_SECTION,
+        default=False,
+        detail=(
+            "The AI has too high a tendency to crash into terrain or buildings. "
+            "This setting makes those losses not count as real ones: the aircraft "
+            "is not removed from the squadron and its pilot survives. Only losses "
+            "DCS attributes to a weapon or a SAM count as real in the campaign. "
+            "Applies to both coalitions."
+        ),
+    )
     desired_barcap_mission_duration: timedelta = minutes_option(
         "Desired BARCAP on-station time",
         page=CAMPAIGN_DOCTRINE_PAGE,
@@ -210,6 +454,17 @@ class Settings:
         max=150,
         detail="Implicitly determines the number of BARCAPs planned by taking the mission duration"
         " and dividing it by the desired on-station time.",
+    )
+    desired_tarcap_mission_duration: timedelta = minutes_option(
+        "Desired TARCAP on-station time",
+        page=CAMPAIGN_DOCTRINE_PAGE,
+        section=GENERAL_SECTION,
+        default=timedelta(minutes=30),
+        min=10,
+        max=150,
+        detail="Only applies to a TARCAP nobody asked to escort. When a flight in its"
+        " package has requested an escort, the TARCAP stays for as long as the escorted"
+        " mission does, whatever this says.",
     )
     desired_awacs_mission_duration: timedelta = minutes_option(
         "Desired AWACS on-station time",
@@ -231,37 +486,16 @@ class Settings:
         detail="Implicitly determines the number of Tanker flights planned by taking the mission duration"
         " and dividing it by the desired on-station time.",
     )
-    autoplan_tankers_for_strike: bool = boolean_option(
-        "Auto-planner plans refueling flights for Strike packages",
+    plan_refuelling_when_needed: bool = boolean_option(
+        "Plan a tanker and a refuelling waypoint when a package needs the fuel",
         page=CAMPAIGN_DOCTRINE_PAGE,
         section=GENERAL_SECTION,
         default=True,
         invert=False,
         detail=(
-            "If checked, the auto-planner will include tankers in Strike packages, "
-            "provided the faction has access to them."
-        ),
-    )
-    autoplan_tankers_for_oca: bool = boolean_option(
-        "Auto-planner plans refueling flights for OCA packages",
-        page=CAMPAIGN_DOCTRINE_PAGE,
-        section=GENERAL_SECTION,
-        default=True,
-        invert=False,
-        detail=(
-            "If checked, the auto-planner will include tankers in OCA packages, "
-            "provided the faction has access to them."
-        ),
-    )
-    autoplan_tankers_for_dead: bool = boolean_option(
-        "Auto-planner plans refueling flights for DEAD packages",
-        page=CAMPAIGN_DOCTRINE_PAGE,
-        section=GENERAL_SECTION,
-        default=True,
-        invert=False,
-        detail=(
-            "If checked, the auto-planner will include tankers in DEAD packages, "
-            "provided the faction has access to them."
+            "If a tanker is available, one is planned with the package when the fuel "
+            "estimate says the package needs it. The refuelling waypoint goes on the "
+            "way home, in friendly airspace."
         ),
     )
     aircraft_per_recovery_tanker: int = bounded_int_option(
@@ -401,7 +635,7 @@ class Settings:
         ),
     )
     max_threat_range: int = bounded_int_option(
-        "Maxiumum threat range (NM)",
+        "Maximum threat range (NM)",
         page=CAMPAIGN_DOCTRINE_PAGE,
         section=DOCTRINE_DISTANCES_SECTION,
         default=200,
@@ -509,6 +743,34 @@ class Settings:
 
     # Campaign management
     # General
+    persistent_damage_enabled: bool = boolean_option(
+        "Persistent ship and building damage",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=PERSISTENT_DAMAGE_SECTION,
+        subsection=SHIP_BUILDING_REPAIRS_BOX,
+        default=True,
+        detail=(
+            "Surviving ships and buildings keep their remaining health between "
+            "missions. Armor and SAM units still recover fully each turn. "
+            "Destroyed units are not revived by this setting."
+        ),
+    )
+    persistent_damage_repair_percent: int = bounded_int_option(
+        "Ship and building damage repaired per turn (%)",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=PERSISTENT_DAMAGE_SECTION,
+        subsection=SHIP_BUILDING_REPAIRS_BOX,
+        default=DEFAULT_PERSISTENT_DAMAGE_REPAIR_PERCENT,
+        min=0,
+        max=100,
+        detail=(
+            "Percentage points of original maximum health restored at the end of each turn, "
+            "not a percentage of remaining damage. For example, 30% repair raises 20% health to 50%. "
+            "The default is 34 points per turn. Zero disables "
+            "automatic recovery; 100 restores surviving units fully."
+        ),
+        enabled_when=lambda settings: settings.persistent_damage_enabled,
+    )
     squadron_random_chance: int = bounded_int_option(
         "Percentage of randomly selected aircraft types (only for generated squadrons)",
         page=CAMPAIGN_MANAGEMENT_PAGE,
@@ -518,7 +780,7 @@ class Settings:
         max=100,
         detail=(
             "Aircraft type selection is governed by the campaign and the squadron definitions available to "
-            "Retribution. Squadrons are generated by Retribution if the faction does not have access to the campaign "
+            "Escalation. Squadrons are generated by Escalation if the faction does not have access to the campaign "
             "designer's squadron/aircraft definitions. Use the above to increase/decrease aircraft variety by making "
             "some selections random instead of picking aircraft types from a priority list."
         ),
@@ -593,12 +855,58 @@ class Settings:
             "assigned to their primary task."
         ),
     )
-    use_bandit_clouds: bool = boolean_option(
-        "Use Bandit's clouds",
+    cloud_preset_pack: CloudPresetPack = choices_option(
+        "Custom cloud preset pack",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GENERAL_SECTION,
+        default=CloudPresetPack.NONE,
+        choices={v.value: v for v in CloudPresetPack},
+        detail=(
+            "Make a community cloud-preset weather mod's presets available to the "
+            "mission generator. Pick the pack you have installed in DCS. Only one can "
+            "be active at a time, since the packs reuse the same preset keys for "
+            "different clouds. 'None' uses the stock DCS presets."
+        ),
+    )
+    atmosx_live_weather: bool = boolean_option(
+        "Use ATMOS-X live weather",
         page=CAMPAIGN_MANAGEMENT_PAGE,
         section=GENERAL_SECTION,
         default=False,
-        detail=("If checked, Bandit's cloud presets will become available."),
+        detail=(
+            "Replace the generated weather with a real METAR observation, fetched by "
+            "the ATMOS-X CLI for a station on this terrain. If the observation cannot "
+            "be fetched -- no ATMOS-X, no network, nothing reported for that station "
+            "-- the mission keeps the "
+            "weather Escalation generated and says so in the log."
+        ),
+        visible_when=_atmosx_pack_selected,
+    )
+    atmosx_cli_path: str = text_option(
+        "ATMOS-X CLI path",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GENERAL_SECTION,
+        default="",
+        placeholder="Detected automatically",
+        detail=(
+            "Full path to atmosx-cli.exe. Leave blank to find it from the ATMOS-X "
+            "installation registered with Windows; set it only if ATMOS-X was not "
+            "installed by its installer or lives somewhere unusual."
+        ),
+        visible_when=_atmosx_pack_selected,
+    )
+    atmosx_metar_station: str = text_option(
+        "ATMOS-X METAR station (ICAO)",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GENERAL_SECTION,
+        default="",
+        placeholder="Nearest to your base",
+        detail=(
+            "Which station to read the weather from, e.g. LCLK. Leave blank and the "
+            "station is chosen from the airfields ATMOS-X knows on this terrain: the "
+            "one you are flying from if it reports, otherwise the closest that does."
+        ),
+        visible_when=_atmosx_pack_selected,
     )
 
     # Pilots and Squadrons
@@ -608,10 +916,12 @@ class Settings:
         PILOTS_AND_SQUADRONS_SECTION,
         default=True,
         detail=(
-            "Set whether or not AI pilots will level up after completing a number of"
-            " sorties. Since pilot level affects the AI skill, you may wish to disable"
-            " this, lest you face an Ace!"
+            "Set whether or not AI pilots will level up after completing 4 sorties."
+            " Since pilot level affects the AI skill, you may wish to disable this,"
+            " lest you face an Ace! This is disabled if Live Pilots is active, since"
+            " it uses a different xp-based leveling system."
         ),
+        enabled_when=lambda s: not s.live_pilots_enabled,
     )
     #: Feature flag for squadron limits.
     enable_squadron_pilot_limits: bool = boolean_option(
@@ -658,6 +968,16 @@ class Settings:
             "this many pilots each turn up to the limit."
         ),
     )
+    ignore_parking_limits: bool = boolean_option(
+        "Ignore parking space at airbases",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        PILOTS_AND_SQUADRONS_SECTION,
+        default=False,
+        detail=(
+            "Airbases hold as many aircraft as you can pay for, whatever their ramp "
+            "size. Carriers and FOBs are unaffected."
+        ),
+    )
     # Feature flag for squadron limits.
     enable_squadron_aircraft_limits: bool = boolean_option(
         "Enable per-squadron aircraft limits",
@@ -681,6 +1001,90 @@ class Settings:
         CAMPAIGN_MANAGEMENT_PAGE,
         HQ_AUTOMATION_SECTION,
         default=False,
+    )
+    weighted_ground_procurement: bool = boolean_option(
+        "AI buys its better ground units more often",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        HQ_AUTOMATION_SECTION,
+        default=True,
+        detail=(
+            "Automatic purchases first choose the units that best balance the force "
+            "against the faction's doctrine. When models within the same role fit "
+            "equally well, prefer more expensive models as a proxy for capability. "
+            "Disabling this uses an equal chance among those models. This option "
+            "does not increase a role's share of spending."
+        ),
+    )
+    automate_ground_object_repairs: bool = boolean_option(
+        "Automate ground object repairs",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        HQ_AUTOMATION_SECTION,
+        default=False,
+        detail=(
+            "If enabled, AI can spend budget to repair destroyed ground object units "
+            "such as SAMs and EWRs. The gear tunes what it repairs first."
+        ),
+        opens_section=GROUND_OBJECT_REPAIR_TUNING_SECTION,
+    )
+    ground_object_repair_turns: int = bounded_int_option(
+        "Ground object repair turns",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        PERSISTENT_DAMAGE_SECTION,
+        subsection=REPAIR_TIMES_BOX,
+        min=0,
+        max=10,
+        default=2,
+        detail=(
+            "Turns required for repaired ground object units to return to service. "
+            "Set to 0 for instant repairs."
+        ),
+    )
+    automate_building_repairs: bool = boolean_option(
+        "Automate building repairs",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        HQ_AUTOMATION_SECTION,
+        default=False,
+        detail=(
+            "If enabled, AI can spend budget to repair destroyed income buildings "
+            "such as depots and factories. The gear tunes what it repairs first."
+        ),
+        opens_section=BUILDING_REPAIR_TUNING_SECTION,
+    )
+    building_repair_budget_percent: int = bounded_int_option(
+        "Building repair budget (%)",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        HQ_AUTOMATION_SECTION,
+        min=0,
+        max=100,
+        default=15,
+        detail=(
+            "Percent of the procurement budget that may be spent repairing buildings."
+        ),
+        enabled_when=lambda s: s.automate_building_repairs,
+    )
+    building_repair_turns: int = bounded_int_option(
+        "Building repair turns",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        PERSISTENT_DAMAGE_SECTION,
+        subsection=REPAIR_TIMES_BOX,
+        min=0,
+        max=10,
+        default=4,
+        detail=(
+            "Turns required for repaired buildings to return to service. "
+            "Set to 0 for instant repairs. Applies to your own repairs as well, so it "
+            "stands whether or not the AI is doing them."
+        ),
+    )
+    runway_repair_turns: int = bounded_int_option(
+        "Runway repair turns",
+        CAMPAIGN_MANAGEMENT_PAGE,
+        PERSISTENT_DAMAGE_SECTION,
+        subsection=REPAIR_TIMES_BOX,
+        min=0,
+        max=10,
+        default=DEFAULT_RUNWAY_REPAIR_TURNS,
+        detail="Turns for a newly ordered runway repair to complete. Set to 0 for instant repairs. Applies to manual and automatic orders; existing repairs keep their countdown. Automatic repair switches remain in HQ Automation.",
     )
     automate_aircraft_reinforcements: bool = boolean_option(
         "Automate aircraft purchases",
@@ -796,6 +1200,75 @@ class Settings:
         ),
     )
 
+    building_repair_income_multiplier: float = bounded_float_option(
+        "Building repair income multiplier",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=BUILDING_REPAIR_TUNING_SECTION,
+        min=0,
+        max=20,
+        divisor=10,
+        default=4.0,
+        detail=("Multiplier applied to building income to compute repair cost."),
+    )
+    building_repair_ammo_bonus: float = bounded_float_option(
+        "Building repair ammo bonus",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=BUILDING_REPAIR_TUNING_SECTION,
+        min=0,
+        max=50,
+        divisor=5,
+        default=10.0,
+        detail=("Added cost for ammo depots to reflect frontline value."),
+    )
+    building_repair_factory_bonus: float = bounded_float_option(
+        "Building repair factory bonus",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=BUILDING_REPAIR_TUNING_SECTION,
+        min=0,
+        max=50,
+        divisor=10,
+        default=12.0,
+        detail=("Added cost for factories to reflect production value."),
+    )
+    building_repair_weight_remote: float = bounded_float_option(
+        "Building repair weight: remote",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=BUILDING_REPAIR_TUNING_SECTION,
+        min=0,
+        max=5,
+        divisor=10,
+        default=1.2,
+        detail=(
+            "Weight for remoteness from enemy control points in repair priority. "
+            + "Buildings farther from enemy control points will be prioritized for repair."
+        ),
+    )
+    building_repair_weight_income: float = bounded_float_option(
+        "Building repair weight: income",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=BUILDING_REPAIR_TUNING_SECTION,
+        min=0,
+        max=5,
+        divisor=10,
+        default=1.0,
+        detail=(
+            "Weight for building income in repair priority. "
+            + "Buildings that generate more income will be prioritized for repair."
+        ),
+    )
+    building_repair_weight_ammo_frontline: float = bounded_float_option(
+        "Building repair weight: ammo frontline",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=BUILDING_REPAIR_TUNING_SECTION,
+        min=0,
+        max=5,
+        divisor=10,
+        default=1.1,
+        detail=(
+            "Weight for frontline proximity when prioritizing ammo depots. "
+            + "Ammo depots closer to the frontline will be prioritized for repair."
+        ),
+    )
     # Flight Planner Automation
     #: The weight used for 2-ships.
     fpa_2ship_weight: int = bounded_int_option(
@@ -1147,49 +1620,79 @@ class Settings:
         max=1000,
     )
 
+    # Repairs, formerly the "Campaign Management+" page
+    sam_repair_budget_fraction: float = bounded_float_option(
+        "SAM repair budget fraction",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GROUND_OBJECT_REPAIR_TUNING_SECTION,
+        min=0.0,
+        max=1.0,
+        divisor=100,
+        default=0.4,
+        detail=("Fraction of ground unit budget reserved for SAM repairs."),
+    )
+    sam_repair_priority_threshold: float = bounded_float_option(
+        "SAM repair priority threshold",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GROUND_OBJECT_REPAIR_TUNING_SECTION,
+        min=0.0,
+        max=5.0,
+        divisor=10,
+        default=1.5,
+        detail=("Minimum priority score required to queue SAM repairs."),
+    )
+    sam_repair_weight_threat: float = bounded_float_option(
+        "SAM repair weight: threat range",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GROUND_OBJECT_REPAIR_TUNING_SECTION,
+        min=0.0,
+        max=5.0,
+        divisor=10,
+        default=0.5,
+        detail="Weight applied to SAM threat range coverage.",
+    )
+    sam_repair_weight_frontline: float = bounded_float_option(
+        "SAM repair weight: frontline",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GROUND_OBJECT_REPAIR_TUNING_SECTION,
+        min=0.0,
+        max=5.0,
+        divisor=10,
+        default=1.5,
+        detail="Weight applied to proximity to the front line.",
+    )
+    sam_repair_weight_cp_coverage: float = bounded_float_option(
+        "SAM repair weight: CP coverage",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GROUND_OBJECT_REPAIR_TUNING_SECTION,
+        min=0.0,
+        max=5.0,
+        divisor=10,
+        default=0.6,
+        detail="Weight applied to covered control points.",
+    )
+    sam_repair_weight_tgo_coverage: float = bounded_float_option(
+        "SAM repair weight: TGO coverage",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GROUND_OBJECT_REPAIR_TUNING_SECTION,
+        min=0.0,
+        max=5.0,
+        divisor=10,
+        default=0.4,
+        detail="Weight applied to covered ground objects.",
+    )
+    sam_repair_weight_tgo_income: float = bounded_float_option(
+        "SAM repair weight: TGO income",
+        page=CAMPAIGN_MANAGEMENT_PAGE,
+        section=GROUND_OBJECT_REPAIR_TUNING_SECTION,
+        min=0.0,
+        max=5.0,
+        divisor=10,
+        default=0.4,
+        detail="Weight applied to covered ground object income.",
+    )
     # Mission Generator
     # Gameplay
-    fast_forward_stop_condition: FastForwardStopCondition = choices_option(
-        "Fast forward until",
-        page=MISSION_GENERATOR_PAGE,
-        section=GAMEPLAY_SECTION,
-        default=FastForwardStopCondition.PLAYER_STARTUP,
-        choices={
-            "No fast forward": FastForwardStopCondition.DISABLED,
-            "Player startup time": FastForwardStopCondition.PLAYER_STARTUP,
-            "Player taxi time": FastForwardStopCondition.PLAYER_TAXI,
-            "Player takeoff time": FastForwardStopCondition.PLAYER_TAKEOFF,
-            "Player at IP": FastForwardStopCondition.PLAYER_AT_IP,
-            "First contact": FastForwardStopCondition.FIRST_CONTACT,
-            "Manual": FastForwardStopCondition.MANUAL,
-        },
-        detail=(
-            "Determines when fast forwarding stops: "
-            "No fast forward: disables fast forward. "
-            "Player startup time: fast forward until player startup time. "
-            "Player taxi time: fast forward until player taxi time. "
-            "Player takeoff time: fast forward until player takeoff time. "
-            "First contact: fast forward until first contact between blue and red units. "
-            "Manual: manually control fast forward. Show manual controls with --show-sim-speed-controls."
-        ),
-    )
-    combat_resolution_method: CombatResolutionMethod = choices_option(
-        "Resolve combat when fast forwarding by",
-        page=MISSION_GENERATOR_PAGE,
-        section=GAMEPLAY_SECTION,
-        default=CombatResolutionMethod.PAUSE,
-        choices={
-            "Pause": CombatResolutionMethod.PAUSE,
-            "Resolving combat (WIP)": CombatResolutionMethod.RESOLVE,
-            "Skipping combat": CombatResolutionMethod.SKIP,
-        },
-        detail=(
-            "Determines what happens when combat occurs when fast forwarding. "
-            "Pause: pause fast forward and generate mission. Fast forwarding may stop before the condition specified in the above setting. "
-            "Resolving combat (WIP): auto resolve combat. This method is very rudimentary and will result in large losses. "
-            "Skipping combat: skip combat as if it did not occur."
-        ),
-    )
     supercarrier: bool = boolean_option(
         "Use supercarrier module",
         MISSION_GENERATOR_PAGE,
@@ -1224,6 +1727,13 @@ class Settings:
         MISSION_GENERATOR_PAGE,
         GAMEPLAY_SECTION,
         default=True,
+        detail=(
+            "The Enhanced Position Location Reporting System: DCS's datalink. Switched"
+            " on, a group shares what it sees with the rest of its coalition, so an"
+            " aircraft gets the datalink picture on its displays (the Hornet's SA"
+            " page, the Viper's MFD, the A-10C's TAD) and ground units cue each other."
+            " Switched off, every group fights on its own sensors alone."
+        ),
     )
     generate_dark_kneeboard: bool = boolean_option(
         "Generate dark kneeboard",
@@ -1250,10 +1760,11 @@ class Settings:
             "with no DCS-ATC folder: Retribution's normal presets."
         ),
     )
+    # Mission Start
     never_delay_player_flights: bool = boolean_option(
         "Player flights ignore TOT and spawn immediately",
         MISSION_GENERATOR_PAGE,
-        GAMEPLAY_SECTION,
+        MISSION_START_SECTION,
         default=True,
         detail=(
             "Does not adjust package waypoint times. Should not be used if players "
@@ -1266,20 +1777,10 @@ class Settings:
             "option only allows the player to wait on the ground.</strong>"
         ),
     )
-    untasked_opfor_client_slots: bool = boolean_option(
-        "Convert untasked OPFOR aircraft into client slots",
-        page=MISSION_GENERATOR_PAGE,
-        section=GAMEPLAY_SECTION,
-        default=False,
-        detail=(
-            "Warning: Enabling this will significantly reduce the number of "
-            "targets available for OCA/Aircraft missions."
-        ),
-    )
     default_start_type: StartType = choices_option(
         "Default start type for AI aircraft",
         page=MISSION_GENERATOR_PAGE,
-        section=GAMEPLAY_SECTION,
+        section=MISSION_START_SECTION,
         choices={v.value: v for v in StartType},
         default=StartType.COLD,
         detail=(
@@ -1291,10 +1792,112 @@ class Settings:
     default_start_type_client: StartType = choices_option(
         "Default start type for Player flights",
         page=MISSION_GENERATOR_PAGE,
-        section=GAMEPLAY_SECTION,
+        section=MISSION_START_SECTION,
         choices={v.value: v for v in StartType},
         default=StartType.COLD,
         detail="Default start type for flights containing Player/Client slots.",
+    )
+    nevatim_parking_fix: bool = boolean_option(
+        "Force air-starts for aircraft at Nevatim and Ramon Airbase inoperable parking slots",
+        page=MISSION_GENERATOR_PAGE,
+        section=MISSION_START_SECTION,
+        default=False,  # TODO: set to False or remove this when DCS is fixed
+        detail=(
+            "Air-starts forced for all aircraft at Nevatim and Ramon Airbase except parking slots "
+            "which are known to work as of DCS World 2.9.4.53990."
+        ),
+    )
+    player_flights_sixpack: bool = boolean_option(
+        "Player flights can spawn on the sixpack",
+        MISSION_GENERATOR_PAGE,
+        MISSION_START_SECTION,
+        default=True,
+    )
+    # AI
+    limit_ai_radios: bool = boolean_option(
+        "Limit AI radio callouts",
+        page=MISSION_GENERATOR_PAGE,
+        section=AI_BEHAVIOUR_SECTION,
+        default=True,
+        detail="Avoids the target-detection callouts over the radio by AI. (except for AWACS flights)",
+    )
+    silence_ai_radios: bool = boolean_option(
+        "Suppress AI radio callouts",
+        page=MISSION_GENERATOR_PAGE,
+        section=AI_BEHAVIOUR_SECTION,
+        default=False,
+        detail="Keeps the AI silent at all times for flights with human pilots. (except for AWACS flights)",
+    )
+    use_ai_combat_landing: bool = boolean_option(
+        "Use AI combat landing waypoint task",
+        page=MISSION_GENERATOR_PAGE,
+        section=AI_BEHAVIOUR_SECTION,
+        default=False,
+        detail="Turns the combat landing flag on in the landing waypoint task.",
+    )
+    ground_start_ai_planes: bool = boolean_option(
+        "AI fixed-wing aircraft can use roadbases / bases with only ground spawns",
+        MISSION_GENERATOR_PAGE,
+        AI_BEHAVIOUR_SECTION,
+        default=False,
+        detail=(
+            "If enabled, AI can use roadbases or airbases which only have ground spawns. "
+            "AI will always air-start from these bases (due to DCS limitation)."
+        ),
+    )
+    ai_unlimited_fuel: bool = boolean_option(
+        "AI flights have unlimited fuel",
+        MISSION_GENERATOR_PAGE,
+        AI_BEHAVIOUR_SECTION,
+        default=True,
+        detail=(
+            "AI aircraft have unlimited fuel applied at start, removed at join/racetrack start,"
+            " and reapplied at split/racetrack end for applicable flights. "
+        ),
+    )
+    # Kneeboard
+    generate_target_recon_kneeboard: bool = boolean_option(
+        "Generate target recon kneeboard pages",
+        MISSION_GENERATOR_PAGE,
+        KNEEBOARD_SECTION,
+        default=True,
+        detail=(
+            "Generate a target reconnaissance page for player flights with air-to-ground "
+            "tasks, showing aimpoints, threat rings, and target area context."
+        ),
+    )
+    generate_all_packages_kneeboard: bool = boolean_option(
+        "Generate friendly packages kneeboard page",
+        MISSION_GENERATOR_PAGE,
+        KNEEBOARD_SECTION,
+        default=True,
+        detail=(
+            "Append page(s) listing every friendly package with its TOT (strike "
+            "tasks) or patrol window (CAP, tanker, AWACS), for cross-package "
+            "coordination."
+        ),
+    )
+    target_recon_extra_threat_search_nmi: int = bounded_int_option(
+        "Extra threat search radius (nmi)",
+        MISSION_GENERATOR_PAGE,
+        KNEEBOARD_SECTION,
+        default=0,
+        min=0,
+        max=50,
+        detail=(
+            "Additional nautical miles beyond the default search radius to include "
+            "threats on the target recon kneeboard. 0 uses the default radius only."
+        ),
+    )
+    untasked_opfor_client_slots: bool = boolean_option(
+        "Convert untasked OPFOR aircraft into client slots",
+        page=MISSION_GENERATOR_PAGE,
+        section=GAMEPLAY_SECTION,
+        default=False,
+        detail=(
+            "Warning: Enabling this will significantly reduce the number of "
+            "targets available for OCA/Aircraft missions."
+        ),
     )
     default_player_laser_code: DefaultPlayerLaserCode = choices_option(
         "Default laser code for Player flights",
@@ -1309,14 +1912,108 @@ class Settings:
             "flights only; existing flights are unchanged."
         ),
     )
-    nevatim_parking_fix: bool = boolean_option(
-        "Force air-starts for aircraft at Nevatim and Ramon Airbase inoperable parking slots",
+    align_before_landing: bool = boolean_option(
+        "Add an ALIGN waypoint before landing",
         page=MISSION_GENERATOR_PAGE,
         section=GAMEPLAY_SECTION,
-        default=False,  # TODO: set to False or remove this when DCS is fixed
+        default=True,
         detail=(
-            "Air-starts forced for all aircraft at Nevatim and Ramon Airbase except parking slots "
-            "which are known to work as of DCS World 2.9.4.53990."
+            "Make the last waypoint before landing one that aligns the aircraft with "
+            "the active landing runway or a carrier's recovery course."
+        ),
+    )
+    align_distance_nm: float = bounded_float_option(
+        "How far out the ALIGN waypoint sits (NM)",
+        page=MISSION_GENERATOR_PAGE,
+        section=GAMEPLAY_SECTION,
+        default=15.0,
+        min=3.0,
+        max=100.0,
+        divisor=1,
+        prefix="",
+        decimals=0,
+        enabled_when=lambda settings: settings.align_before_landing,
+        detail=(
+            "Its height follows from this at three degrees of glideslope, about 300 ft "
+            "a mile, between 1500 and 6000 ft above the field."
+        ),
+    )
+    align_hold_with_runway: bool = boolean_option(
+        "Hold on the departure runway's centreline",
+        page=MISSION_GENERATOR_PAGE,
+        section=GAMEPLAY_SECTION,
+        default=True,
+        detail=(
+            "Put the hold point straight ahead of the runway the flight takes off "
+            "from instead of wherever the hold geometry puts it. A carrier uses its "
+            "recovery course."
+        ),
+    )
+    align_hold_distance_nm: float = bounded_float_option(
+        "How far out the hold sits (NM)",
+        page=MISSION_GENERATOR_PAGE,
+        section=GAMEPLAY_SECTION,
+        default=25.0,
+        min=5.0,
+        max=100.0,
+        divisor=1,
+        prefix="",
+        decimals=0,
+        enabled_when=lambda settings: settings.align_hold_with_runway,
+        detail=(
+            "Replaces the doctrine's own hold distance, which is 25 NM for a modern "
+            "campaign and shorter for earlier ones. Only used while the option above "
+            "is on."
+        ),
+    )
+    align_carrier_distance_nm: float = bounded_float_option(
+        "How far astern of a carrier the ALIGN waypoint sits (NM)",
+        page=MISSION_GENERATOR_PAGE,
+        section=GAMEPLAY_SECTION,
+        default=50.0,
+        min=5.0,
+        max=100.0,
+        divisor=1,
+        prefix="",
+        decimals=0,
+        enabled_when=lambda settings: settings.align_before_landing,
+        detail=(
+            "On the base recovery course, at the position the ship will have steamed "
+            "to by the time the flight lands. Fifty is where a Case III starts."
+        ),
+    )
+    align_helo_distance_nm: float = bounded_float_option(
+        "Helicopter ALIGN distance (NM)",
+        page=MISSION_GENERATOR_PAGE,
+        section=GAMEPLAY_SECTION,
+        default=2.0,
+        min=0.5,
+        max=20.0,
+        divisor=10,
+        prefix="",
+        decimals=1,
+        enabled_when=lambda settings: settings.align_before_landing,
+        detail=(
+            "Overrides the fixed-wing ALIGN distance for helicopters at airfields "
+            "and carriers. Carrier distance is measured from the projected recovery "
+            "position. Applies when the flight plan is created or regenerated."
+        ),
+    )
+    align_helo_hold_distance_nm: float = bounded_float_option(
+        "Helicopter departure hold distance (NM)",
+        page=MISSION_GENERATOR_PAGE,
+        section=GAMEPLAY_SECTION,
+        default=2.0,
+        min=0.5,
+        max=20.0,
+        divisor=10,
+        prefix="",
+        decimals=1,
+        enabled_when=lambda settings: settings.align_hold_with_runway,
+        detail=(
+            "Overrides the fixed-wing departure hold distance for helicopters at "
+            "airfields and carriers. Applies when the flight plan is created or "
+            "regenerated."
         ),
     )
     switch_baro_fix: bool = boolean_option(
@@ -1329,27 +2026,6 @@ class Settings:
             " trying to fly at altitudes lower than the sea-bottom."
         ),
     )
-    limit_ai_radios: bool = boolean_option(
-        "Limit AI radio callouts",
-        page=MISSION_GENERATOR_PAGE,
-        section=GAMEPLAY_SECTION,
-        default=True,
-        detail="Avoids the target-detection callouts over the radio by AI. (except for AWACS flights)",
-    )
-    silence_ai_radios: bool = boolean_option(
-        "Suppress AI radio callouts",
-        page=MISSION_GENERATOR_PAGE,
-        section=GAMEPLAY_SECTION,
-        default=False,
-        detail="Keeps the AI silent at all times for flights with human pilots. (except for AWACS flights)",
-    )
-    use_ai_combat_landing: bool = boolean_option(
-        "Use AI combat landing waypoint task",
-        page=MISSION_GENERATOR_PAGE,
-        section=GAMEPLAY_SECTION,
-        default=False,
-        detail="Turns the combat landing flag on in the landing waypoint task.",
-    )
     # Mission specific
     desired_player_mission_duration: timedelta = minutes_option(
         "Desired mission duration",
@@ -1358,14 +2034,6 @@ class Settings:
         default=timedelta(minutes=60),
         min=30,
         max=150,
-    )
-    max_frontline_width: int = bounded_int_option(
-        "Maximum frontline width (km)",
-        page=MISSION_GENERATOR_PAGE,
-        section=GAMEPLAY_SECTION,
-        default=80,
-        min=1,
-        max=100,
     )
     game_masters_count: int = bounded_int_option(
         "Number of game masters",
@@ -1389,6 +2057,18 @@ class Settings:
         detail=(
             "The number of tactical commander slots to generate for each side. "
             "Tactical commanders can control & direct friendly units."
+        ),
+    )
+    use_jtac: bool = boolean_option(
+        "Use JTAC if the faction has one defined",
+        MISSION_GENERATOR_PAGE,
+        GAMEPLAY_SECTION,
+        default=True,
+        detail=(
+            "Spawns the faction's JTAC aircraft on each front line. Off, no JTAC is "
+            "generated even for a faction that defines one. Separate from the number "
+            "of JTAC controller slots below, which are Combined Arms seats."
+            " Disable this option when using Realistic CAS to avoid conflicting JTAC generation."
         ),
     )
     jtac_count: int = bounded_int_option(
@@ -1415,79 +2095,6 @@ class Settings:
             'Use this to allow spectators when disabling "Allow external views".'
         ),
     )
-    ground_start_ai_planes: bool = boolean_option(
-        "AI fixed-wing aircraft can use roadbases / bases with only ground spawns",
-        MISSION_GENERATOR_PAGE,
-        GAMEPLAY_SECTION,
-        default=False,
-        detail=(
-            "If enabled, AI can use roadbases or airbases which only have ground spawns. "
-            "AI will always air-start from these bases (due to DCS limitation)."
-        ),
-    )
-    ground_start_scenery_remove_triggers: bool = boolean_option(
-        "Generate SCENERY REMOVE OBJECTS ZONE triggers at roadbase first waypoints",
-        MISSION_GENERATOR_PAGE,
-        GAMEPLAY_SECTION,
-        default=True,
-        detail=(
-            "Can be used to remove lightposts and other obstacles from roadbase runways. "
-            "Might not work in DCS multiplayer."
-        ),
-    )
-    ground_start_trucks: bool = boolean_option(
-        "Spawn trucks at ground spawns in airbases instead of FARP statics",
-        MISSION_GENERATOR_PAGE,
-        GAMEPLAY_SECTION,
-        default=False,
-        detail=("Might have a negative performance impact."),
-    )
-    ground_start_trucks_roadbase: bool = boolean_option(
-        "Spawn trucks at ground spawns in roadbases instead of FARP statics",
-        MISSION_GENERATOR_PAGE,
-        GAMEPLAY_SECTION,
-        default=False,
-        detail=("Might have a negative performance impact."),
-    )
-    ground_start_ground_power_trucks: bool = boolean_option(
-        "Spawn ground power trucks at ground starts in airbases",
-        MISSION_GENERATOR_PAGE,
-        GAMEPLAY_SECTION,
-        default=True,
-        detail=(
-            "Needed to cold-start some aircraft types. Might have a performance impact."
-        ),
-    )
-    ground_start_ground_power_trucks_roadbase: bool = boolean_option(
-        "Spawn ground power trucks at ground starts in roadbases",
-        MISSION_GENERATOR_PAGE,
-        GAMEPLAY_SECTION,
-        default=True,
-        detail=(
-            "Needed to cold-start some aircraft types. Might have a performance impact."
-        ),
-    )
-    ground_start_airbase_statics_farps_remove: bool = boolean_option(
-        "Remove ground spawn statics, including invisible FARPs, at airbases",
-        MISSION_GENERATOR_PAGE,
-        GAMEPLAY_SECTION,
-        default=True,
-        detail=(
-            "Ammo and fuel statics and invisible FARPs should be unnecessary when creating "
-            "additional spawns for players at airbases. This setting will disable them and "
-            "potentially grant a marginal performance benefit."
-        ),
-    )
-    ai_unlimited_fuel: bool = boolean_option(
-        "AI flights have unlimited fuel",
-        MISSION_GENERATOR_PAGE,
-        GAMEPLAY_SECTION,
-        default=True,
-        detail=(
-            "AI aircraft have unlimited fuel applied at start, removed at join/racetrack start,"
-            " and reapplied at split/racetrack end for applicable flights. "
-        ),
-    )
     dynamic_slots: bool = boolean_option(
         "Dynamic slots",
         MISSION_GENERATOR_PAGE,
@@ -1511,19 +2118,19 @@ class Settings:
         default=True,
         detail=("Enables dynamic cargo for airfields, ships, FARPs & warehouses."),
     )
-    player_flights_sixpack: bool = boolean_option(
-        "Player flights can spawn on the sixpack",
-        MISSION_GENERATOR_PAGE,
-        GAMEPLAY_SECTION,
-        default=True,
-    )
     use_auto_fog: bool = boolean_option(
         "Use DCS' automatic fog setting",
         MISSION_GENERATOR_PAGE,
         GAMEPLAY_SECTION,
         default=True,
+        detail=(
+            "Hands the fog to DCS, which builds it from the weather it is given --"
+            " temperature, dew point and pressure -- so it thickens in the cold and"
+            " the damp and lifts as the day warms. Switched off, the mission carries"
+            " the flat visibility and fog thickness Escalation wrote into it, which"
+            " does not change while you fly."
+        ),
     )
-
     # Performance
     perf_smoke_gen: bool = boolean_option(
         "Smoke visual effect on the front line",
@@ -1540,10 +2147,28 @@ class Settings:
         max=24000,
     )
     perf_red_alert_state: bool = boolean_option(
-        "SAM starts in red alert mode",
+        "Air defenses start in red alert mode",
         page=MISSION_GENERATOR_PAGE,
         section=PERFORMANCE_SECTION,
         default=True,
+        tooltip=(
+            "Applies to SAM, AAA and other air-defense sites. Turning it off makes "
+            "them spawn on green alert, which costs less CPU but leaves them passive "
+            "until they are shot at. Front-line ground units and EWRs are not "
+            "affected: they always come up on red alert."
+        ),
+    )
+    coastal_batteries_engage_ships: bool = boolean_option(
+        "Coastal batteries engage ships",
+        page=MISSION_GENERATOR_PAGE,
+        section=PERFORMANCE_SECTION,
+        default=False,
+        detail=(
+            "Let coastal anti-ship batteries fire on their own at enemy hulls that "
+            "enter range, the way fleets do. Off by default: a battery from a unit "
+            "mod firing anti-ship missiles has been seen to crash DCS, so try it on "
+            "a throwaway mission before using it in a campaign."
+        ),
     )
     perf_artillery: bool = boolean_option(
         "Artillery strikes",
@@ -1612,6 +2237,14 @@ class Settings:
         max=300,
         causes_expensive_game_update=True,
     )
+    max_frontline_width: int = bounded_int_option(
+        "Maximum frontline width (km)",
+        page=MISSION_GENERATOR_PAGE,
+        section=PERFORMANCE_SECTION,
+        default=80,
+        min=1,
+        max=100,
+    )
     perf_infantry: bool = boolean_option(
         "Generate infantry squads alongside vehicles",
         page=MISSION_GENERATOR_PAGE,
@@ -1637,6 +2270,106 @@ class Settings:
         default=False,
     )
     # Performance culling
+    #: What the cockpit displays are allowed to show of the enemy's air defence.
+    #: DCS paints a ring for every site it is not told to hide, so without these the
+    #: whole map is on the SA page from the first mission.
+    mfd_static_long: bool = boolean_option(
+        "Emplaced long range",
+        page=MISSION_GENERATOR_PAGE,
+        section=MFD_SECTION,
+        default=True,
+        detail=(
+            "Patriot, S-300 and the like. They do not move, so a satellite picture of "
+            "them stays true."
+        ),
+    )
+    mfd_static_medium: bool = boolean_option(
+        "Emplaced medium range",
+        page=MISSION_GENERATOR_PAGE,
+        section=MFD_SECTION,
+        default=True,
+        detail="SA-2, SA-3, Hawk, NASAMS.",
+    )
+    mfd_static_short: bool = boolean_option(
+        "Emplaced short range",
+        page=MISSION_GENERATOR_PAGE,
+        section=MFD_SECTION,
+        default=False,
+        detail="Rapier, gun emplacements and anything else that reaches under 7 nm.",
+    )
+    mfd_mobile_long: MfdIntel = choices_option(
+        "Mobile long range",
+        page=MISSION_GENERATOR_PAGE,
+        section=MFD_SECTION,
+        default=MfdIntel.LAST_TURN,
+        choices=MFD_INTEL_CHOICES,
+        detail=(
+            "A system that shoots from where it drives. Last turn shows it where it "
+            "was when the turn began, and not at all once it has moved."
+        ),
+    )
+    mfd_mobile_medium: MfdIntel = choices_option(
+        "Mobile medium range",
+        page=MISSION_GENERATOR_PAGE,
+        section=MFD_SECTION,
+        default=MfdIntel.LAST_TURN,
+        choices=MFD_INTEL_CHOICES,
+        detail="SA-6, SA-11, SA-17, Buk M3.",
+    )
+    mfd_mobile_short: MfdIntel = choices_option(
+        "Mobile short range",
+        page=MISSION_GENERATOR_PAGE,
+        section=MFD_SECTION,
+        default=MfdIntel.NEVER,
+        choices=MFD_INTEL_CHOICES,
+        detail="Tor, Osa, Tunguska, Avenger, Shilka, MANPADS.",
+    )
+    #: The SA page draws its threat rings and its front line from the aircraft's data
+    #: cartridge, not from the mission, so the campaign writes one.
+    dtc_cartridge: bool = boolean_option(
+        "Write a data cartridge",
+        page=MISSION_GENERATOR_PAGE,
+        section=MFD_SECTION,
+        default=True,
+        detail=(
+            "A .dtc file per player airframe, carrying the threat rings above and the "
+            "front line. Load it from the DTC page of the rearm window in the cockpit."
+        ),
+    )
+    dtc_viper_countermeasures: bool = boolean_option(
+        "Viper countermeasure programs",
+        page=MISSION_GENERATOR_PAGE,
+        section=MFD_SECTION,
+        default=False,
+        detail=(
+            "The Viper's cartridge makes MAN 1 (CMS forward, program knob on 1) flares "
+            "only and MAN 6 (CMS left) chaff only; the other programs keep the "
+            "module's values. The F-16C guide asks for the CMDS mode knob in STBY when "
+            "a cartridge is loaded. Not flown yet."
+        ),
+    )
+    dtc_viper_roe: bool = boolean_option(
+        "Viper ROE table",
+        page=MISSION_GENERATOR_PAGE,
+        section=MFD_SECTION,
+        default=True,
+        detail=(
+            "The Viper's cartridge fills its ROE tab from the campaign: an aircraft "
+            "family only your side flies is friendly, one only the enemy flies is "
+            "hostile, and one both sides fly stays unknown."
+        ),
+    )
+    mfd_front: bool = boolean_option(
+        "Front line",
+        page=MISSION_GENERATOR_PAGE,
+        section=MFD_SECTION,
+        default=False,
+        detail=(
+            "The air defence travelling with the ground forces at the front, which "
+            "moves with them."
+        ),
+    )
+
     perf_culling: bool = boolean_option(
         "Culling of distant units enabled",
         page=MISSION_GENERATOR_PAGE,
@@ -1665,6 +2398,59 @@ class Settings:
         default=True,
         causes_expensive_game_update=True,
     )
+    ground_start_scenery_remove_triggers: bool = boolean_option(
+        "Generate SCENERY REMOVE OBJECTS ZONE triggers at roadbase first waypoints",
+        MISSION_GENERATOR_PAGE,
+        PERFORMANCE_SECTION,
+        default=True,
+        detail=(
+            "Can be used to remove lightposts and other obstacles from roadbase runways. "
+            "Might not work in DCS multiplayer."
+        ),
+    )
+    ground_start_trucks: bool = boolean_option(
+        "Spawn trucks at ground spawns in airbases instead of FARP statics",
+        MISSION_GENERATOR_PAGE,
+        PERFORMANCE_SECTION,
+        default=False,
+        detail=("Might have a negative performance impact."),
+    )
+    ground_start_trucks_roadbase: bool = boolean_option(
+        "Spawn trucks at ground spawns in roadbases instead of FARP statics",
+        MISSION_GENERATOR_PAGE,
+        PERFORMANCE_SECTION,
+        default=False,
+        detail=("Might have a negative performance impact."),
+    )
+    ground_start_ground_power_trucks: bool = boolean_option(
+        "Spawn ground power trucks at ground starts in airbases",
+        MISSION_GENERATOR_PAGE,
+        PERFORMANCE_SECTION,
+        default=True,
+        detail=(
+            "Needed to cold-start some aircraft types. Might have a performance impact."
+        ),
+    )
+    ground_start_ground_power_trucks_roadbase: bool = boolean_option(
+        "Spawn ground power trucks at ground starts in roadbases",
+        MISSION_GENERATOR_PAGE,
+        PERFORMANCE_SECTION,
+        default=True,
+        detail=(
+            "Needed to cold-start some aircraft types. Might have a performance impact."
+        ),
+    )
+    ground_start_airbase_statics_farps_remove: bool = boolean_option(
+        "Remove ground spawn statics, including invisible FARPs, at airbases",
+        MISSION_GENERATOR_PAGE,
+        PERFORMANCE_SECTION,
+        default=True,
+        detail=(
+            "Ammo and fuel statics and invisible FARPs should be unnecessary when creating "
+            "additional spawns for players at airbases. This setting will disable them and "
+            "potentially grant a marginal performance benefit."
+        ),
+    )
     perf_ai_despawn_airstarted: bool = boolean_option(
         "De-spawn AI in the air upon RTB",
         page=MISSION_GENERATOR_PAGE,
@@ -1675,141 +2461,1058 @@ class Settings:
             "if the start-up type was manually changed to 'In-Flight'."
         ),
     )
-    pretense_maxdistfromfront_distance: int = bounded_int_option(
-        "Max distance from front (km)",
-        page=PRETENSE_PAGE,
+    live_pilots_enabled: bool = boolean_option(
+        "Enable Live Pilots",
+        page=LIVE_PILOTS_PAGE,
         section=GENERAL_SECTION,
-        default=130,
-        min=10,
-        max=10000,
+        default=False,
         detail=(
-            "Zones farther away than this from the front line are switched "
-            "into low activity state, but will still be there as functional "
-            "parts of the economy. Use this to adjust performance."
+            "Pilots hold a rank, have morale, friendship and other features, and"
+            " pilot names are shown in-game."
         ),
     )
-    pretense_controllable_carrier: bool = boolean_option(
-        "Controllable carrier",
-        page=PRETENSE_PAGE,
+    live_pilots_debrief_enemy: bool = boolean_option(
+        "Report enemy aircrew in the debriefing",
+        page=LIVE_PILOTS_PAGE,
         section=GENERAL_SECTION,
+        default=False,
+        detail=(
+            "Show OPFOR dead, wounded, promotions and morale. Their aircraft and"
+            " ground losses are always reported; this is only about their aircrew,"
+            " which you would have no way of knowing about."
+        ),
+    )
+    live_pilots_rank_names: str = choices_option(
+        "Rank names",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="country",
+        choices={
+            "Use faction country ranks": "country",
+            "Use generic ranks": "generic",
+            "Use skill names": "skill",
+            "Custom names (define below)": "custom",
+        },
+        detail=("Mapping of the internal skill level to real world like ranks."),
+    )
+    live_pilots_rank_cadet_short: str = text_option(
+        "Cadet",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="2ndLt",
+        max_length=5,
+    )
+    live_pilots_rank_cadet_full: str = text_option(
+        "Cadet",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="Second Lieutenant",
+    )
+    live_pilots_rank_average_short: str = text_option(
+        "Average",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="1stLt",
+        max_length=5,
+    )
+    live_pilots_rank_average_full: str = text_option(
+        "Average",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="First Lieutenant",
+    )
+    live_pilots_rank_average_xp: int = bounded_int_option(
+        "Average",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default=DEFAULT_RANK_AVERAGE_XP,
+        min=0,
+        max=1000000,
+    )
+    live_pilots_rank_good_short: str = text_option(
+        "Good",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="Capt",
+        max_length=5,
+    )
+    live_pilots_rank_good_full: str = text_option(
+        "Good",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="Captain",
+    )
+    live_pilots_rank_good_xp: int = bounded_int_option(
+        "Good",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default=DEFAULT_RANK_GOOD_XP,
+        min=0,
+        max=1000000,
+    )
+    live_pilots_rank_high_short: str = text_option(
+        "High",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="Maj",
+        max_length=5,
+    )
+    live_pilots_rank_high_full: str = text_option(
+        "High",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="Major",
+    )
+    live_pilots_rank_high_xp: int = bounded_int_option(
+        "High",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default=DEFAULT_RANK_HIGH_XP,
+        min=0,
+        max=1000000,
+    )
+    live_pilots_rank_excellent_short: str = text_option(
+        "Excellent",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="LtCol",
+        max_length=5,
+    )
+    live_pilots_rank_excellent_full: str = text_option(
+        "Excellent",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default="Lieutenant Colonel",
+    )
+    live_pilots_rank_excellent_xp: int = bounded_int_option(
+        "Excellent",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_RANKS_SECTION,
+        default=DEFAULT_RANK_EXCELLENT_XP,
+        min=0,
+        max=1000000,
+    )
+    live_pilots_rank_survival: bool = boolean_option(
+        "Rank influences who survives a loss",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_SURVIVAL_SECTION,
+        default=True,
+        detail=("Base chance of the pilot surviving a crash or being shot down."),
+    )
+    live_pilots_survival_cadet: int = bounded_int_option(
+        "Cadet (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_SURVIVAL_SECTION,
+        default=20,
+        min=0,
+        max=100,
+    )
+    live_pilots_survival_average: int = bounded_int_option(
+        "Average (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_SURVIVAL_SECTION,
+        default=35,
+        min=0,
+        max=100,
+    )
+    live_pilots_survival_good: int = bounded_int_option(
+        "Good (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_SURVIVAL_SECTION,
+        default=50,
+        min=0,
+        max=100,
+    )
+    live_pilots_survival_high: int = bounded_int_option(
+        "High (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_SURVIVAL_SECTION,
+        default=65,
+        min=0,
+        max=100,
+    )
+    live_pilots_survival_excellent: int = bounded_int_option(
+        "Excellent (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_SURVIVAL_SECTION,
+        default=80,
+        min=0,
+        max=100,
+    )
+    morale_enabled: bool = boolean_option(
+        "Enable morale",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
         default=True,
         detail=(
-            "This can be used to enable or disable the native carrier support in Pretense. The Pretense carrier "
-            "can be controlled through the communication menu (if the Pretense character has enough rank/CMD points) "
-            "and the player can call in AI aerial and cruise missile missions using it."
-            "The controllable carriers in Pretense do not build and deploy AI missions autonomously, so if you prefer "
-            "to have both sides deploy carrier aviation autonomously, you might want to disable this option. "
-            "When this option is disabled, moving the carrier can only be done with the Retribution interface."
+            "Morale decides how steady the flight is under fire, how well they fly and"
+            " whether a man asks for leave -- or stops turning up at all. It can also"
+            " influence wound curing times."
         ),
     )
-    pretense_carrier_steams_into_wind: bool = boolean_option(
-        "Carriers steam into wind",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
+    morale_state_triumphant: int = bounded_int_option(
+        "Triumphant",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_STATES_SECTION,
+        default=85,
+        min=0,
+        max=100,
+    )
+    morale_state_confident: int = bounded_int_option(
+        "Confident",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_STATES_SECTION,
+        default=60,
+        min=0,
+        max=100,
+    )
+    morale_state_normal: int = bounded_int_option(
+        "Normal",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_STATES_SECTION,
+        default=40,
+        min=0,
+        max=100,
+    )
+    morale_state_shaken: int = bounded_int_option(
+        "Shaken",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_STATES_SECTION,
+        default=15,
+        min=0,
+        max=100,
+    )
+    morale_state_shattered: int = bounded_int_option(
+        "Shattered",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_STATES_SECTION,
+        default=1,
+        min=0,
+        max=100,
+    )
+    morale_drift_per_turn: int = bounded_int_option(
+        "Settling back towards Normal each turn",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=5,
+        min=0,
+        max=25,
+        detail=(
+            "How far a pilot moves back towards Normal in a quiet turn, from either "
+            "side and never past it. Zero makes a turn's damage permanent until "
+            "something else moves him."
+        ),
+    )
+    morale_lost_aircraft: int = bounded_int_option(
+        "Lost his aircraft",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-10,
+        min=-50,
+        max=0,
+        detail="He came home without it.",
+    )
+    morale_damaged_return: int = bounded_int_option(
+        "Returned in a damaged aircraft",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-3,
+        min=-50,
+        max=0,
+        detail=(
+            "Applied once after a confirmed damaged return to friendly territory. "
+            "The normal mission-complete reward still applies. Rank and hardening "
+            "reduce this penalty as usual; zero disables it. Does not alter pilot "
+            "survival, and does not require aircraft workshops to be enabled."
+        ),
+    )
+    morale_achieved_nothing: int = bounded_int_option(
+        "Came home empty",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-5,
+        min=-50,
+        max=0,
+        detail=(
+            "Flew a strike, a CAS or a SEAD and destroyed nothing at all. A CAP that"
+            " saw no one does not count."
+        ),
+    )
+    morale_squadron_death: int = bounded_int_option(
+        "A squadron mate killed",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-15,
+        min=-50,
+        max=0,
+        detail=(
+            "Applied to everyone else in his squadron and friends from other"
+            " squadrons, once per man lost."
+        ),
+    )
+    morale_flight_death: int = bounded_int_option(
+        "Wingman killed (extra, his flight only)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-5,
+        min=-50,
+        max=0,
+        detail=(
+            "On top of the squadron's loss, for the men who were in the same flight."
+        ),
+    )
+    morale_squadron_wound: int = bounded_int_option(
+        "Squadron mate wounded (per turn out)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-2,
+        min=-50,
+        max=0,
+        detail="Counted once per turn the medics keep him.",
+    )
+    morale_flight_wound: int = bounded_int_option(
+        "Wingman wounded (extra, his flight only)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-1,
+        min=-50,
+        max=0,
+        detail="As above, again, for the men who were up there with him.",
+    )
+    morale_squadron_recovered: int = bounded_int_option(
+        "Squadron mate back from hospital",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=4,
+        min=0,
+        max=50,
+        detail=(
+            "Once, when the medics let him go. Smaller than what the wound cost them,"
+            " so a man being hurt is never worth it on balance."
+        ),
+    )
+    morale_base_lost: int = bounded_int_option(
+        "Base lost",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-10,
+        min=-50,
+        max=0,
+        detail="Any base of the coalition changing hands.",
+    )
+    morale_no_leave: int = bounded_int_option(
+        "Each turn overdue leave",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-3,
+        min=-50,
+        max=0,
+        detail="From the sixth turn without leave.",
+    )
+    morale_leave_refused: int = bounded_int_option(
+        "Leave refused",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-10,
+        min=-50,
+        max=0,
+        detail=("He asked, and was told no."),
+    )
+    morale_leave_cancelled: int = bounded_int_option(
+        "Leave cut short",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=-4,
+        min=-50,
+        max=0,
+        detail=(
+            "What it costs a pilot to be called back before his leave is up. Worse"
+            " than never being granted it: he had it in his hand."
+        ),
+    )
+    morale_air_kill: int = bounded_int_option(
+        "Shot one down",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=15,
+        min=0,
+        max=50,
+        detail=("Per enemy aircraft."),
+    )
+    morale_squadron_air_kill: int = bounded_int_option(
+        "Squadron mate's air victory",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=2,
+        min=0,
+        max=50,
+        detail=(
+            "Per confirmed enemy aircraft destroyed by another pilot in the same"
+            " squadron, including victories by the player. Applies to surviving"
+            " squadron mates even if they did not fly. Set to 0 to disable."
+        ),
+    )
+    morale_squadron_ground_kill: int = bounded_int_option(
+        "Squadron mate's ground victory",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=1,
+        min=0,
+        max=50,
+        detail=(
+            "Per confirmed enemy ground unit, building or ship destroyed by another"
+            " pilot in the same squadron. Applies to surviving squadron mates even"
+            " if they did not fly. Set to 0 to disable."
+        ),
+    )
+    morale_unplanned_kill: int = bounded_int_option(
+        "Target of opportunity",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=5,
+        min=0,
+        max=50,
+        detail=("Per thing destroyed that was not what his package was sent for."),
+    )
+    morale_mission_complete: int = bounded_int_option(
+        "Flew the mission",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=10,
+        min=0,
+        max=50,
+        detail=("He went, and he brought the aircraft home."),
+    )
+    morale_promoted: int = bounded_int_option(
+        "Promoted",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=25,
+        min=0,
+        max=50,
+    )
+    morale_on_leave: int = bounded_int_option(
+        "Each turn of leave",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=15,
+        min=0,
+        max=50,
+    )
+    morale_leave_request_chance: int = bounded_int_option(
+        "Base chance of asking for leave (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_MORALE_SECTION,
+        subsection=LIVE_PILOTS_MORALE_EVENTS_SECTION,
+        default=8,
+        min=0,
+        max=100,
+        detail=(
+            "Per pilot per turn at middling morale. It rises as he wears down and falls"
+            " as he picks up, so a contented man asks now and then and a hollow one"
+            " asks often. You answer at the end of the turn."
+        ),
+    )
+    hardening_enabled: bool = boolean_option(
+        "Enable hardening",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_HARDENING_SECTION,
         default=True,
         detail=(
-            "This setting controls whether carriers and their escorts will steam into wind. Disable to "
-            "to ensure that the carriers stay within the carrier zone in Pretense, but note that "
-            "doing so might limit carrier operations, takeoff weights and landings."
+            "Requires Morale above to be enabled. Each pilot earns points for every"
+            " turn he spends at Shaken morale or worse, and they never come off: morale"
+            " hits land softer, he is likelier to survive losing his aircraft (or to be"
+            " wounded instead of killed), and he is slower to make friends and enemies."
+            " Points are not earned in hospital or on leave."
         ),
     )
-    pretense_carrier_zones_navmesh: str = choices_option(
-        "Navmesh to use for Pretense carrier zones",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
-        choices=["Blue navmesh", "Red navmesh"],
-        default="Blue navmesh",
+    hardening_max: int = bounded_int_option(
+        "Maximum value",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_HARDENING_SECTION,
+        default=40,
+        min=1,
+        max=50,
         detail=(
-            "Use the Retribution map interface options to compare the blue navmesh and the red navmesh."
-            "You can select which navmesh to use when generating the zones in which the controllable carrier(s) "
-            "move and operate."
+            "The most points a pilot can hold. With the default 2% reduction per point"
+            " below, 50 points would take 100% off every morale hit, so it stops there."
+            " Best left alone unless you change the reduction to match."
         ),
     )
-    pretense_extra_zone_connections: int = bounded_int_option(
-        "Extra friendly zone connections",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
+    hardening_shaken: int = bounded_int_option(
+        "A turn spent Shaken",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_HARDENING_SECTION,
+        default=1,
+        min=0,
+        max=10,
+        detail="Counted on the state he started the turn in, not the one he ends it in.",
+    )
+    hardening_shattered: int = bounded_int_option(
+        "A turn spent Shattered",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_HARDENING_SECTION,
         default=2,
         min=0,
         max=10,
+    )
+    hardening_broken: int = bounded_int_option(
+        "A turn spent Broken",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_HARDENING_SECTION,
+        default=3,
+        min=0,
+        max=10,
+    )
+    hardening_morale_relief_per_point: float = bounded_float_option(
+        "Morale hit reduction, per point (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_HARDENING_SECTION,
+        default=2.0,
+        min=0.0,
+        max=5.0,
+        divisor=10,
+        prefix="",
         detail=(
-            "Add connections from each zone to this many closest friendly zones,"
-            "which don't have an existing supply route defined in the campaign."
+            "A pilot with 30 points takes 30 x 2 = 60% off every morale hit: a hit of"
+            " -30 becomes -12. This is on top of the reduction his rank already gives"
+            " him, and a hit always costs at least 1 point."
         ),
     )
-    pretense_num_of_cargo_planes: int = bounded_int_option(
-        "Number of cargo planes per side",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
-        default=2,
-        min=1,
+    hardening_survival_per_point: float = bounded_float_option(
+        "Survival chance, per point (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_HARDENING_SECTION,
+        default=0.5,
+        min=0.0,
+        max=2.0,
+        divisor=10,
+        prefix="",
+        detail=(
+            "Added to both rolls made when a pilot loses his aircraft: whether he"
+            " survives, and whether he is wounded instead of killed. At 0.5, a pilot"
+            " with 40 points adds 20% to each."
+        ),
+    )
+    hardening_friendship_damping_per_point: float = bounded_float_option(
+        "Friendship change reduction, per point (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_HARDENING_SECTION,
+        default=1.5,
+        min=0.0,
+        max=5.0,
+        divisor=10,
+        prefix="",
+        detail=(
+            "How much less his own opinion of other pilots moves, up and down alike."
+            " At 1.5, a pilot with 40 points changes 60% slower: slower to make a"
+            " friend, slower to hold a grudge. It does not change what other pilots"
+            " think of him."
+        ),
+    )
+    friendship_enabled: bool = boolean_option(
+        "Enable friendship",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        default=True,
+        detail=(
+            "Requires Live Pilots. Each pilot holds an opinion of each other pilot,"
+            " from 0 to 10, starting at 5. It is one-way: what he thinks of another"
+            " pilot is not what that pilot thinks of him. It changes how much"
+            " experience a mission pays him, how well his flight flies, how likely he"
+            " is to be pulled out of a wreck, and how hard a death hits the men who"
+            " were flying with him."
+        ),
+    )
+    friendship_band_inseparable: float = bounded_float_option(
+        "Inseparable",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_BANDS_SECTION,
+        default=9.1,
+        min=0.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+        detail=(
+            "The value each level starts at. A pilot's opinion of another pilot is"
+            " shown as one of these words everywhere it appears. Anything below"
+            " Hostile is Bad blood."
+        ),
+    )
+    friendship_band_close: float = bounded_float_option(
+        "Close",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_BANDS_SECTION,
+        default=7.1,
+        min=0.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+    )
+    friendship_band_friendly: float = bounded_float_option(
+        "Friendly",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_BANDS_SECTION,
+        default=6.1,
+        min=0.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+    )
+    friendship_band_neutral: float = bounded_float_option(
+        "Neutral",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_BANDS_SECTION,
+        default=4.0,
+        min=0.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+    )
+    friendship_band_frosty: float = bounded_float_option(
+        "Frosty",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_BANDS_SECTION,
+        default=3.0,
+        min=0.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+    )
+    friendship_band_hostile: float = bounded_float_option(
+        "Hostile",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_BANDS_SECTION,
+        default=1.1,
+        min=0.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+    )
+    friendship_drift_squadron_up: int = bounded_int_option(
+        "Chance of warming to a squadron mate (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_DRIFT_SECTION,
+        default=35,
+        min=0,
+        max=100,
+        detail=(
+            "Every turn, each pilot rolls once against every other pilot at his base."
+            " This is the chance his opinion of a man from his own squadron goes up."
+            " Whatever is left over after this and the figure below is a turn where"
+            " nothing changes between them."
+        ),
+    )
+    friendship_drift_squadron_down: int = bounded_int_option(
+        "Chance of cooling towards a squadron mate (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_DRIFT_SECTION,
+        default=20,
+        min=0,
         max=100,
     )
-    pretense_sead_flights_per_cp: int = bounded_int_option(
-        "Number of AI SEAD flights per control point / zone",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
-        default=1,
-        min=1,
-        max=10,
+    friendship_drift_base_up: int = bounded_int_option(
+        "Chance of warming to a pilot from another squadron (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_DRIFT_SECTION,
+        default=22,
+        min=0,
+        max=100,
+        detail=(
+            "Same base, different squadron: men he queues behind rather than men he"
+            " flies with."
+        ),
     )
-    pretense_cas_flights_per_cp: int = bounded_int_option(
-        "Number of AI CAS flights per control point / zone",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
-        default=1,
-        min=1,
-        max=10,
+    friendship_drift_base_down: int = bounded_int_option(
+        "Chance of cooling towards a pilot from another squadron (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_DRIFT_SECTION,
+        default=10,
+        min=0,
+        max=100,
     )
-    pretense_bai_flights_per_cp: int = bounded_int_option(
-        "Number of AI BAI flights per control point / zone",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
-        default=1,
-        min=1,
-        max=10,
-    )
-    pretense_strike_flights_per_cp: int = bounded_int_option(
-        "Number of AI Strike flights per control point / zone",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
-        default=1,
-        min=1,
-        max=10,
-    )
-    pretense_barcap_flights_per_cp: int = bounded_int_option(
-        "Number of AI BARCAP flights per control point / zone",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
-        default=1,
-        min=1,
-        max=10,
-    )
-    pretense_ai_aircraft_per_flight: int = bounded_int_option(
-        "Number of AI aircraft per flight",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
-        default=2,
-        min=1,
-        max=4,
-    )
-    pretense_player_flights_per_type: int = bounded_int_option(
-        "Number of player flights per aircraft type at each base",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
-        default=1,
-        min=1,
-        max=10,
-    )
-    pretense_ai_cargo_planes_per_side: int = bounded_int_option(
-        "Number of AI cargo planes per side",
-        page=PRETENSE_PAGE,
-        section=GENERAL_SECTION,
-        default=2,
-        min=1,
+    friendship_reciprocity_per_point: int = bounded_int_option(
+        "Added to the warming chance per point of difference (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_DRIFT_SECTION,
+        default=5,
+        min=0,
         max=20,
+        detail=(
+            "The two pilots in a pair can think different things of each other. When"
+            " the other pilot likes him more than he likes the other pilot, his chance"
+            " of warming goes up by this much for each point of difference on the 0 to"
+            " 10 scale. Example: the other pilot is at 9 and he is at 5, a difference"
+            " of 4, so with this set to 5% his chance of warming to that pilot goes up"
+            " by 20 points -- from 35% to 55% for a squadron mate. His chance of"
+            " cooling is not changed, and the other pilot, who already likes him more,"
+            " gets nothing. Set it to 0 and each side drifts on its own."
+        ),
     )
-
+    friendship_enmity_per_point: int = bounded_int_option(
+        "Added to the cooling chance per point of difference (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_DRIFT_SECTION,
+        default=5,
+        min=0,
+        max=20,
+        detail=(
+            "The same thing the other way round. When the other pilot likes him LESS"
+            " than he likes the other pilot, his chance of cooling goes up by this much"
+            " for each point of difference on the 0 to 10 scale. Example: the other"
+            " pilot is at 1 and he is at 5, a difference of 4, so with this set to 5%"
+            " his chance of cooling towards that pilot goes up by 20 points -- from 20%"
+            " to 40% for a squadron mate. His chance of warming is not changed, and the"
+            " other pilot, who already likes him less, gets nothing. Set it to 0 and"
+            " being disliked costs nothing."
+        ),
+    )
+    friendship_drift_step: float = bounded_float_option(
+        "How much it moves when it moves",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_DRIFT_SECTION,
+        default=1.0,
+        min=0.0,
+        max=3.0,
+        divisor=10,
+        prefix="",
+        detail=(
+            "On the 0 to 10 scale. Only one side moves: his opinion of the other"
+            " pilot, not that pilot's opinion of him, which is rolled separately."
+        ),
+    )
+    friendship_drift_ceiling: float = bounded_float_option(
+        "Highest these rolls can reach",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_DRIFT_SECTION,
+        default=7.0,
+        min=5.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+        detail=(
+            "Time at a base alone stops here. Anything above it has to be earned by"
+            " flying together, which is what makes keeping a crew together worth"
+            " something. There is no floor: these rolls alone can reach the bottom."
+        ),
+    )
+    friendship_flew_together: float = bounded_float_option(
+        "Flew in the same flight",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EVENTS_SECTION,
+        default=2.0,
+        min=0.0,
+        max=5.0,
+        divisor=10,
+        prefix="",
+        detail=(
+            "Added to each pilot's opinion of every other pilot in his flight, once"
+            " per mission flown."
+        ),
+    )
+    friendship_same_package: float = bounded_float_option(
+        "Flew in the same package, different flight",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EVENTS_SECTION,
+        default=1.0,
+        min=0.0,
+        max=5.0,
+        divisor=10,
+        prefix="",
+    )
+    friendship_max_gain_per_turn: float = bounded_float_option(
+        "Most one opinion can rise in a turn",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EVENTS_SECTION,
+        default=4.0,
+        min=0.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+        detail="However many missions the two of them fly together that turn.",
+    )
+    friendship_ff_air_flight: float = bounded_float_option(
+        "Shot down a friendly aircraft: taken off by his own flight",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EVENTS_SECTION,
+        default=3.0,
+        min=0.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+        detail=(
+            "Subtracted from what every other pilot in his flight thinks of him. They"
+            " watched it happen."
+        ),
+    )
+    friendship_ff_air_squadron: float = bounded_float_option(
+        "Shot down a friendly aircraft: taken off by the victim's squadron",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EVENTS_SECTION,
+        default=6.0,
+        min=0.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+        detail=(
+            "Subtracted from what every pilot in the dead man's squadron thinks of"
+            " him. A pilot who is in both his flight and that squadron subtracts the"
+            " larger of the two figures, not both."
+        ),
+    )
+    friendship_ff_ground: float = bounded_float_option(
+        "Destroyed a friendly ground unit: taken off by his own flight",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EVENTS_SECTION,
+        default=2.0,
+        min=0.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+    )
+    friendship_xp_per_point: float = bounded_float_option(
+        "Experience multiplier addition, per point above 5",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=0.05,
+        min=0.0,
+        max=0.25,
+        divisor=100,
+        prefix="",
+        decimals=2,
+        detail=(
+            "Average what he thinks of the other pilots in his flight, subtract 5, and"
+            " multiply by this. The result is added to his experience multiplier for"
+            " the mission, so a flight of men he likes pays more and a flight of men he"
+            " dislikes pays less than flying alone. The multiplier never falls below 0"
+            " and experience is never taken away."
+        ),
+    )
+    friendship_survival_per_point: int = bounded_int_option(
+        "Survival chance, per point above 5 (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=3,
+        min=0,
+        max=15,
+        detail=(
+            "This one reads what the other pilots in his flight think of HIM, averaged."
+            " It is added to the roll for surviving the loss of his aircraft and to the"
+            " roll for being wounded instead of killed. Being disliked never subtracts"
+            " from either."
+        ),
+    )
+    friendship_survival_cap: int = bounded_int_option(
+        "Most those two chances can gain (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=20,
+        min=0,
+        max=100,
+    )
+    friendship_synergy_floor: float = bounded_float_option(
+        "A flight flies one skill level better from",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=7.1,
+        min=5.0,
+        max=10.0,
+        divisor=10,
+        prefix="",
+        detail=(
+            "If the average opinion inside a flight reaches this, every pilot in it"
+            " flies one DCS skill level above his rank. A whole package that reaches it"
+            " does the same. Only one level either way, and it is on top of the level"
+            " morale can give."
+        ),
+    )
+    friendship_leader_spoke_weight: float = bounded_float_option(
+        "The flight lead counts for",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=2.0,
+        min=1.0,
+        max=5.0,
+        divisor=10,
+        detail=(
+            "When averaging what a pilot thinks of the rest of his flight, his opinion"
+            " of the lead is multiplied by this. At 2, in a four-ship, the lead is half"
+            " of that average. The lead himself weighs his three wingmen equally. This"
+            " is why spreading veterans one to a flight beats stacking them in one."
+        ),
+    )
+    friendship_desertion_per_point: int = bounded_int_option(
+        "Desertion chance reduction, per point above 5 (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=5,
+        min=0,
+        max=20,
+        detail=(
+            "Averaged over what he thinks of his own squadron. It can only reduce the"
+            " chance: a squadron he dislikes does not push him out any faster."
+        ),
+    )
+    friendship_desertion_cap: int = bounded_int_option(
+        "Most desertion can be reduced by (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=50,
+        min=0,
+        max=100,
+    )
+    friendship_leave_together_per_point: int = bounded_int_option(
+        "Extra morale from leave, per point above 5 (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=8,
+        min=0,
+        max=25,
+        detail=(
+            "Averaged over the men from his own squadron who are on leave at the same"
+            " time as him, and worked out again every turn: as each of them comes back,"
+            " the rest lose what he was worth."
+        ),
+    )
+    friendship_leave_together_cap: int = bounded_int_option(
+        "Most leave in company can add (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=50,
+        min=0,
+        max=200,
+    )
+    friendship_drift_help_per_friend: int = bounded_int_option(
+        "Morale returns to Normal faster, per friend (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=5,
+        min=0,
+        max=25,
+        detail=(
+            "A pilot below Normal recovers this much faster for each pilot in his"
+            " squadron he is Close to or better. A pilot above Normal falls back this"
+            " much faster for each pilot who is Hostile towards him or worse."
+        ),
+    )
+    friendship_drift_help_cap: int = bounded_int_option(
+        "Most that can change morale recovery by (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=30,
+        min=0,
+        max=100,
+    )
+    friendship_grief_per_point: float = bounded_float_option(
+        "Death morale multiplier addition, per point above 5",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=0.33,
+        min=0.0,
+        max=1.0,
+        divisor=100,
+        prefix="",
+        decimals=2,
+        detail=(
+            "A death costs morale to the pilots who were in the flight. Take what one"
+            " of them thought of the dead man, subtract 5, multiply by this and add 1:"
+            " that is how many times the morale hit lands on him. A pilot he disliked"
+            " still counts once."
+        ),
+    )
+    friendship_grief_cap: float = bounded_float_option(
+        "Most a death can be multiplied by",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=4.0,
+        min=1.0,
+        max=10.0,
+        divisor=10,
+    )
+    friendship_limit: int = bounded_int_option(
+        "Opinions a pilot remembers",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_FRIENDSHIP_SECTION,
+        subsection=LIVE_PILOTS_FRIENDSHIP_EFFECTS_SECTION,
+        default=120,
+        min=10,
+        max=500,
+        detail=(
+            "He keeps the ones he holds most strongly and forgets the rest, so a long"
+            " campaign does not end with every pilot holding an opinion of every man he"
+            " ever shared a base with."
+        ),
+    )
+    live_pilots_wounded_chance: int = bounded_int_option(
+        "Wounded instead of killed (%)",
+        page=LIVE_PILOTS_PAGE,
+        section=LIVE_PILOTS_SURVIVAL_SECTION,
+        default=35,
+        min=0,
+        max=100,
+        detail=(
+            "Base chance that a pilot who would have died is wounded instead. Wounded "
+            "pilots are unavailable for 1-4 turns."
+        ),
+    )
     # Cheating. Not using auto settings because the same page also has buttons which do
     # not alter settings.
     enable_frontline_cheats: bool = False
@@ -1819,6 +3522,9 @@ class Settings:
     enable_main_base_cheat: bool = False
     enable_air_wing_adjustments: bool = False
     enable_enemy_buy_sell: bool = False
+    enable_pilot_cheats: bool = False
+    #: Destroy or revive everything at a location from its window.
+    enable_location_cheat: bool = False
 
     # LUA Plugins system
     plugins: Dict[str, bool] = field(default_factory=dict)
@@ -1838,7 +3544,25 @@ class Settings:
     def plugin_option(self, identifier: str) -> Any:
         return self.plugins[self.plugin_settings_key(identifier)]
 
+    def plugin_option_or(self, identifier: str, default: Any = None) -> Any:
+        """The option's value, or ``default`` if this settings object never got it.
+
+        Settings that used to be their own fields are read through here, so the
+        defensive ``getattr(settings, name, False)`` they were written with keeps
+        working for a save loaded before the plugin manager filled its defaults.
+        """
+        try:
+            return self.plugins[self.plugin_settings_key(identifier)]
+        except KeyError:
+            return default
+
     def set_plugin_option(self, identifier: str, value: Any) -> None:
+        if (
+            identifier == "groundmovement"
+            and value is True
+            and not self.motorpool_enabled
+        ):
+            raise ValueError("Ground Movement requires Motor Pool")
         self.plugins[self.plugin_settings_key(identifier)] = value
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -1858,7 +3582,13 @@ class Settings:
     def deserialize_state_dict(state: dict[str, Any]) -> dict[str, Any]:
         # restore Enum & timedelta types
         s = Settings()
-        Settings._migrate_legacy_fast_forward(state)
+        # The old mechanic price was expressed in millions, including in presets.
+        if "aircraft_mechanic_price" in state:
+            old_price = state.pop("aircraft_mechanic_price")
+            state.setdefault("aircraft_mechanic_cost", round(old_price * 1_000_000))
+        Settings._migrate_legacy_bandit_clouds(state)
+        Settings._migrate_settings_into_plugins(state)
+        Settings._migrate_lopsided_friendship_bands(state)
         for key, value in list(state.items()):
             default = s.__dict__.get(key)
             if isinstance(default, Enum):
@@ -1900,68 +3630,70 @@ class Settings:
                 return restored
         return None
 
+    #: Settings that became options of the plugin they were always about. The value
+    #: is the plugin option that replaced each one; a switch whose plugin has its own
+    #: switch of the same name is ANDed, because the feature used to need both.
+    _MOVED_INTO_PLUGINS: ClassVar[dict[str, str]] = {
+        "gps_jamming": "gpsjamming",
+        "gps_jamming_default_reach_nm": "gpsjamming.defaultReachNm",
+        "gps_jamming_miss_radius_m": "gpsjamming.missRadiusM",
+        "naval_magazines": "navalmagazines",
+        "naval_weapon_release_stagger": "navalmagazines.releaseStagger",
+        "cruise_missile_strikes": "cruisemissiles",
+        "cruise_missile_auto_raids": "cruisemissiles.autoRaids",
+        "perf_skynet_iads_radius": "skynetiads.radiusKm",
+    }
+
     @staticmethod
-    def _migrate_legacy_fast_forward(state: dict[str, Any]) -> None:
-        """Map pre-#684 fast-forward settings onto the current enums.
+    def _migrate_settings_into_plugins(state: dict[str, Any]) -> None:
+        """Carry an old save's values onto the plugin options that replaced them.
 
-        Before #684 fast-forward was three separate fields::
-
-            fast_forward_to_first_contact: bool          # was it enabled
-            player_mission_interrupts_sim_at: Optional[StartType]
-                # None=Never, COLD=startup, WARM=taxi, RUNWAY=takeoff
-            auto_resolve_combat: bool
-
-        #684 replaced them with ``fast_forward_stop_condition`` /
-        ``combat_resolution_method``. Translate old saves so the user keeps an
-        equivalent setting instead of crashing on load, and normalize the legacy
-        "Never"/None sentinel (which has no enum member) to "no fast forward".
+        Without this a campaign that had a feature switched OFF would load with it on,
+        because every one of these plugins ships enabled and the plugin switch is now
+        the only gate. The plugin manager fills defaults for options that are missing
+        and leaves present ones alone, so writing here is enough.
         """
-        legacy_ff = state.pop("fast_forward_to_first_contact", None)
-        legacy_interrupt = state.pop("player_mission_interrupts_sim_at", None)
-        legacy_auto = state.pop("auto_resolve_combat", None)
+        plugins = state.setdefault("plugins", {})
+        for setting, option in Settings._MOVED_INTO_PLUGINS.items():
+            if setting not in state:
+                continue
+            value = state[setting]
+            if "." not in option and isinstance(value, bool):
+                # The feature ran only when the setting AND the plugin were on.
+                value = value and bool(plugins.get(option, True))
+            plugins[option] = value
 
-        if "fast_forward_stop_condition" not in state and legacy_ff is not None:
-            if not legacy_ff:
-                state["fast_forward_stop_condition"] = FastForwardStopCondition.DISABLED
-            else:
-                interrupt = Settings._resolve_start_type(legacy_interrupt)
-                if interrupt is None:
-                    state["fast_forward_stop_condition"] = (
-                        FastForwardStopCondition.FIRST_CONTACT
-                    )
-                else:
-                    state["fast_forward_stop_condition"] = {
-                        StartType.COLD: FastForwardStopCondition.PLAYER_STARTUP,
-                        StartType.WARM: FastForwardStopCondition.PLAYER_TAXI,
-                        StartType.RUNWAY: FastForwardStopCondition.PLAYER_TAKEOFF,
-                    }.get(interrupt, FastForwardStopCondition.FIRST_CONTACT)
-
-        if "combat_resolution_method" not in state and legacy_auto is not None:
-            state["combat_resolution_method"] = (
-                CombatResolutionMethod.RESOLVE
-                if legacy_auto
-                else CombatResolutionMethod.PAUSE
-            )
-
-        # A "none"/"Never"/None value stored directly under the new key has no
-        # matching enum member; treat that family as "no fast forward".
-        ff = state.get("fast_forward_stop_condition")
-        if ff is None and "fast_forward_stop_condition" in state:
-            state["fast_forward_stop_condition"] = FastForwardStopCondition.DISABLED
-        elif isinstance(ff, str) and ff.strip().lower() in {"none", "never", ""}:
-            state["fast_forward_stop_condition"] = FastForwardStopCondition.DISABLED
+    #: The floors the friendship bands shipped with, and what they should have been.
+    #: Drift moves a pair by a whole point from a start of five, so one quiet turn
+    #: leaves it on four or six -- and with Neutral starting at 4.1, four fell out of
+    #: it into Frosty while six stayed in. Every pair that had drifted down once was
+    #: painted as going cold and every pair that had drifted up once was painted as
+    #: nothing, which read as a campaign where nobody gets on with anybody.
+    LOPSIDED_FRIENDSHIP_BANDS = {
+        "friendship_band_neutral": (4.1, 4.0),
+        "friendship_band_frosty": (3.1, 3.0),
+    }
 
     @staticmethod
-    def _resolve_start_type(value: Any) -> Optional[StartType]:
-        """Coerce a serialized legacy value to a StartType member, or None."""
-        if isinstance(value, StartType):
-            return value
-        if isinstance(value, str):
-            name = value.rsplit(".", 1)[-1]
-            for member in StartType:
-                if name == member.name or value == member.value:
-                    return member
-        return None
+    def _migrate_lopsided_friendship_bands(state: dict[str, Any]) -> None:
+        """Straighten the bands in a campaign that never moved them itself.
+
+        Only when the stored floor is still the one that shipped: a player who has
+        set these to something of their own keeps it.
+        """
+        for key, (was, should_be) in Settings.LOPSIDED_FRIENDSHIP_BANDS.items():
+            if state.get(key) == was:
+                state[key] = should_be
+
+    @staticmethod
+    def _migrate_legacy_bandit_clouds(state: dict[str, Any]) -> None:
+        """Pre-pack saves had a boolean ``use_bandit_clouds``; map it onto the new
+        ``cloud_preset_pack`` choice so a user who had Bandit's clouds on keeps them."""
+        legacy = state.pop("use_bandit_clouds", None)
+        if legacy is not None and "cloud_preset_pack" not in state:
+            state["cloud_preset_pack"] = (
+                CloudPresetPack.BANDIT if legacy else CloudPresetPack.NONE
+            )
 
     @classmethod
     def _field_description(cls, settings_field: Field[Any]) -> OptionDescription:
@@ -1978,19 +3710,76 @@ class Settings:
 
     @classmethod
     def sections(cls, page: str) -> Iterator[str]:
+        """The sections the page shows in its index.
+
+        A section that some switch opens with a gear is not one of them: it is a
+        detail of that switch and is reached from its row.
+        """
+        owned = cls.sections_opened_from_a_switch()
         seen: set[str] = set()
         for settings_field in cls._user_fields():
             description = cls._field_description(settings_field)
-            if description.page == page and description.section not in seen:
+            if description.page != page or description.section in seen:
+                continue
+            seen.add(description.section)
+            if description.section not in owned:
                 yield description.section
-                seen.add(description.section)
 
     @classmethod
-    def fields(cls, page: str, section: str) -> Iterator[tuple[str, OptionDescription]]:
+    def sections_opened_from_a_switch(cls) -> set[str]:
+        return {
+            opened
+            for settings_field in cls._user_fields()
+            if (opened := cls._field_description(settings_field).opens_section)
+            is not None
+        }
+
+    @classmethod
+    def switch_that_opens(cls, section: str) -> Optional[tuple[str, str, str]]:
+        """The setting whose gear opens this section, as (name, page, its section).
+
+        A section reached from a gear is not on any page, so anything navigating to
+        one of its settings has to be sent to the switch that opens it instead.
+        """
+        for name, description in cls.all_fields():
+            if description.opens_section == section:
+                return name, description.page, description.section
+        return None
+
+    @classmethod
+    def subsections(cls, page: str, section: str) -> Iterator[str]:
+        """The boxes within a section, in the order their settings are declared."""
+        seen: set[str] = set()
+        for _, description in cls.all_fields():
+            if description.page != page or description.section != section:
+                continue
+            name = description.subsection
+            if name is not None and name not in seen:
+                yield name
+                seen.add(name)
+
+    @classmethod
+    def fields(
+        cls, page: str, section: str, subsection: Optional[str] = None
+    ) -> Iterator[tuple[str, OptionDescription]]:
         for settings_field in cls._user_fields():
             description = cls._field_description(settings_field)
-            if description.page == page and description.section == section:
+            if (
+                description.page == page
+                and description.section == section
+                and description.subsection == subsection
+            ):
                 yield settings_field.name, description
+
+    @classmethod
+    def all_fields(cls) -> Iterator[tuple[str, OptionDescription]]:
+        """Every setting there is, whatever page, section or box it is shown in.
+
+        The page walk above is about how the dialog is laid out; this is about what
+        exists, which is what anything reading the settings wants.
+        """
+        for settings_field in cls._user_fields():
+            yield settings_field.name, cls._field_description(settings_field)
 
     @classmethod
     def _user_fields(cls) -> Iterator[Field[Any]]:

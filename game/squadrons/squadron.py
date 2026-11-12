@@ -14,11 +14,20 @@ from dcs.unit import Skill
 from faker import Faker
 
 from game.ato import Flight, FlightType, Package
+from game.aircraftmaintenance import AircraftRepair, damaged_count
+from game.ato.savedpoints import SavedPoint, SavedDrawing
 from game.settings import AutoAtoBehavior, Settings
 from game.theater import ParkingType
 from game.theater.player import Player
 from .pilot import Pilot, PilotStatus
+from game.dcs.skills import CADET_SKILL, SKILL_LADDER, skill_for_experience
+from game.squadrons import friendship
+from game.squadrons import hardening
+from game.squadrons import morale as morale_rules
+from game.squadrons.morale import TURNS_BEFORE_LEAVE_IS_MISSED, shifted_skill
+
 from .pilotnames import faker_for_country
+from .pilotranks import Rank, rank_for_skill, ranks_for
 from ..db.database import Database
 from ..radio.radios import RadioFrequency
 from ..utils import meters, nautical_miles
@@ -69,9 +78,24 @@ class Squadron:
         init=False, hash=False, compare=False, default=None
     )
 
+    #: This squadron's own pilot ceiling, or None to follow the campaign setting.
+    #: Defaulted, so a save written before it existed reads as "follow the setting".
+    pilot_limit_override: Optional[int] = field(
+        init=False, hash=False, compare=False, default=None
+    )
+
     owned_aircraft: int = field(init=False, hash=False, compare=False, default=0)
     untasked_aircraft: int = field(init=False, hash=False, compare=False, default=0)
     pending_deliveries: int = field(init=False, hash=False, compare=False, default=0)
+    pending_sale_values: list[float] = field(
+        init=False, hash=False, compare=False, repr=False, default_factory=list
+    )
+    aircraft_repairs: list[AircraftRepair] = field(
+        init=False, hash=False, compare=False, repr=False, default_factory=list
+    )
+    damaged_aircraft_sale_income: float = field(
+        init=False, hash=False, compare=False, default=0.0
+    )
 
     #: Aircraft the squadron started the campaign with (set at turn 0).
     initial_aircraft: int = field(init=False, hash=False, compare=False, default=0)
@@ -81,6 +105,23 @@ class Squadron:
     purchased_aircraft: int = field(init=False, hash=False, compare=False, default=0)
 
     use_livery_set: bool = False  # if livery-set should be used when present
+
+    #: How well the squadron gets on with itself, worked out once a turn. It is O(n^2)
+    #: in a roster of twenty or thirty, which is nothing once and wasteful on every
+    #: repaint of the Air Wing list. Defaulted, so a squadron out of a save written
+    #: before friendship existed reads "not worked out yet" rather than raising.
+    _cohesion: Optional[float] = field(
+        init=False, hash=False, compare=False, repr=False, default=None
+    )
+
+    #: Legacy save storage, aliased to the coalition's shared points on load.
+    saved_points: list[SavedPoint] = field(
+        init=False, hash=False, compare=False, repr=False, default_factory=list
+    )
+
+    saved_drawings: list[SavedDrawing] = field(
+        init=False, hash=False, compare=False, repr=False, default_factory=list
+    )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         if "id" not in state:
@@ -93,8 +134,17 @@ class Squadron:
             state["initial_aircraft"] = state.get("owned_aircraft", 0)
         if "destroyed_aircraft" not in state:
             state["destroyed_aircraft"] = 0
+        if "pilot_limit_override" not in state:
+            # A campaign started before squadrons could carry their own ceiling keeps
+            # following the campaign setting, which is what it was doing anyway.
+            state["pilot_limit_override"] = None
         if "purchased_aircraft" not in state:
             state["purchased_aircraft"] = 0
+        state.setdefault("saved_points", [])
+        state.setdefault("saved_drawings", [])
+        state.setdefault("aircraft_repairs", [])
+        state.setdefault("pending_sale_values", [])
+        state.setdefault("damaged_aircraft_sale_income", 0.0)
         self.__dict__.update(state)
 
     def __str__(self) -> str:
@@ -119,34 +169,195 @@ class Squadron:
 
     @property
     def base_skill(self) -> Skill:
+        """The lowest DCS skill this coalition's pilots may fly at.
+
+        Live Pilots forces the floor to the bottom rung, so that experience has
+        somewhere to climb from. Done here rather than by writing to the difficulty
+        settings, which belong to the player and are what the wing returns to when the
+        feature is switched off.
+
+        """
+        if self.settings.live_pilots_enabled:
+            return CADET_SKILL
+        return self.difficulty_skill
+
+    @property
+    def difficulty_skill(self) -> Skill:
+        """The skill the player set for this coalition on the difficulty page."""
         if self.player.is_blue:
             return Skill(self.settings.player_skill)
         return Skill(self.settings.enemy_skill)
 
     def pilot_skill(self, pilot: Pilot) -> Skill:
-        """The effective DCS skill the pilot flies at.
+        """The DCS skill the pilot flies at: the highest rung his experience has paid for.
 
-        Pilots level up one skill tier every few missions flown, starting from
-        the coalition's base skill and capped at the top tier. Levelling only
-        applies when the ``ai_pilot_levelling`` setting is enabled.
+        The coalition's setting is the floor rather than the starting point, so raising
+        the difficulty lifts the whole wing and never demotes a veteran. Only applied
+        when ``ai_pilot_levelling`` is enabled.
+
         """
-        levels = [
-            Skill.Average,
-            Skill.Good,
-            Skill.High,
-            Skill.Excellent,
-        ]
-        current_level = levels.index(self.base_skill)
-        missions_for_skill_increase = 4
-        increase = pilot.record.missions_flown // missions_for_skill_increase
-        capped_increase = min(current_level + increase, len(levels) - 1)
+        if not self.settings.ai_pilot_levelling:
+            return self.base_skill
+        return skill_for_experience(pilot.record.xp, self.base_skill, self.settings)
 
-        if self.settings.ai_pilot_levelling:
-            new_level = capped_increase
-        else:
-            new_level = current_level
+    def rank_order(self, pilot: Pilot) -> tuple[int, int]:
+        """Sort key: senior first, then most experienced within a rank.
 
-        return levels[new_level]
+        Constant while Live Pilots is off, since no rank is shown then.
+
+        """
+        if self.pilot_rank(pilot) is None:
+            return 0, 0
+        try:
+            rung = SKILL_LADDER.index(self.pilot_skill(pilot))
+        except ValueError:
+            rung = 0
+        return -rung, -pilot.record.xp
+
+    @property
+    def morale_in_play(self) -> bool:
+        """Whether morale is enabled. Requires Live Pilots and can be turned off on its own,
+        in which case there is no drift, no leave running down and nobody grounded.
+
+        """
+        return self.settings.live_pilots_enabled and getattr(
+            self.settings, "morale_enabled", True
+        )
+
+    @property
+    def cohesion(self) -> Optional[float]:
+        """Mean friendship across every directed pair of living pilots, 0 to 10.
+
+        None while friendship is off.
+
+        """
+        if not self.friendship_in_play:
+            return None
+        if self._cohesion is None:
+            self._cohesion = friendship.synergy(self.living_pilots)
+        return self._cohesion
+
+    @property
+    def friendship_in_play(self) -> bool:
+        """Whether friendship is enabled. Requires Live Pilots and can be turned off on its
+        own, in which case nothing reads or writes the graph and every effect falls back
+        to its Tier III behaviour.
+
+        """
+        return friendship.in_play(self.settings)
+
+    def mission_skill(self, pilot: Pilot, flight: Optional[Flight] = None) -> Skill:
+        """The skill the pilot flies the mission at, after morale and formation friendship.
+
+        Deliberately separate from :meth:`pilot_skill`, which rank is derived from: a
+        bad week would otherwise demote a Major and a good one promote him back. Only
+        the mission file reads this.
+
+        Without a flight it answers for the pilot alone.
+
+        """
+        skill = self.pilot_skill(pilot)
+        if self.morale_in_play and pilot.has_morale:
+            skill = shifted_skill(skill, pilot.morale, self.settings)
+        return self._with_synergy(skill, flight)
+
+    def _with_synergy(self, skill: Skill, flight: Optional[Flight]) -> Skill:
+        """One rung for a formation that gets on.
+
+        The flight or the package, whichever reaches Close first, and never more than
+        one rung however it was earned. Applied on top of the morale shift.
+
+        """
+        if flight is None or not self.friendship_in_play:
+            return skill
+        crews = [list(flight.roster.iter_pilots())]
+        package = getattr(flight, "package", None)
+        if package is not None:
+            crews.append(
+                [
+                    member
+                    for other in package.flights
+                    for member in other.roster.iter_pilots()
+                ]
+            )
+        for crew in crews:
+            value = self.formation_synergy(crew)
+            if value is not None and friendship.flies_a_rung_better(
+                value, self.settings
+            ):
+                return morale_rules.bumped_skill(skill, 1)
+        return skill
+
+    def formation_synergy(self, crew: Sequence[Optional[Pilot]]) -> Optional[float]:
+        """Mean friendship of a formation, with the leader's pairs weighted heaviest.
+
+        Read by :meth:`mission_skill` and shown to the planner. None while friendship is
+        off, or for a formation too small to have a value.
+
+        """
+        members = [member for member in crew if member is not None]
+        if not self.friendship_in_play or len(members) < 2:
+            return None
+        return friendship.synergy(members, self.leader_of(members), self.settings)
+
+    def leader_of(self, crew: Sequence[Optional[Pilot]]) -> Optional[Pilot]:
+        """The senior pilot in a formation, whose pairs are weighted heaviest.
+
+        By rank rather than by seat, so that spreading senior pilots one to a flight is
+        worth more than stacking them in one. A package can reach across squadrons, so
+        the rank is read from whichever squadron each pilot belongs to.
+
+        """
+        best: Optional[Pilot] = None
+        best_rung = -1
+        for pilot in crew:
+            if pilot is None:
+                continue
+            try:
+                rung = SKILL_LADDER.index(self.pilot_skill(pilot))
+            except ValueError:
+                rung = 0
+            if rung > best_rung:
+                best, best_rung = pilot, rung
+        return best
+
+    def pilot_rank(self, pilot: Pilot) -> Optional[Rank]:
+        """The rank the pilot holds, or None while Live Pilots is off.
+
+        A rank is a renaming of the DCS skill level rather than a second ladder:
+        competence is the only thing the engine can be told about, so promotion and
+        skill are the same step.
+
+        """
+        if not self.settings.live_pilots_enabled:
+            return None
+        ladder = ranks_for(
+            self.settings.live_pilots_rank_names,
+            self.country,
+            (
+                (
+                    self.settings.live_pilots_rank_cadet_short,
+                    self.settings.live_pilots_rank_cadet_full,
+                ),
+                (
+                    self.settings.live_pilots_rank_average_short,
+                    self.settings.live_pilots_rank_average_full,
+                ),
+                (
+                    self.settings.live_pilots_rank_good_short,
+                    self.settings.live_pilots_rank_good_full,
+                ),
+                (
+                    self.settings.live_pilots_rank_high_short,
+                    self.settings.live_pilots_rank_high_full,
+                ),
+                (
+                    self.settings.live_pilots_rank_excellent_short,
+                    self.settings.live_pilots_rank_excellent_full,
+                ),
+            ),
+        )
+        return rank_for_skill(self.pilot_skill(pilot), ladder)
 
     def assign_to_base(self, base: ControlPoint) -> None:
         self.location = base
@@ -178,25 +389,48 @@ class Squadron:
         self._recruit_pilots(1)
         return self.available_pilots.pop()
 
-    def claim_available_pilot(self) -> Optional[Pilot]:
+    def claim_available_pilot(
+        self, alongside: Sequence[Pilot] = (), *, ai_only: bool = False
+    ) -> Optional[Pilot]:
+        """Take a pilot off the list for a seat.
+
+        ``alongside`` is the crew already seated; it only orders the pilots who already
+        matched the player's preference about players and AI, which still decides who is
+        eligible. Greedy rather than optimal: the crew grows around whoever was first.
+        AI-only flights exclude player pilots regardless of that preference.
+
+        """
+        if ai_only:
+            candidates = [p for p in self.available_pilots if not p.player]
+            if candidates:
+                return self._take(self._pick(candidates, alongside, candidates[-1]))
+            pilot = self.claim_new_pilot_if_allowed()
+            if pilot is not None and pilot.player:
+                self.return_pilot(pilot)
+                return None
+            return pilot
+
         if not self.available_pilots:
             return self.claim_new_pilot_if_allowed()
 
         # For opfor, so player/AI option is irrelevant.
         if self.player != Player.BLUE:
-            return self.available_pilots.pop()
+            return self._take(
+                self._pick(self.available_pilots, alongside, self.available_pilots[-1])
+            )
 
         preference = self.settings.auto_ato_behavior
 
         # No preference, so the first pilot is fine.
         if preference is AutoAtoBehavior.Default:
-            return self.available_pilots.pop()
+            return self._take(
+                self._pick(self.available_pilots, alongside, self.available_pilots[-1])
+            )
 
         prefer_players = preference is AutoAtoBehavior.Prefer
-        for pilot in self.available_pilots:
-            if pilot.player == prefer_players:
-                self.available_pilots.remove(pilot)
-                return pilot
+        matching = [p for p in self.available_pilots if p.player == prefer_players]
+        if matching:
+            return self._take(self._pick(matching, alongside, matching[0]))
 
         # No pilot was found that matched the user's preference.
         #
@@ -209,22 +443,64 @@ class Squadron:
             return self.claim_new_pilot_if_allowed()
         return self.available_pilots.pop()
 
+    def _pick(
+        self, candidates: Sequence[Pilot], alongside: Sequence[Pilot], default: Pilot
+    ) -> Pilot:
+        """Pick the pilot for this seat: the senior one for seat zero (the flight lead),
+        otherwise whoever fits best with the crew already seated.
+
+        ``default`` wins every tie, so crewing is unchanged with Live Pilots off.
+
+        """
+        if len(candidates) < 2:
+            return default
+        if not alongside:
+            senior = min(candidates, key=self.rank_order)
+            if self.rank_order(senior) < self.rank_order(default):
+                return senior
+            return default
+        if not self.friendship_in_play:
+            return default
+        best = max(
+            candidates, key=lambda pilot: friendship.group_affinity(pilot, alongside)
+        )
+        if friendship.group_affinity(best, alongside) <= friendship.FRIENDSHIP_START:
+            return default
+        return best
+
+    def _take(self, pilot: Pilot) -> Pilot:
+        """Off the list by identity, for the reason :meth:`claim_pilot` explains."""
+        for index, candidate in enumerate(self.available_pilots):
+            if candidate is pilot:
+                del self.available_pilots[index]
+                break
+        return pilot
+
     def claim_pilot(self, pilot: Pilot) -> None:
-        if pilot not in self.available_pilots:
+        """Compare by identity.
+
+        Pilot is a dataclass, so two pilots with the same name and record compare equal
+        and ``list.remove`` would take whichever comes first, striking the wrong one off
+        the pool.
+
+        """
+        if not any(p is pilot for p in self.available_pilots):
             raise ValueError(
                 f"Cannot assign {pilot} to {self} because they are not available"
             )
-        self.available_pilots.remove(pilot)
+        self.available_pilots = [p for p in self.available_pilots if p is not pilot]
 
     def return_pilot(self, pilot: Pilot) -> None:
-        self.available_pilots.append(pilot)
+        if not any(p is pilot for p in self.available_pilots):
+            self.available_pilots.append(pilot)
 
     def return_pilots(self, pilots: Sequence[Pilot]) -> None:
         # Return in reverse so that returning two pilots and then getting two more
         # results in the same ordering. This happens commonly when resetting rosters in
         # the UI, when we clear the roster because the UI is updating, then end up
         # repopulating the same size flight from the same squadron.
-        self.available_pilots.extend(reversed(pilots))
+        for pilot in reversed(pilots):
+            self.return_pilot(pilot)
 
     def _recruit_pilots(self, count: int) -> None:
         new_pilots = self.pilot_pool[:count]
@@ -245,7 +521,7 @@ class Squadron:
     def populate_for_turn_0(self, squadrons_start_full: bool) -> None:
         if any(p.status is not PilotStatus.Active for p in self.pilot_pool):
             raise ValueError("Squadrons can only be created with active pilots.")
-        self._recruit_pilots(self.settings.squadron_pilot_limit)
+        self._recruit_pilots(self.pilot_limit)
         if squadrons_start_full:
             parking_type = ParkingType().from_squadron(self)
             self.owned_aircraft = min(
@@ -254,29 +530,357 @@ class Squadron:
         self.initial_aircraft = self.owned_aircraft
 
     def end_turn(self) -> None:
+        # Everything below moves somebody, and the drift moves everybody: worked out
+        # again the next time the Air Wing asks.
+        self._cohesion = None
         if self.destination is not None:
             self.relocate_to(self.destination)
+        self.tend_the_wounded()
+        self.tend_morale(self.coalition.game.turn)
         self.replenish_lost_pilots()
         self.deliver_orders()
+
+    def tend_morale(self, turn: int) -> None:
+        """One turn of leave served, drift applied and the cost of no rest.
+
+        Everything that happens to a pilot during a mission is applied by the results
+        processor; this is only what the passage of time does.
+
+        """
+        if not self.morale_in_play:
+            return
+        # Taken before anybody is moved: who is away at the same time as him must not
+        # depend on where he happens to sit in the roster.
+        away = [pilot for pilot in self.current_roster if pilot.on_leave]
+        for pilot in list(self.current_roster):
+            if not pilot.alive:
+                continue
+
+            # What he had at this point one turn ago, so the next turn can say whether
+            # he is sliding. Taken before anything moves him.
+            was = pilot.morale
+            pilot.morale_last_turn = was
+
+            if pilot.on_leave:
+                pilot.move_morale(
+                    self._leave_event(pilot, away),
+                    self.pilot_skill(pilot),
+                    self.settings,
+                    turn,
+                )
+                # Served whether or not morale is his: leave the player granted
+                # himself still has to run out, or he never comes back.
+                pilot.serve_a_turn_of_leave(turn)
+                continue
+
+            if not pilot.has_morale:
+                # The player is not worn down by the turn passing, is never
+                # overdue a rest he can take whenever he likes, and does not desert.
+                # A request made before he was marked as the player is dropped with
+                # the rest of it.
+                pilot.wants_leave = False
+                pilot.leave_turns_requested = 0
+                continue
+
+            # Judged on the state he arrived in. The drift below lifts a man who is
+            # merely low, so asking afterwards would read the wrong number.
+            was_at_rock_bottom = was <= morale_rules.REFUSES_TO_FLY_AT
+
+            # And a turn spent down there leaves something behind, on the same
+            # reading of the same figure.
+            hardening.harden(pilot, was, self.settings)
+
+            pilot.turns_since_leave += 1
+            if pilot.turns_since_leave > TURNS_BEFORE_LEAVE_IS_MISSED:
+                # The same cost every turn from the sixth on, not a compounding one.
+                pilot.move_morale(
+                    morale_rules.NO_LEAVE,
+                    self.pilot_skill(pilot),
+                    self.settings,
+                    turn,
+                )
+            before_drift = pilot.morale
+            pilot.morale = morale_rules.clamp(pilot.morale + self._drift_for(pilot))
+            pilot.note_morale_change(before_drift, "time passing", turn)
+
+            if was_at_rock_bottom:
+                pilot.turns_at_zero += 1
+                # A roll, not a countdown: every turn a man is left at the bottom is a
+                # turn he might not come back from, and rank is what holds him there.
+                if random.random() < self._desertion_chance(pilot):
+                    logging.info(
+                        f"{pilot.name} has deserted {self} after "
+                        f"{pilot.turns_at_zero} turns at rock bottom"
+                    )
+                    pilot.desert()
+                    continue
+            else:
+                pilot.turns_at_zero = 0
+
+            # A man in a hospital bed does not ask for leave, and how hard he has been
+            # worked lately counts as much as how he is holding up.
+            flown = pilot.sorties_in_last(morale_rules.RECENT_SORTIE_WINDOW, turn)
+            if (
+                not pilot.wounded
+                and not pilot.wants_leave
+                and random.random()
+                < (
+                    morale_rules.leave_request_chance(
+                        pilot.morale,
+                        getattr(self.settings, "morale_leave_request_chance", 8),
+                        flown,
+                    )
+                )
+            ):
+                pilot.wants_leave = True
+                pilot.leave_turns_requested = morale_rules.requested_leave_turns(
+                    pilot.morale
+                )
+
+    def _leave_event(
+        self, pilot: Pilot, away: Sequence[Pilot]
+    ) -> morale_rules.MoraleEvent:
+        """Recomputed every turn: as each pilot returns, the others lose his contribution.
+
+        Nobody's leave is lengthened or shortened by this; it only changes what the
+        company is worth while it lasts.
+
+        """
+        event = morale_rules.ON_LEAVE
+        if not self.friendship_in_play:
+            return event
+        others = [other for other in away if other is not pilot]
+        if not others:
+            return event
+        return event.scaled_by(
+            friendship.leave_multiplier(
+                friendship.mean_towards(pilot, others), self.settings
+            ),
+            self.settings,
+        )
+
+    def _drift_for(self, pilot: Pilot) -> int:
+        """The drift back towards the middle, scaled by the company he keeps.
+
+        A pilot below the middle returns faster for each close friend in the squadron,
+        one above it falls faster for each pilot who dislikes him. Only ever faster, and
+        never past the middle.
+
+        """
+        step = morale_rules.drift(pilot.morale, self.settings)
+        if not step or not self.friendship_in_play:
+            return step
+        if pilot.morale < morale_rules.MORALE_START:
+            company = sum(
+                1
+                for other in self.living_pilots
+                if other is not pilot
+                and friendship.is_close(friendship.feeling(pilot, other), self.settings)
+            )
+        else:
+            company = sum(
+                1
+                for other in self.living_pilots
+                if other is not pilot
+                and friendship.is_hostile(
+                    friendship.feeling(other, pilot), self.settings
+                )
+            )
+        distance = abs(pilot.morale - morale_rules.MORALE_START)
+        moved = round(step * friendship.drift_help(company, self.settings))
+        return max(-distance, min(distance, moved))
+
+    def _desertion_chance(self, pilot: Pilot) -> float:
+        """How likely he is to walk away this turn.
+
+        Rank is what held him in his seat until now. The man in the next bunk is the
+        better half of the story.
+        """
+        chance = morale_rules.desertion_chance(self.pilot_skill(pilot))
+        if not self.friendship_in_play:
+            return chance
+        return chance * friendship.desertion_modifier(
+            friendship.mean_towards(pilot, self.living_pilots), self.settings
+        )
+
+    def spare_pilots(self, excluding: Optional[Pilot] = None) -> int:
+        """How many pilots would still be available if this one were sent on leave.
+
+        Excludes the wounded, those already on leave, and those whose requests are
+        pending in the same batch.
+
+        """
+        return sum(
+            1
+            for pilot in self.current_roster
+            if pilot is not excluding
+            and pilot.alive
+            and not pilot.wounded
+            and not pilot.on_leave
+            and not pilot.wants_leave
+        )
+
+    def pilots_asking_for_leave(self) -> list[Pilot]:
+        asking = [
+            pilot
+            for pilot in self.current_roster
+            # has_morale as well as the flag: a pilot marked as the player after
+            # requesting leave still carries the request, which is not his to make.
+            if pilot.wants_leave
+            and pilot.has_morale
+            and pilot.status is PilotStatus.Active
+        ]
+        asking.sort(key=lambda pilot: pilot.morale)
+        return asking
+
+    def cancel_leave(self, pilot: Pilot) -> None:
+        """Recall a pilot before his leave is up and apply the morale cost.
+
+        The cost belongs here rather than to :meth:`Pilot.return_from_leave`: leave that
+        simply ran out costs nothing.
+
+        """
+        if not pilot.on_leave:
+            raise RuntimeError("Only pilots on leave may have it cancelled")
+        # Goes through the ordinary return, which refuses when the squadron is full.
+        self.return_from_leave(pilot)
+        if self.morale_in_play:
+            pilot.move_morale(
+                morale_rules.LEAVE_CANCELLED,
+                self.pilot_skill(pilot),
+                self.settings,
+                self.coalition.game.turn,
+            )
+
+    def unfilled_pilot_slots(self) -> int:
+        """How many more pilots this squadron could hold, or 0 with limits off.
+
+        The campaign setting is a ceiling: changing it mid-campaign recruits nobody into
+        the room it makes and removes nobody when it shrinks.
+
+        """
+        if not self.pilot_limits_enabled:
+            return 0
+        return max(0, self._number_of_unfilled_pilot_slots)
+
+    def discharge(self, pilot: Pilot) -> None:
+        """Throw a pilot out. He leaves the roster and joins the roll below it."""
+        pilot.discharge()
+        self.leaves_the_pool(pilot)
+        logging.info(f"{pilot.name} was discharged from {self}")
+
+    def tend_the_wounded(self) -> None:
+        """One turn of every wound served; the last one puts the pilot back to work."""
+        turn = self.coalition.game.turn
+        for pilot in self.wounded_pilots:
+            pilot.serve_a_turn_wounded(turn)
+            if not pilot.wounded:
+                self._note_recovery(pilot, turn)
+
+    def _note_recovery(self, pilot: Pilot, turn: int) -> None:
+        """Returning from a wound: the mirror of the wound event, weighted the same way.
+
+        Applied to the squadron rather than to the flight he was hurt in, which no
+        longer exists -- the ATO is cleared between turns.
+
+        """
+        if not self.morale_in_play:
+            return
+        for mate in self.living_pilots:
+            if mate is pilot or not mate.has_morale:
+                continue
+            times = 1
+            if self.friendship_in_play:
+                times = friendship.grief_times(
+                    1, friendship.feeling(mate, pilot), self.settings
+                )
+            for _ in range(times):
+                mate.move_morale(
+                    morale_rules.SQUADRON_RECOVERED,
+                    self.pilot_skill(mate),
+                    self.settings,
+                    turn,
+                )
 
     def replenish_lost_pilots(self) -> None:
         if self.pilot_limits_enabled and self.replenish_count > 0:
             self._recruit_pilots(self.replenish_count)
 
-    def return_all_pilots_and_aircraft(self) -> None:
-        self.available_pilots = list(self.active_pilots)
-        self.untasked_aircraft = self.owned_aircraft
+    def reconcile_available_pilots(self, flying: set[int]) -> list[Pilot]:
+        """Return to the pool anyone fit, unassigned and missing from it.
 
-    @staticmethod
-    def send_on_leave(pilot: Pilot) -> None:
-        pilot.send_on_leave()
+        The pool is a stored list rebuilt from the roster only between turns, so a claim
+        that goes astray leaves a pilot who is active, unhurt and unassigned but cannot
+        be given a seat.
+
+        """
+        on_list = {id(p) for p in self.available_pilots}
+        restored = []
+        for pilot in self.active_pilots:
+            if id(pilot) in on_list or id(pilot) in flying:
+                continue
+            if self.morale_in_play and pilot.refuses_to_fly:
+                continue
+            self.available_pilots.append(pilot)
+            restored.append(pilot)
+        return restored
+
+    def return_all_pilots_and_aircraft(self) -> None:
+        # A man at rock bottom is not offered, the same way a wounded one is not. He is
+        # still on the books and still counts against the squadron's establishment.
+        if self.morale_in_play:
+            self.available_pilots = [
+                p for p in self.active_pilots if not p.refuses_to_fly
+            ]
+        else:
+            self.available_pilots = list(self.active_pilots)
+        # Aircraft already sold this turn (negative pending) must not return to the
+        # taskable pool; otherwise a turn re-initialisation would let the same units
+        # be sold (and flown) again, refunding their price every time.
+        self.untasked_aircraft = max(
+            0,
+            self.owned_aircraft + min(0, self.pending_deliveries) - damaged_count(self),
+        )
+
+    @property
+    def damaged_aircraft(self) -> int:
+        return damaged_count(self)
+
+    def send_on_leave(self, pilot: Pilot, turns: int = 0, turn: int = -1) -> None:
+        """Open-ended from the Air Wing button; for a fixed spell from a granted request."""
+        pilot.send_on_leave(turns, turn)
+        self.leaves_the_pool(pilot)
 
     def return_from_leave(self, pilot: Pilot) -> None:
-        if not self.has_unfilled_pilot_slots:
-            raise RuntimeError(
-                f"Cannot return {pilot} from leave because {self} is full"
-            )
+        """He was never off the books, so there is no place to find for him.
+
+        A man on leave holds his slot the whole time he is away -- that is what stops
+        the replenishment filling it behind his back -- so coming back adds nobody to
+        the roster. Asking for a free slot here refused the recall of every man in a
+        squadron at full strength, which is most of them: two aircraft on the ramp, one
+        pilot fit to fly, and the man resting next door could not be called in.
+        """
         pilot.return_from_leave()
+        self.joins_the_pool(pilot)
+
+    def leaves_the_pool(self, pilot: Pilot) -> None:
+        """Take a pilot off the pool of those available for a sortie.
+
+        The pool is rebuilt from the roster only between turns, so anything that takes a
+        pilot off duty during one has to say so.
+
+        Compared by identity: Pilot is a dataclass, so equal pilots would be
+        indistinguishable to ``list.remove``.
+
+        """
+        self.available_pilots = [p for p in self.available_pilots if p is not pilot]
+
+    def joins_the_pool(self, pilot: Pilot) -> None:
+        """He is fit and unassigned, so he is on offer again."""
+        if pilot.status is not PilotStatus.Active or pilot.refuses_to_fly:
+            return
+        if not any(p is pilot for p in self.available_pilots):
+            self.available_pilots.append(pilot)
 
     @property
     def faker(self) -> Faker:
@@ -294,6 +898,14 @@ class Squadron:
 
     @property
     def pilot_limit(self) -> int:
+        """How many pilots this squadron may hold.
+
+        The campaign setting is the default; a squadron may carry its own limit instead,
+        so a wing can hold one small training unit or one oversized front-line squadron.
+
+        """
+        if self.pilot_limit_override is not None:
+            return self.pilot_limit_override
         return self.settings.squadron_pilot_limit
 
     @property
@@ -302,9 +914,15 @@ class Squadron:
 
     @property
     def replenish_count(self) -> int:
-        return min(
-            self.settings.squadron_replenishment_rate,
-            self._number_of_unfilled_pilot_slots,
+        # Never negative. A squadron already over its limit recruits nobody and comes
+        # back down on its own as men are lost, rather than having anyone taken off it;
+        # and expected_pilots_next_turn stays honest for procurement either way.
+        return max(
+            0,
+            min(
+                self.settings.squadron_replenishment_rate,
+                self._number_of_unfilled_pilot_slots,
+            ),
         )
 
     @property
@@ -316,24 +934,62 @@ class Squadron:
         return self._pilots_with_status(PilotStatus.OnLeave)
 
     @property
+    def wounded_pilots(self) -> list[Pilot]:
+        return self._pilots_with_status(PilotStatus.Wounded)
+
+    @property
+    def deserted_pilots(self) -> list[Pilot]:
+        return self._pilots_with_status(PilotStatus.Deserted)
+
+    @property
     def number_of_pilots_including_inactive(self) -> int:
         return len(self.current_roster)
 
     @property
     def living_pilots(self) -> list[Pilot]:
-        return self._pilots_without_status(PilotStatus.Dead)
+        return [p for p in self.current_roster if p.alive]
 
     @property
     def dead_pilots(self) -> list[Pilot]:
-        return self._pilots_with_status(PilotStatus.Dead)
+        """The ones who are not coming back, however they went."""
+        return [p for p in self.current_roster if not p.alive]
 
     @property
     def _number_of_unfilled_pilot_slots(self) -> int:
-        return self.pilot_limit - len(self.active_pilots)
+        """How many slots nobody on the books holds.
+
+        The wounded and those on leave hold their slots: they are coming back, and
+        recruiting into their places would put the squadron over its limit the turn they
+        return.
+
+        """
+        return self.pilot_limit - len(self.living_pilots)
 
     @property
     def number_of_available_pilots(self) -> int:
         return len(self.available_pilots)
+
+    @property
+    def refusing_pilots(self) -> list[Pilot]:
+        """The men at rock bottom, who will not take a seat however free it is."""
+        if not self.morale_in_play:
+            return []
+        return [p for p in self.living_pilots if p.refuses_to_fly]
+
+    @property
+    def fit_for_duty(self) -> list[Pilot]:
+        """Pilots who could be given a seat if one were free.
+
+        Not the same as :attr:`available_pilots`, which is the untasked pool and shrinks
+        as flights are planned. This is what the counts shown to the player mean: on the
+        books, not wounded, not on leave, and willing to fly.
+
+        """
+        return [
+            pilot
+            for pilot in self.living_pilots
+            if not pilot.wounded and not pilot.on_leave and not pilot.refuses_to_fly
+        ]
 
     def can_provide_pilots(self, count: int) -> bool:
         return not self.pilot_limits_enabled or self.number_of_available_pilots >= count
@@ -352,10 +1008,17 @@ class Squadron:
         A squadron may be capable of performing a task even if it will not be
         automatically assigned to it.
         """
+        if task.is_afac:
+            from game.ato.afac import enabled
+
+            if not enabled(self.settings):
+                return False
         return self.aircraft.capable_of(task)
 
     def can_auto_assign(self, task: FlightType) -> bool:
-        return task in self.auto_assignable_mission_types
+        return task in self.auto_assignable_mission_types and (
+            not task.is_afac or self.capable_of(task)
+        )
 
     def can_auto_assign_mission(
         self,
@@ -431,9 +1094,16 @@ class Squadron:
         return self.can_provide_pilots(count) and self.untasked_aircraft >= count
 
     def refund_orders(self, count: Optional[int] = None) -> None:
+        from game.resale import pending_aircraft_sale_values
+
         if count is None:
             count = self.pending_deliveries
-        self.coalition.adjust_budget(self.aircraft.price * count)
+        if count < 0:
+            receipts = pending_aircraft_sale_values(self)
+            self.coalition.adjust_budget(-sum(receipts[count:]))
+            self.pending_sale_values = receipts[:count]
+        else:
+            self.coalition.adjust_budget(self.aircraft.price * count)
         self.pending_deliveries -= count
 
     def deliver_orders(self) -> None:
@@ -441,8 +1111,11 @@ class Squadron:
         self.purchased_aircraft += self.pending_deliveries
         self.owned_aircraft += self.pending_deliveries
         self.pending_deliveries = 0
+        self.pending_sale_values = []
 
-    def relocate_to(self, destination: ControlPoint) -> None:
+    def relocate_to(
+        self, destination: ControlPoint, *, confirm_damaged_sale: bool = False
+    ) -> None:
         if not destination.is_friendly(self.coalition.player):
             logging.warning(
                 f"Cannot relocate {self} to {destination.name} - destination is no longer friendly. "
@@ -450,6 +1123,28 @@ class Squadron:
             )
             self.destination = None
             return
+        if (
+            getattr(self, "aircraft_repairs", [])
+            and destination != self.location
+            and destination != self.destination
+        ):
+            from game.highcommand.loans import require_owned_aircraft
+
+            require_owned_aircraft(self)
+            if not confirm_damaged_sale:
+                raise RuntimeError(
+                    "Damaged aircraft cannot transfer. Confirm their sale before relocating."
+                )
+            if not destination.can_operate(self.aircraft):
+                raise RuntimeError(f"{self} cannot operate at {destination}.")
+            parking_type = ParkingType().from_squadron(self)
+            if self.expected_size_next_turn - len(
+                self.aircraft_repairs
+            ) > destination.unclaimed_parking(parking_type):
+                raise RuntimeError(f"Not enough parking for {self} at {destination}.")
+            from game.aircraftmaintenance import remove_damaged
+
+            remove_damaged(self.coalition.game, self, refund=True)
         self.location = destination
         if self.location == self.destination:
             self.destination = None
@@ -498,7 +1193,13 @@ class Squadron:
     def arrival(self) -> ControlPoint:
         return self.location if self.destination is None else self.destination
 
-    def plan_relocation(self, destination: ControlPoint, now: datetime) -> None:
+    def plan_relocation(
+        self,
+        destination: ControlPoint,
+        now: datetime,
+        *,
+        confirm_damaged_sale: bool = False,
+    ) -> None:
         from game.theater import ParkingType
 
         if destination == self.location:
@@ -507,20 +1208,55 @@ class Squadron:
                 f"{destination}. Ignoring."
             )
             return
-        if destination == self.destination:
-            logging.warning(
-                f"Attempted to plan relocation of {self} to current destination "
-                f"{destination}. Ignoring."
+        damaged = len(getattr(self, "aircraft_repairs", []))
+        if damaged:
+            from game.highcommand.loans import require_owned_aircraft
+
+            require_owned_aircraft(self)
+        if damaged and not confirm_damaged_sale:
+            raise RuntimeError(
+                "Damaged aircraft cannot transfer. Confirm their sale before relocating."
             )
+        # Sales remove aircraft from use immediately, but owned_aircraft is only
+        # updated at turn end. Purchases do not need to fly from this base yet.
+        aircraft_to_ferry = (
+            self.owned_aircraft + min(0, self.pending_deliveries) - damaged
+        )
+        if aircraft_to_ferry > 0 and not self.location.runway_is_operational():
+            # The mission leaves out a flight from a damaged runway, ferries included,
+            # and the squadron used to arrive at the end of the turn all the same. An
+            # empty squadron has nothing to take off, so it can still move.
+            why = "it has sunk" if self.location.sunk else "its runway is damaged"
+            raise RuntimeError(
+                f"{self} cannot relocate from {self.location}: {why} and nothing can "
+                "take off."
+            )
+        if not destination.can_operate(self.aircraft):
+            raise RuntimeError(f"{self} cannot operate at {destination}.")
+        if destination == self.destination:
+            # Asked again, as after its ferry flights were deleted with their package:
+            # they are planned again. Ignoring the order left the squadron with no
+            # ferries and the answer that all was well.
+            self.replan_ferry_flights(now)
             return
 
         parking_type = ParkingType().from_squadron(self)
-        if self.expected_size_next_turn > destination.unclaimed_parking(parking_type):
+        if self.expected_size_next_turn - damaged > destination.unclaimed_parking(
+            parking_type
+        ):
             raise RuntimeError(f"Not enough parking for {self} at {destination}.")
-        if not destination.can_operate(self.aircraft):
-            raise RuntimeError(f"{self} cannot operate at {destination}.")
+        prior_destination = self.destination
         self.destination = destination
-        self.replan_ferry_flights(now)
+        try:
+            self.replan_ferry_flights(now)
+        except Exception:
+            self.cancel_ferry_flights()
+            self.destination = prior_destination
+            raise
+        if damaged:
+            from game.aircraftmaintenance import remove_damaged
+
+            remove_damaged(self.coalition.game, self, refund=True)
 
     def cancel_relocation(self) -> None:
         from game.theater import ParkingType
@@ -543,13 +1279,22 @@ class Squadron:
         self.plan_ferry_flights(now)
 
     def cancel_ferry_flights(self) -> None:
-        for package in self.coalition.ato.packages:
-            # Copy the list so our iterator remains consistent throughout the removal.
+        from game.server import EventStream
+        from game.sim import GameUpdateEvents
+
+        events = GameUpdateEvents()
+        # Both lists are copied: removing a package from the one being walked makes
+        # Python skip the next, so an emptied package used to leave the one behind it
+        # untouched -- with its ferry flights, and the pilots they hold, still claimed.
+        for package in list(self.coalition.ato.packages):
             for flight in list(package.flights):
                 if flight.squadron == self and flight.flight_type is FlightType.FERRY:
                     package.remove_flight(flight)
+                    events.delete_flight(flight)
             if not package.flights:
                 self.coalition.ato.remove_package(package)
+        if not events.empty:
+            EventStream.put_nowait(events)
 
     def plan_ferry_flights(self, now: datetime) -> None:
         if self.destination is None:
@@ -567,6 +1312,16 @@ class Squadron:
             remaining -= size
         package.set_tot_asap(now)
         self.coalition.ato.add_package(package)
+
+        # Relocation bypasses the flight editor, which normally registers flights
+        # with the map. Publish only after the route and timing are ready.
+        from game.server import EventStream
+        from game.sim import GameUpdateEvents
+
+        events = GameUpdateEvents()
+        for flight in package.flights:
+            events.new_flight(flight)
+        EventStream.put_nowait(events)
 
     def plan_ferry_flight(self, package: Package, size: int) -> None:
         start_type = self.location.required_aircraft_start_type
@@ -603,7 +1358,7 @@ class Squadron:
             squadron_def.aircraft,
             max_size,
             squadron_def.livery,
-            squadron_def.livery_set,
+            squadron_def.livery_set.copy(),
             primary_task,
             squadron_def.auto_assignable_mission_types,
             squadron_def.radio_presets,
@@ -614,4 +1369,6 @@ class Squadron:
             game.db.flights,
             game.settings,
             base,
+            use_livery_set=bool(squadron_def.livery_set)
+            and squadron_def.livery is None,
         )

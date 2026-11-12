@@ -10,12 +10,15 @@ from game.game import TurnState
 
 
 class GameUpdateSignal(QObject):
+    missile_targets_changed = Signal()
     instance = None
     gameupdated = Signal(Game)
     budgetupdated = Signal(Game)
     game_state_changed = Signal(TurnState)
     debriefingReceived = Signal(Debriefing)
     ato_changed = Signal()
+    saved_points_changed = Signal()
+    ground_movements_changed = Signal()
 
     game_loaded = Signal(Game)
 

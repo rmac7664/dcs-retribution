@@ -1,0 +1,561 @@
+"""Generate native missions with IMAC enabled and disabled."""
+
+import copy
+import json
+import pickle
+from pathlib import Path
+from types import SimpleNamespace as NS
+from typing import Any
+from zipfile import ZipFile
+
+import pytest
+import yaml
+from dcs import Point
+from dcs.lua import loads
+from dcs.planes import F_16C_50
+from dcs.statics import Fortification
+from dcs.task import CAP, ControlledTask, OrbitAction
+from dcs.vehicles import AirDefence
+
+from game.ato import FlightType
+from game.dcs.aircrafttype import AircraftType
+from game.missiongenerator import imac
+from game.missiongenerator.luagenerator import LuaGenerator
+from game.missiongenerator.missiondata import MissionData
+from game.plugins.luaplugin import LuaPlugin, LuaPluginDefinition
+from game.settings import Settings
+from game.theater.iadsnetwork.iadsrole import IadsRole
+from game.theater.player import Player
+from game.unitmap import UnitMap
+from .test_barcap_refuelling import scenario as barcap_scenario
+from game.missiongenerator.realisticcasluadata import collect_registry
+from pydcs_extensions import chinesemilitaryassetspack as cmap
+
+
+def scenario() -> Any:
+    s = barcap_scenario()
+    s.cap.package = object()
+    s.cap.waypoints = []
+    s.cap.units = s.group.units
+    s.data.frontline_visibility_groups = set()
+    s.nodes = [
+        NS(
+            iads_role=IadsRole.COMMAND_CENTER,
+            dcs_name='CC "quoted"',
+            player=Player.BLUE,
+            connections={IadsRole.POWER_SOURCE.value: ["POWER"]},
+        )
+    ]
+    s.game.theater = NS(iads_network=NS(skynet_nodes=lambda game: s.nodes))
+    s.game.settings = Settings()
+    s.unit_map = UnitMap()
+    s.generator = LuaGenerator(s.game, s.mission, s.data, s.unit_map)
+    return s
+
+
+def test_disabled_is_inert_without_inspecting_the_mission() -> None:
+    assert imac.options([]) is None
+    assert imac.configure(object(), None) is None
+    imac.inject(object(), None)
+
+
+def test_manifest_is_opt_in_and_all_exported_defaults_match() -> None:
+    definition = LuaPluginDefinition.from_json(
+        "imac", Path("resources/plugins/imac/plugin.json")
+    )
+    assert definition.enabled_by_default is False
+    assert {
+        o.identifier.removeprefix("imac."): o.value for o in definition.options
+    } == imac.DEFAULTS
+    assert "imac" in json.loads(Path("resources/plugins/plugins.json").read_text())
+
+
+def test_imac_side_and_debug_settings_survive_campaign_settings_round_trip() -> None:
+    definition = LuaPluginDefinition.from_json(
+        "imac", Path("resources/plugins/imac/plugin.json")
+    )
+    plugin = LuaPlugin(definition)
+    settings = Settings()
+    plugin.set_settings(settings)
+    plugin.set_value(True)
+    for option in plugin.options:
+        option.set_settings(settings)
+        if option.identifier in (
+            "imac.blue",
+            "imac.red",
+            "imac.debug",
+            "imac.debugOpfor",
+        ):
+            option.set_value(option.identifier != "imac.blue")
+    restored = pickle.loads(pickle.dumps(settings))
+    plugin.set_settings(restored)
+    for option in plugin.options:
+        option.set_settings(restored)
+    options = imac.options([plugin])
+    assert options is not None
+    assert options["blue"] is False
+    assert options["red"] is True
+    assert options["debug"] is True
+    assert options["debugOpfor"] is True
+    assert restored.plugins["imac.blue"] is False
+    assert restored.plugins["imac.red"] is True
+    assert restored.plugins["imac.debug"] is True
+    assert restored.plugins["imac.debugOpfor"] is True
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("blue", 1),
+        ("reports", "yes"),
+        ("debugOpfor", "true"),
+        ("avoidSamThreats", 1),
+        ("neverDivertSead", "true"),
+        ("evadeFighters", 1),
+        ("neverEvadeFighterMissions", "true"),
+        ("interval", 0),
+        ("defendRangeNm", float("nan")),
+        ("pursuitSeconds", True),
+    ],
+)
+def test_options_reject_invalid_values_before_modifying_routes(
+    key: str, value: Any
+) -> None:
+    plugin = NS(
+        identifier="imac",
+        enabled=True,
+        options=[NS(identifier="imac." + key, get_value=value)],
+    )
+    with pytest.raises(ValueError, match="IMAC"):
+        imac.options([plugin])
+
+
+def test_miz_embeds_runtime_in_dependency_order_and_native_route() -> None:
+    s = scenario()
+    before = copy.deepcopy(s.group.dict())
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    flight = data["flights"][0]
+    assert flight["mode"] == "cap"
+    assert flight["stationStart"] == 2
+    assert flight["recoveryIndex"] == 3
+    assert flight["endTime"] == 4000
+    assert flight["route"][-1]["name"] == "LANDING"
+    assert data["commandCenters"][0]["name"] == 'CC "quoted" object'
+    assert data["commandCenters"][0]["power"] == ["POWER object"]
+    for index, point in enumerate(s.group.points, 1):
+        assert (
+            point.tasks[0]
+            .dict()["params"]["action"]["params"]["command"]
+            .endswith(f", {index}) end")
+        )
+    # Original geometry and tasks, including the patrol deadline, are retained.
+    for old, new in zip(
+        before["route"]["points"].values(), s.group.dict()["route"]["points"].values()
+    ):
+        assert old["x"] == new["x"] and old["y"] == new["y"]
+    imac.inject(s.generator, data)
+    assert [t.comment for t in s.mission.triggerrules.triggers] == [
+        "Load imac-geometry.lua",
+        "Load imac-commander.lua",
+        "Load imac-dcs.lua",
+        "In-Mission Air Commander",
+    ]
+
+
+def test_command_authority_exports_all_members_of_its_fixed_power_stations() -> None:
+    s = scenario()
+    command = s.nodes[0]
+    command.static_members = [command.dcs_name, "CC SECOND"]
+    command.requires_power = True
+    command.connections[IadsRole.POWER_SOURCE.value] = ["P1", "P2"]
+    s.nodes.extend(
+        NS(
+            iads_role=IadsRole.POWER_SOURCE,
+            dcs_name=name,
+            player=Player.BLUE,
+            static_members=[name, name + " SECOND"],
+        )
+        for name in ("P1", "P2", "P3")
+    )
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    [row] = data["commandCenters"]
+    assert row["members"] == ['CC "quoted" object', "CC SECOND object"]
+    assert row["power"] == [
+        "P1 object",
+        "P1 SECOND object",
+        "P2 object",
+        "P2 SECOND object",
+    ]
+    assert row["requiresPower"] is True
+
+
+def test_advanced_command_with_an_empty_grid_keeps_its_power_requirement() -> None:
+    s = scenario()
+    command = s.nodes[0]
+    command.requires_power = True
+    command.connections.clear()
+    s.game.settings.set_plugin_option("skynetiads", False)
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    [row] = data["commandCenters"]
+    assert row["power"] == []
+    assert row["requiresPower"] is True
+
+
+def test_serialized_miz_contains_every_runtime_dependency(tmp_path: Path) -> None:
+    s = scenario()
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    imac.inject(s.generator, data)
+    path = tmp_path / "imac.miz"
+    s.mission.save(path)
+    lua = pytest.importorskip("lupa.lua51").LuaRuntime(unpack_returned_tuples=True)
+    with ZipFile(path) as archive:
+        mission = loads(archive.read("mission").decode())["mission"]
+        assert mission["trig"]
+        script_names = [n for n in archive.namelist() if n.endswith(".lua")]
+        assert len(script_names) >= 3
+        for name in imac.SCRIPTS:
+            raw = next(
+                archive.read(n).decode("utf-8")
+                for n in script_names
+                if n.endswith(name)
+            )
+            assert lua.eval("loadstring")(raw) is not None
+        startup = s.mission.triggerrules.triggers[-1].actions[0].text.id
+        assert "EscalationIMAC.start" in startup
+        assert lua.eval("loadstring")(startup) is not None
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        FlightType.BARCAP,
+        FlightType.STRIKE,
+        FlightType.AEWC,
+        FlightType.AFAC_AREA,
+        FlightType.ESCORT,
+    ],
+)
+def test_human_or_mixed_group_is_only_an_asset_never_receives_route_hooks(
+    role: FlightType,
+) -> None:
+    s = scenario()
+    s.cap.flight_type = role
+    s.cap.client_units = [object()]
+    before = copy.deepcopy(s.group.dict())
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    assert data["flights"][0]["mode"] == "observe"
+    assert data["flights"][0]["awacs"] is (role == FlightType.AEWC)
+    assert s.group.dict() == before
+
+
+def test_missing_orbit_window_and_afac_routes_are_not_claimed() -> None:
+    s = scenario()
+    s.group.points[1].tasks.clear()
+    before = copy.deepcopy(s.group.dict())
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None and data["flights"][0]["mode"] == "observe"
+    assert s.group.dict() == before
+
+
+@pytest.mark.parametrize(
+    "role", [FlightType.DEAD, FlightType.SEAD, FlightType.SEAD_SWEEP]
+)
+def test_dead_and_sead_roles_export_support_and_completion_hooks(
+    role: FlightType,
+) -> None:
+    s = scenario()
+    s.cap.flight_type = role
+    s.group.points[2].name = "SPLIT"
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    flight = data["flights"][0]
+    assert flight["mode"] == "dead" and flight["deadSupport"] is True
+    assert flight["seadMission"] is True
+    assert flight["recoveryIndex"] == 3
+    assert "EscalationIMAC.reached" in str(s.group.points[2].tasks[0].dict())
+
+
+@pytest.mark.parametrize(
+    "parent,child",
+    [
+        ("avoidSamThreats", "neverDivertSead"),
+        ("evadeFighters", "neverEvadeFighterMissions"),
+    ],
+)
+@pytest.mark.parametrize(
+    "active,exempt", [(False, False), (False, True), (True, False), (True, True)]
+)
+def test_avoidance_dependencies_are_enforced_without_opening_the_ui(
+    parent: str, child: str, active: bool, exempt: bool
+) -> None:
+    plugin = LuaPlugin.from_json("imac", Path("resources/plugins/imac/plugin.json"))
+    assert plugin is not None
+    settings = Settings()
+    plugin.set_settings(settings)
+    plugin.set_value(True)
+    settings.set_plugin_option("imac." + parent, active)
+    settings.set_plugin_option("imac." + child, exempt)
+    plugin.set_settings(pickle.loads(pickle.dumps(settings)))
+    options = imac.options([plugin])
+    assert options is not None
+    assert options[parent] is active
+    assert options[child] is (not active or exempt)
+    s = scenario()
+    raw = dict(imac.DEFAULTS, **{parent: active, child: exempt})
+    data = imac.configure(s.generator, raw)
+    assert data is not None
+    assert data["options"][child] is (not active or exempt)
+    assert raw[child] is exempt  # Normalization must not mutate caller settings.
+
+
+@pytest.mark.parametrize("role", [FlightType.ESCORT, FlightType.SWEEP])
+@pytest.mark.parametrize(
+    "evade,exempt", [(False, False), (False, True), (True, False), (True, True)]
+)
+def test_combat_flights_only_accept_protective_evasion_when_explicitly_enabled(
+    role: FlightType, evade: bool, exempt: bool
+) -> None:
+    s = scenario()
+    s.cap.flight_type = role
+    s.group.points[2].name = "NAV"  # No returning-fighter route hooks in this case.
+    data = imac.configure(
+        s.generator,
+        dict(imac.DEFAULTS, evadeFighters=evade, neverEvadeFighterMissions=exempt),
+    )
+    assert data is not None
+    flight = data["flights"][0]
+    assert flight["fighterMission"] is True
+    assert flight["mode"] == ("combat" if evade and not exempt else "observe")
+    hooked = "EscalationIMAC.reached" in str(s.group.points[0].tasks)
+    assert hooked is (evade and not exempt)
+
+
+def test_sead_escort_is_marked_for_sam_exemption_without_becoming_a_fighter_escort() -> (
+    None
+):
+    s = scenario()
+    s.cap.flight_type = FlightType.SEAD_ESCORT
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    flight = data["flights"][0]
+    assert flight["seadMission"] is True and flight["fighterMission"] is False
+    assert flight["mode"] == "dead"
+
+
+@pytest.mark.parametrize(
+    "role,waypoint",
+    [(FlightType.ESCORT, "JOIN"), (FlightType.SWEEP, "SWEEP START")],
+)
+@pytest.mark.parametrize("human", [False, True])
+def test_package_defense_uses_the_native_engagement_waypoint(
+    role: FlightType, waypoint: str, human: bool
+) -> None:
+    s = scenario()
+    s.cap.flight_type = role
+    s.cap.aircraft_type.task_priorities = {FlightType.INTERCEPTION: 1}
+    s.cap.client_units = [object()] if human else []
+    s.group.points[1].name = waypoint
+    s.group.points[2].name = "NAV"
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    flight = data["flights"][0]
+    assert flight["mode"] == "observe"
+    assert flight["returnInterceptor"] is False
+    assert flight["packageDefenseStart"] == (None if human else 2)
+    assert ("EscalationIMAC.reached" in str(s.group.points[1].tasks)) is not human
+
+
+@pytest.mark.parametrize(
+    "aircraft,eligible",
+    [
+        ("F-16C_50", True),
+        ("FA-18C_hornet", True),
+        ("F15EX", True),
+        ("Su-34", False),
+        ("A-10C_2", False),
+    ],
+)
+@pytest.mark.parametrize(
+    "role", [FlightType.STRIKE, FlightType.ESCORT, FlightType.DEAD]
+)
+def test_return_interception_uses_real_aircraft_capabilities(
+    aircraft: str, eligible: bool, role: FlightType
+) -> None:
+    s = scenario()
+    definition = yaml.safe_load(
+        Path(f"resources/units/aircraft/{aircraft}.yaml").read_text(encoding="utf-8")
+    )
+    s.cap.aircraft_type.task_priorities = AircraftType.get_task_priorities(definition)
+    s.cap.flight_type = role
+    s.group.points[2].name = "SPLIT"
+    s.group.points[-2].name = "ALIGN"
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    flight = data["flights"][0]
+    assert flight["returnInterceptor"] is eligible
+    assert flight["returnStartIndex"] == 3
+    assert flight["approachIndex"] == len(s.group.points) - 1
+    assert flight["mode"] == (
+        "observe"
+        if role == FlightType.ESCORT
+        else "dead" if role == FlightType.DEAD else "strike"
+    )
+    if eligible:
+        assert "EscalationIMAC.reached" in str(s.group.points[2].tasks[0].dict())
+
+
+@pytest.mark.parametrize("change", ["human", "no_split", "invalid_bingo"])
+def test_return_interception_requires_an_explicit_return_leg_and_ai_control(
+    change: str,
+) -> None:
+    s = scenario()
+    s.cap.aircraft_type.task_priorities = {FlightType.INTERCEPTION: 1}
+    s.cap.flight_type = FlightType.ESCORT
+    if change == "human":
+        s.cap.client_units = [object()]
+    elif change == "no_split":
+        s.group.points[2].name = "NAV"
+    else:
+        s.cap.bingo_fuel = float("nan")
+    before = copy.deepcopy(s.group.dict())
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    assert data["flights"][0]["returnInterceptor"] is False
+    assert s.group.dict() == before
+
+
+def test_red_ownership_comes_from_native_coalition_not_a_boolean_hint() -> None:
+    s = scenario()
+    group = s.mission.flight_group_inflight(
+        s.mission.country("Russia"),
+        "RED CAP",
+        F_16C_50,
+        Point(0, 0, s.mission.terrain),
+        6000,
+        500,
+        CAP,
+    )
+    point = group.add_waypoint(
+        Point(10000, 0, s.mission.terrain), 6000, 500, "RACETRACK START"
+    )
+    orbit = ControlledTask(OrbitAction(altitude=6000, speed=500))
+    orbit.stop_after_time(4000)
+    point.tasks.append(orbit)
+    group.add_waypoint(Point(20000, 0, s.mission.terrain), 6000, 500, "RACETRACK END")
+    clone = copy.copy(s.cap)
+    clone.group_name = group.name
+    clone.units = group.units
+    s.data.flights.append(clone)
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    assert next(f for f in data["flights"] if f["group"] == "RED CAP")["side"] == 1
+
+
+def test_late_bound_carrier_recovery_links_survive_the_export() -> None:
+    s = scenario()
+    s.group.points[-1].type = "Land"
+    s.group.points[-1].helipad_id = 744
+    s.group.points[-1].link_unit = 744
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    landing = data["flights"][0]["route"][-1]
+    assert landing["helipadId"] == 744
+    assert landing["linkUnit"] == 744
+
+
+def test_native_ground_sensors_and_exact_launcher_radar_pairs() -> None:
+    s = scenario()
+    country = s.mission.country("Russia")
+    launcher = s.mission.vehicle_group(
+        country, "PATRIOT", AirDefence.Patriot_ln, Point(20000, 0, s.mission.terrain)
+    )
+    wrong = s.mission.vehicle("WRONG RADAR", AirDefence.Hawk_tr)
+    wrong.position = launcher.units[0].position
+    launcher.add_unit(wrong)
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    sam = next(t for t in data["threats"] if t["name"] == launcher.units[0].name)
+    assert sam["needsRadar"] is True and sam["radars"] == []
+    assert any(r["name"] == wrong.name for r in data["sensors"])
+    correct = s.mission.vehicle("CORRECT RADAR", AirDefence.Patriot_str)
+    correct.position = launcher.units[0].position
+    launcher.add_unit(correct)
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    sam = next(t for t in data["threats"] if t["name"] == launcher.units[0].name)
+    assert sam["radars"] == [correct.name]
+
+
+@pytest.mark.parametrize("tracking", [False, True])
+def test_hq22_search_radar_alone_does_not_satisfy_imac_or_afac(tracking: bool) -> None:
+    s = scenario()
+    country = s.mission.country("Russia")
+    launcher = s.mission.vehicle_group(
+        country, "HQ22", cmap.CH_HQ22_LN, Point(20000, 0, s.mission.terrain)
+    )
+    search = s.mission.vehicle("SEARCH", cmap.CH_HQ22_SR)
+    search.position = launcher.units[0].position
+    launcher.add_unit(search)
+    if tracking:
+        tracker = s.mission.vehicle("TRACKER", cmap.CH_HQ22_STR)
+        tracker.position = search.position
+        launcher.add_unit(tracker)
+    objective = NS(category="aa", name="HQ22")
+    for unit in launcher.units:
+        s.unit_map.theater_objects[unit.name] = NS(
+            theater_unit=NS(ground_object=objective, unit_type=None), dcs_unit=unit
+        )
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    registry = collect_registry(
+        s.mission,
+        MissionData(),
+        enabled=True,
+        unit_map=s.unit_map,
+    )
+    assert data is not None and registry is not None
+    name = launcher.units[0].name
+    imac_threat = next(t for t in data["threats"] if t["name"] == name)
+    afac_threat = next(t for t in registry["airDefenseThreats"] if t["name"] == name)
+    for threat in [imac_threat, afac_threat]:
+        assert threat["needsRadar"] is True
+        assert threat["radars"] == ([tracker.name] if tracking else [])
+        assert search.name not in threat["radars"]
+
+
+def test_standalone_command_centre_does_not_require_advanced_iads_or_skynet() -> None:
+    s = scenario()
+    s.nodes.clear()
+    group = s.mission.static_group(
+        s.mission.country("USA"),
+        "BASIC CC",
+        Fortification._Command_Center,
+        Point(0, 0, s.mission.terrain),
+    )
+    native = group.units[0]
+    objective = NS(
+        category="commandcenter", is_friendly=lambda p: p is Player.BLUE, groups=[]
+    )
+    unit = NS(unit_type=None, ground_object=objective, alive=True, unit_name="BASIC CC")
+    objective.groups = [NS(iads_role=IadsRole.COMMAND_CENTER, units=[unit])]
+    s.unit_map.theater_objects[native.name] = NS(
+        theater_unit=unit,
+        dcs_unit=native,
+    )
+    support = s.mission.static_group(
+        s.mission.country("USA"),
+        "SUPPORT",
+        Fortification.GeneratorF,
+        Point(100, 0, s.mission.terrain),
+    ).units[0]
+    s.unit_map.theater_objects[support.name] = NS(
+        theater_unit=NS(unit_type=None, ground_object=objective), dcs_unit=support
+    )
+    data = imac.configure(s.generator, dict(imac.DEFAULTS))
+    assert data is not None
+    assert data["commandCenters"] == [
+        {"name": "BASIC CC object", "key": "BASIC CC", "side": 2, "power": []}
+    ]

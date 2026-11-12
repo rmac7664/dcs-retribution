@@ -28,12 +28,13 @@ import {
   UnculledZone,
 } from "./liberationApi";
 import { navMeshUpdated } from "./navMeshSlice";
-import { updateTgo } from "./tgosSlice";
+import { deleteTgo, updateTgo } from "./tgosSlice";
 import { threatZonesUpdated } from "./threatZonesSlice";
 import { unculledZonesUpdated } from "./unculledZonesSlice";
 import { LatLng } from "leaflet";
 import { updateIadsConnection, removeIadsConnection } from "./iadsNetworkSlice";
 import { supplyRoutesUpdated } from "./supplyRoutesSlice";
+import { setMapView } from "./mapSlice";
 
 interface GameUpdateEvents {
   updated_flight_positions: { [id: string]: LatLng };
@@ -48,14 +49,23 @@ interface GameUpdateEvents {
   deleted_flights: string[];
   selected_flight: string | null;
   deselected_flight: boolean;
+  saved_points_updated?: boolean;
   updated_front_lines: FrontLine[];
   deleted_front_lines: string[];
   updated_tgos: Tgo[];
+  deleted_tgos?: string[];
   updated_control_points: ControlPoint[];
   updated_iads: IadsConnection[];
   deleted_iads: string[];
   updated_supply_routes: SupplyRoute[];
   reset_on_map_center: LatLng | null;
+  fly_to: LatLng | null;
+  fly_to_zoom: number | null;
+  map_hover?: {
+    owner: string;
+    target_id: string | null;
+    position: { lat: number; lng: number } | null;
+  } | null;
   game_unloaded: boolean;
   new_turn: boolean;
 }
@@ -64,6 +74,29 @@ export const handleStreamedEvents = (
   dispatch: AppDispatch,
   events: GameUpdateEvents
 ) => {
+  if (events.map_hover != null) {
+    window.dispatchEvent(
+      new CustomEvent("map-button-hover", { detail: events.map_hover }),
+    );
+  }
+  if (
+    events.saved_points_updated ||
+    events.new_flights.length > 0 ||
+    events.updated_flights.length > 0 ||
+    events.deleted_flights.length > 0 ||
+    events.reset_on_map_center != null ||
+    events.new_turn ||
+    events.game_unloaded
+  ) {
+    window.dispatchEvent(
+      new CustomEvent("saved-points-changed", {
+        detail: {
+          unloaded: events.game_unloaded,
+          reset: events.reset_on_map_center != null || events.new_turn,
+        },
+      }),
+    );
+  }
   if (Object.keys(events.updated_flight_positions).length) {
     dispatch(
       updateFlightPositions(Object.entries(events.updated_flight_positions))
@@ -125,6 +158,9 @@ export const handleStreamedEvents = (
   if (events.updated_tgos.length > 0) {
     dispatch(updateTgo(events.updated_tgos));
   }
+  if (events.deleted_tgos?.length) {
+    dispatch(deleteTgo(events.deleted_tgos));
+  }
 
   if (events.updated_control_points.length > 0) {
       dispatch(updateControlPoint(events.updated_control_points));
@@ -144,6 +180,13 @@ export const handleStreamedEvents = (
 
   if (events.reset_on_map_center != null) {
     reloadGameState(dispatch);
+  }
+
+  // Somewhere the player asked to be shown, from the command palette. Through the
+  // store, because the map re-centres itself on what the store says after every
+  // render and a flyTo of its own would be undone by the next one.
+  if (events.fly_to != null) {
+    dispatch(setMapView({ center: events.fly_to, zoom: events.fly_to_zoom }));
   }
 
   if (events.game_unloaded) {

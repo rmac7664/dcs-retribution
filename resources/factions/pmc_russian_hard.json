@@ -12,7 +12,8 @@
     "L-39ZA Albatros",
     "Mi-24V Hind-E",
     "Mi-24P Hind-F",
-    "Mi-8MTV2 Hip"
+    "Mi-8MTV2 Hip",
+    "WingLoong-I"
   ],
   "frontline_units": [
     "BMP-1",
@@ -47,7 +48,9 @@
     "ZSU-57-2 'Sparka'",
     "ZSU-23-4 Shilka"
   ],
-  "preset_groups": [],
+  "preset_groups": [
+    "GPS Jamming Site (Red)"
+  ],
   "naval_units": [],
   "missiles": []
 }

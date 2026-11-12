@@ -8,6 +8,9 @@ from typing import Any, Iterator, List, Optional, TYPE_CHECKING
 from dcs.mapping import Point
 from shapely.geometry import Point as ShapelyPoint
 
+from game.config import IADS_REPAIR_COST, REWARDS
+from game.data.units import SEAD_TARGET_UNIT_CLASSES, UnitClass
+from game.ground_forces.ai_ground_planner import reserve_armor_for
 from game.sidc import (
     Entity,
     LandEquipmentEntity,
@@ -22,10 +25,13 @@ from game.sidc import (
 from game.theater.presetlocation import PresetLocation
 from .missiontarget import MissionTarget
 from .player import Player
+from enum import Enum
+
 from ..data.groups import GroupTask
 from ..utils import Distance, Heading, meters, nautical_miles
 
 if TYPE_CHECKING:
+    from game.missiletargets import MissileTarget
     from game.ato.flighttype import FlightType
     from game.dcs.groundunittype import GroundUnitType
     from game.threatzones import ThreatPoly
@@ -33,12 +39,74 @@ if TYPE_CHECKING:
     from .controlpoint import ControlPoint, Coalition
 
 
+def _select_capped(
+    reserve: dict[GroundUnitType, int], cap: int
+) -> dict[GroundUnitType, int]:
+    """Proportionally reduce ``reserve`` to at most ``cap`` units."""
+    total = sum(reserve.values())
+    if total <= cap:
+        return {ut: n for ut, n in reserve.items() if n > 0}
+    exact = {ut: count * cap / total for ut, count in reserve.items()}
+    floors = {ut: int(v) for ut, v in exact.items()}
+    remaining = cap - sum(floors.values())
+    if remaining > 0:
+        by_frac = sorted(
+            ((ut, exact[ut] - floors[ut]) for ut in reserve),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )
+        for ut, _frac in by_frac[:remaining]:
+            floors[ut] += 1
+    return {ut: n for ut, n in floors.items() if n > 0}
+
+
+def motorpool_projected_counts(
+    motorpools: list[MotorpoolGroundObject], cap: int
+) -> list[dict[GroundUnitType, int]]:
+    """Project one shared reserve pool across a CP's motorpool locations."""
+    reserve = reserve_armor_for(motorpools[0].control_point)
+    selected = _select_capped(reserve, cap)
+    per_tgo: list[dict[GroundUnitType, int]] = [{} for _ in motorpools]
+    slot = 0
+    for unit_type, count in selected.items():
+        for _ in range(count):
+            bucket = per_tgo[slot % len(motorpools)]
+            bucket[unit_type] = bucket.get(unit_type, 0) + 1
+            slot += 1
+    return per_tgo
+
+
+def motorpool_rendered_unit_count(
+    tgo: MotorpoolGroundObject, motorpool_enabled: bool, spawn_cap: int
+) -> int:
+    """Return the alive units in the current or next motorpool snapshot."""
+    if not motorpool_enabled or spawn_cap <= 0:
+        return 0
+    motorpools = [
+        candidate
+        for candidate in tgo.control_point.ground_objects
+        if isinstance(candidate, MotorpoolGroundObject)
+    ]
+    if tgo not in motorpools:
+        return 0
+    projected_count = sum(
+        motorpool_projected_counts(motorpools, spawn_cap)[
+            motorpools.index(tgo)
+        ].values()
+    )
+    if tgo.groups:
+        # Groups are ephemeral and may outlive a reserve decrement from the prior
+        # mission. Never plan more units than the next current snapshot can render.
+        return min(tgo.alive_unit_count, projected_count)
+    return projected_count
+
+
 NAME_BY_CATEGORY = {
     "ewr": "Early Warning Radar",
     "aa": "AA Defense Site",
     "allycamp": "Camp",
     "ammo": "Ammo depot",
-    "armor": "Armor group",
+    "armor": "Reserve Armor Group",
     "coastal": "Coastal defense",
     "commandcenter": "Command Center",
     "comms": "Communications tower",
@@ -67,7 +135,7 @@ class TheaterGroundObject(MissionTarget, SidcDescribable, ABC):
         control_point: ControlPoint,
         sea_object: bool,
         task: Optional[GroupTask],
-        hide_on_mfd: bool = False,
+        hide_on_mfd: Optional[bool] = None,
     ) -> None:
         super().__init__(name, location)
         self.id = uuid.uuid4()
@@ -76,10 +144,19 @@ class TheaterGroundObject(MissionTarget, SidcDescribable, ABC):
         self.control_point = control_point
         self.sea_object = sea_object
         self.groups: List[TheaterGroup] = []
+        self.in_transit = False
+        self.missile_target: MissileTarget | None = None
         self.original_name = location.original_name
         self._threat_poly: ThreatPoly | None = None
         self.task = task
+        #: The player's own answer for this site, or None to follow the campaign
+        #: settings. A site nobody has touched moves with them.
         self.hide_on_mfd = hide_on_mfd
+
+        #: Where this site was when the turn began, for the settings that only show
+        #: what a picture taken then would have found.
+        self.mfd_seen_at: Optional[Point] = None
+        self.required_unit_classes: set[UnitClass] = set()
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
@@ -88,18 +165,37 @@ class TheaterGroundObject(MissionTarget, SidcDescribable, ABC):
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         state["_threat_poly"] = None
+        state.setdefault("missile_target", None)
         self.__dict__.update(state)
 
     @property
     def sidc_status(self) -> Status:
+        # Health-bar contract (the map bar is milsymbol's condition bar, driven by
+        # this digit): intact -> FULLY_CAPABLE (green), any dead unit -> DAMAGED
+        # (yellow), all dead unrepaired -> DESTROYED (red). "Repairing" is shown
+        # ORANGE by the client, which recolours the yellow bar when the TGO's
+        # `repairing` flag is set (see client tgos/shared.tsx) -- the digit itself
+        # stays DAMAGED for both.
         if self.control_point.captured.is_neutral:
             return Status.PRESENT
         if self.is_dead:
+            if self.has_pending_repairs:
+                return Status.PRESENT_DAMAGED
             return Status.PRESENT_DESTROYED
-        elif self.dead_units:
+        elif self.dead_units or any(unit.health_fraction < 1 for unit in self.units):
             return Status.PRESENT_DAMAGED
         else:
-            return Status.PRESENT
+            return Status.PRESENT_FULLY_CAPABLE
+
+    @property
+    def has_pending_repairs(self) -> bool:
+        for unit in self.units:
+            if unit.alive:
+                continue
+            if unit.repair_turns_remaining is None:
+                continue
+            return True
+        return False
 
     @property
     def standard_identity(self) -> StandardIdentity:
@@ -240,6 +336,25 @@ class TheaterGroundObject(MissionTarget, SidcDescribable, ABC):
         return [unit for unit in self.units if unit.alive]
 
     @property
+    def sead_targets(self) -> list[TheaterUnit]:
+        """The emitters of this site, for a flight that shoots at radars.
+
+        A unit whose type does not resolve is kept: an unregistered mod radar is
+        unknown, not absent. Falls back to the full roster when nothing matches, so a
+        SEAD flight fragged by hand onto a site with no emitter still has a target.
+        """
+        emitters = []
+        for unit in self.strike_targets:
+            try:
+                unit_class = unit.unit_type.unit_class if unit.unit_type else None
+            except StopIteration:
+                emitters.append(unit)
+                continue
+            if unit_class is None or unit_class in SEAD_TARGET_UNIT_CLASSES:
+                emitters.append(unit)
+        return emitters or self.strike_targets
+
+    @property
     def mark_locations(self) -> Iterator[Point]:
         yield self.position
 
@@ -254,6 +369,19 @@ class TheaterGroundObject(MissionTarget, SidcDescribable, ABC):
     @property
     def purchasable(self) -> bool:
         raise NotImplementedError
+
+    @property
+    def sellable(self) -> bool:
+        """Whether the site's units can be disbanded for a refund."""
+        return self.purchasable
+
+    @property
+    def repairable(self) -> bool:
+        """Whether a destroyed group can be rebuilt or repaired, so the map should
+        not treat it as a permanent loss. Re-purchasable groups (SAM/EWR/armor)
+        qualify; BuildingGroundObject overrides this for the building-repair
+        feature (buildings are not purchasable)."""
+        return self.purchasable
 
     @property
     def value(self) -> int:
@@ -329,7 +457,11 @@ class BuildingGroundObject(TheaterGroundObject):
         elif self.category == "derrick":
             entity = LandInstallationEntity.PETROLEUM_FACILITY
         elif self.category == "factory":
-            entity = LandInstallationEntity.MAINTENANCE_FACILITY
+            # A shed with two chimneys, which is what this symbol draws, is a better
+            # picture of a factory than the wrench APP-6 keeps for a maintenance depot.
+            # The map letters it FTRY, so it is not confused with the other stores that
+            # share the symbol.
+            entity = LandInstallationEntity.WAREHOUSE_STORAGE_FACILITY
         elif self.category == "farp":
             entity = LandInstallationEntity.HELICOPTER_LANDING_SITE
         elif self.category == "fuel":
@@ -365,6 +497,33 @@ class BuildingGroundObject(TheaterGroundObject):
     @property
     def purchasable(self) -> bool:
         return False
+
+    @property
+    def repairable(self) -> bool:
+        # Buildings aren't purchasable, but the building-repair feature lets the
+        # player rebuild income buildings (those with a repair cost). Repair is
+        # available manually whenever the building has a repair cost -- it does
+        # not require the (auto-repair) automate_building_repairs setting -- so
+        # the map should not treat such a destroyed building as a permanent loss.
+        return self.repair_cost() > 0
+
+    def repair_cost(self) -> float:
+        # IADS infrastructure is priced directly rather than off income, which it does
+        # not have. The multipliers and bonuses below are all income-shaped, so they do
+        # not apply.
+        flat_cost = IADS_REPAIR_COST.get(self.category)
+        if flat_cost is not None:
+            return flat_cost
+        income = REWARDS.get(self.category, 0.0)
+        if income <= 0:
+            return 0.0
+        settings = self.control_point.coalition.game.settings
+        cost = income * settings.building_repair_income_multiplier
+        if self.is_ammo_depot:
+            cost += settings.building_repair_ammo_bonus
+        if self.is_factory:
+            cost += settings.building_repair_factory_bonus
+        return cost
 
 
 class NavalGroundObject(TheaterGroundObject, ABC):
@@ -468,7 +627,11 @@ class MissileSiteGroundObject(TheaterGroundObject):
 
     @property
     def purchasable(self) -> bool:
-        return self.control_point.coalition.game.turn == 0
+        return True
+
+    @property
+    def sellable(self) -> bool:
+        return True
 
     @property
     def should_head_to_conflict(self) -> bool:
@@ -524,6 +687,56 @@ class CoastalSiteGroundObject(TheaterGroundObject):
             yield mission_type
 
 
+#: What makes a site read as a missile battery rather than a bare radar. TELAR and
+#: SHORAD carry their own launcher; MANPAD and AAA are what a point-defence-only site
+#: fields, and both still shoot.
+LAUNCHER_CLASSES = frozenset(
+    {
+        UnitClass.LAUNCHER,
+        UnitClass.TELAR,
+        UnitClass.SHORAD,
+        UnitClass.MANPAD,
+        UnitClass.AAA,
+    }
+)
+
+
+#: What counts as having something to look with, for a site with nothing that shoots.
+RADAR_CLASSES = frozenset(
+    {
+        UnitClass.EARLY_WARNING_RADAR,
+        UnitClass.SEARCH_RADAR,
+        UnitClass.SEARCH_TRACK_RADAR,
+        UnitClass.SPECIALIZED_RADAR,
+        UnitClass.TRACK_RADAR,
+    }
+)
+
+#: The slots a campaign puts a missile battery or a gun in.
+AIR_DEFENCE_TASKS = frozenset(
+    {
+        GroupTask.AAA,
+        GroupTask.LORAD,
+        GroupTask.MERAD,
+        GroupTask.POINT_DEFENSE,
+        GroupTask.SHORAD,
+    }
+)
+
+
+class AirDefenceKind(Enum):
+    """The three things an air-defence site can be, whatever it was created as."""
+
+    #: Denies GPS. Has no radar and cues nobody.
+    JAMMER = "jammer"
+
+    #: Shoots: a missile battery or a gun.
+    BATTERY = "battery"
+
+    #: Looks: an early-warning or search radar.
+    RADAR = "radar"
+
+
 class IadsGroundObject(TheaterGroundObject, ABC):
     def __init__(
         self,
@@ -541,6 +754,72 @@ class IadsGroundObject(TheaterGroundObject, ABC):
             sea_object=False,
             task=task,
         )
+
+    @property
+    def carries_gps_jammer(self) -> bool:
+        """Whether this site jams GPS, whatever slot the campaign put it in.
+
+        Read off the units rather than off the class, the same way the map symbol is:
+        a radar site, a missile battery and a jamming site are interchangeable now.
+        """
+        return any(
+            unit.unit_type is not None and getattr(unit.unit_type, "gps_jamming", None)
+            for group in self.groups
+            for unit in group.units
+        )
+
+    @property
+    def air_defence_kind(self) -> AirDefenceKind:
+        """What this site is, read off what is parked there.
+
+        A radar site, a missile battery and a jamming site are interchangeable on the
+        map -- any of the three can be bought where any one of them stands -- so the
+        class the campaign created the site as does not answer the question. A jammer
+        wins over everything (it is the thing worth telling apart), then a launcher,
+        then a radar.
+
+        An emptied site has nothing to read: a captured or disbanded one keeps no
+        units at all. What is left is the slot the campaign gave it, which is what it
+        will be again the moment something is bought there.
+        """
+        if self.carries_gps_jammer:
+            return AirDefenceKind.JAMMER
+
+        shoots = False
+        sees = False
+        for group in self.groups:
+            for unit in group.units:
+                unit_type = unit.unit_type
+                if unit_type is not None and getattr(unit_type, "gps_jamming", None):
+                    continue
+                unit_class = getattr(unit_type, "unit_class", None)
+                if unit_class in LAUNCHER_CLASSES:
+                    shoots = True
+                elif unit_class in RADAR_CLASSES:
+                    sees = True
+        if shoots:
+            return AirDefenceKind.BATTERY
+        if sees:
+            return AirDefenceKind.RADAR
+
+        if self.task is GroupTask.EARLY_WARNING_RADAR:
+            return AirDefenceKind.RADAR
+        if self.task in AIR_DEFENCE_TASKS:
+            return AirDefenceKind.BATTERY
+        return (
+            AirDefenceKind.RADAR
+            if isinstance(self, EwrGroundObject)
+            else AirDefenceKind.BATTERY
+        )
+
+    @property
+    def symbol_set_and_entity(self) -> tuple[SymbolSet, Entity]:
+        kind = self.air_defence_kind
+        if kind is AirDefenceKind.JAMMER:
+            return SymbolSet.LAND_UNIT, LandUnitEntity.ELECTRONIC_WARFARE_JAMMING
+        if kind is AirDefenceKind.BATTERY:
+            return SymbolSet.LAND_UNIT, LandUnitEntity.AIR_DEFENSE
+        return SymbolSet.LAND_EQUIPMENT, LandEquipmentEntity.RADAR
 
     def mission_types(self, for_player: Player) -> Iterator[FlightType]:
         from game.ato import FlightType
@@ -577,23 +856,10 @@ class SamGroundObject(IadsGroundObject):
             task=task,
         )
 
-    @property
-    def sidc_status(self) -> Status:
-        if self.control_point.captured.is_neutral:
-            return Status.PRESENT
-        if self.is_dead:
-            return Status.PRESENT_DESTROYED
-        elif self.dead_units:
-            if self.max_threat_range() > meters(0):
-                return Status.PRESENT
-            else:
-                return Status.PRESENT_DAMAGED
-        else:
-            return Status.PRESENT_FULLY_CAPABLE
-
-    @property
-    def symbol_set_and_entity(self) -> tuple[SymbolSet, Entity]:
-        return SymbolSet.LAND_UNIT, LandUnitEntity.AIR_DEFENSE
+    # sidc_status: no override. A SAM used to report PRESENT (no bar) when damaged
+    # but still projecting a threat ring, hiding real damage from the map; the base
+    # green/yellow/red contract applies now, and the ring already tells whether the
+    # site still threatens.
 
     def mission_types(self, for_player: Player) -> Iterator[FlightType]:
         from game.ato import FlightType
@@ -613,10 +879,13 @@ class SamGroundObject(IadsGroundObject):
 
     @property
     def purchasable(self) -> bool:
-        return True
+        return not getattr(self, "in_transit", False)
 
 
 class VehicleGroupGroundObject(TheaterGroundObject):
+    reserve_from_base: bool = False
+    absorbed_into_frontline: uuid.UUID | None = None
+
     def __init__(
         self,
         name: str,
@@ -646,7 +915,9 @@ class VehicleGroupGroundObject(TheaterGroundObject):
 
     @property
     def purchasable(self) -> bool:
-        return True
+        return self.absorbed_into_frontline is None and not getattr(
+            self, "in_transit", False
+        )
 
     @property
     def should_head_to_conflict(self) -> bool:
@@ -662,9 +933,8 @@ class VehicleGroupGroundObject(TheaterGroundObject):
 
 class MotorpoolGroundObject(TheaterGroundObject):
     """A control point's not-deployed reserve armor, rendered as a stationary,
-    strikeable vehicle park. Its .groups are populated ephemerally each mission
-    from the current reserve slice (see MotorpoolPopulator); units are NOT
-    persisted."""
+    strikeable vehicle park. Its groups and projection keys are a persisted cache
+    reconciled from the current reserve slice by MotorpoolPopulator."""
 
     def __init__(
         self,
@@ -682,9 +952,24 @@ class MotorpoolGroundObject(TheaterGroundObject):
             task=task,
         )
         # group-id -> the exact GroundUnitType variant that group represents, so
-        # the renderer decrements the right base.armor key. Set by the populator;
-        # never persisted meaningfully (groups are rebuilt each mission).
+        # the renderer decrements the right base.armor key.
         self.motorpool_unit_types: dict[int, GroundUnitType] = {}
+        # unit-id -> stable desired-projection key. Persisted with groups so an
+        # unchanged reconciliation preserves object identity and campaign IDs.
+        self.motorpool_projection_keys: dict[int, tuple[uuid.UUID, str, int]] = {}
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = super().__getstate__()
+        # Reserve vehicles are rendered per mission from the current base reserve;
+        # never persist their generated groups or the renderer's lookup map.
+        state["groups"] = []
+        state["motorpool_unit_types"] = {}
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        state["groups"] = []
+        state["motorpool_unit_types"] = {}
+        super().__setstate__(state)
 
     @property
     def symbol_set_and_entity(self) -> tuple[SymbolSet, Entity]:
@@ -705,6 +990,13 @@ class MotorpoolGroundObject(TheaterGroundObject):
         return False
 
     @property
+    def repairable(self) -> bool:
+        # The base default ties this to purchasable, which is wrong here: the
+        # motorpool is a view of the reserve, so buying ground units refills it.
+        # A flattened one is never a permanent loss.
+        return True
+
+    @property
     def should_head_to_conflict(self) -> bool:
         # Parked/unmanned: never advances to the front.
         return False
@@ -718,18 +1010,19 @@ class MotorpoolGroundObject(TheaterGroundObject):
 
     @property
     def sidc_status(self) -> Status:
-        # A motorpool is a live reserve projection: empty on the strategic map is its
-        # normal resting state (vehicles populate ephemerally at mission-gen), not
-        # destruction. Always render as a present depot — never damaged/destroyed.
+        # A motorpool is a live reserve projection: empty is a valid disabled or
+        # zero-reserve state, not destruction. Always render as a present depot —
+        # never damaged/destroyed.
         # is_dead is deliberately left intact so AI target-selection, capture, and
         # IADS logic (which read is_dead, not sidc_status) are unaffected.
         return Status.PRESENT
 
     def clear(self) -> None:
-        # Keep the group-id -> unit-type map in lockstep with groups so a wiped
-        # motorpool (e.g. on capture) leaves no dangling group-id keys behind.
+        # Keep persisted projection metadata in lockstep with groups so a wiped
+        # motorpool (e.g. on capture) leaves no dangling keys behind.
         super().clear()
         self.motorpool_unit_types = {}
+        self.motorpool_projection_keys = {}
 
 
 class EwrGroundObject(IadsGroundObject):
@@ -748,16 +1041,12 @@ class EwrGroundObject(IadsGroundObject):
         )
 
     @property
-    def symbol_set_and_entity(self) -> tuple[SymbolSet, Entity]:
-        return SymbolSet.LAND_EQUIPMENT, LandEquipmentEntity.RADAR
-
-    @property
     def capturable(self) -> bool:
         return False
 
     @property
     def purchasable(self) -> bool:
-        return True
+        return not getattr(self, "in_transit", False)
 
 
 class ShipGroundObject(NavalGroundObject):

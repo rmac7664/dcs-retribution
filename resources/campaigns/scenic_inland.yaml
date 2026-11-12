@@ -1,7 +1,7 @@
 ---
 name: Persian Gulf - Scenic Route 2 - Dust To Dust
 theater: Persian Gulf
-authors: Fuzzle
+authors: Fuzzle, modified by juanjux
 description: <p>A continuation of Scenic Route. A NATO coalition pushes inland along a protracted axis of advance. Built with helicopters/FOB-based gameplay in mind. <p><strong>Backstory:</strong> With Iran's coastal defences pacified and their forces pushed inland, a beleaguered US Navy is reinforced by a NATO coalition task force. The going will not be easy however; Iran has assembled the full might of its armoured and mechanized divisions alongside rotary support to defend their heartland. The conflict intensifies.</p>
 version: "10.7"
 advanced_iads: true
@@ -14,6 +14,12 @@ recommended_player_money: 1200
 recommended_enemy_money: 1400
 recommended_player_income_multiplier: 1.1
 recommended_enemy_income_multiplier: 0.7
+# GPS jamming: one site on the enemy EWR marker whose 15 nm radius covers the
+# most of its own air defences. No radar on it, so it is a STRIKE target, not
+# SEAD, and a satellite-guided weapon aimed inside the bubble lands wide.
+ground_forces:
+  FOB Kabutarkhan-67: GPS Jamming Site (Red)
+
 squadrons:
   # Bandar Abbas Intl
   2:
@@ -38,6 +44,7 @@ squadrons:
         - 101st Combat Aviation Brigade
         #US Army UH-60
       size: 6
+      pilots: 10
   # Havadarya
   9:
     - primary: BARCAP
@@ -46,11 +53,13 @@ squadrons:
       - 493rd FS
       #USAF F-15C
       size: 12 
+      pilots: 16
     - primary: BAI
       secondary: air-to-ground
       aircraft:
       - A-10C Thunderbolt II (Suite 7)
       size: 10
+      pilots: 14
       #USAF A-10CI
   #BLUFOR CVN
   BLUFOR CVN:
@@ -66,10 +75,12 @@ squadrons:
       aircraft:
         - VAW-125
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - VS-35 (Tanker)
       size: 4
+      pilots: 8
   # BLUFOR LHA
   BLUFOR LHA:
     - primary: BAI
@@ -81,27 +92,45 @@ squadrons:
       aircraft:
         - HMLA-169 (UH-1H)
       size: 4
+      pilots: 8
   # BLUFOR Start FOB
   FOB Anguran:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - OH-58D Kiowa Warrior
+      size: 2
+      pilots: 6
     - primary: CAS
       secondary: air-to-ground
       aircraft:
         - SA 342M Gazelle
         #French Gazelle
       size: 4
+      pilots: 8
     - primary: CAS
       secondary: air-to-ground
       aircraft:
         - Wolfpack, 1-82 ARB
         #US Army Apache AH-64D
       size: 2
+      pilots: 6
   # OPFOR L1F1
   FOB Tang-e Dalan:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - Mi-17 Hip
+      size: 2
+      pilots: 6
     - primary: CAS
       secondary: air-to-ground
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L1F2
   FOB Fars Border:
     - primary: CAS
@@ -109,6 +138,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L1F2 split
   FOB Bikuyeh:
     - primary: CAS
@@ -116,6 +146,7 @@ squadrons:
       aircraft:
         - Mi-28N Havoc
       size: 6
+      pilots: 10
   # Lar 
   11:
     - primary: BARCAP
@@ -123,6 +154,7 @@ squadrons:
       aircraft:
         - MiG-21bis Fishbed-N
       size: 5
+      pilots: 9
   # OPFOR L2F1
   FOB Mansurabad:
     - primary: CAS
@@ -130,6 +162,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L2F2
   FOB Jahrom:
     - primary: CAS
@@ -137,6 +170,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L2F3
   FOB Tower:
     - primary: CAS
@@ -144,6 +178,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L2F3 split
   FOB Nouderan:
     - primary: CAS
@@ -151,16 +186,19 @@ squadrons:
       aircraft:
         - Mi-28N Havoc
       size: 6
+      pilots: 10
   # Shiraz Intl
   19:
     - primary: AEW&C
       aircraft:
         - A-50
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - IL-78M
       size: 2
+      pilots: 6
     - primary: BARCAP
       secondary: any
       aircraft:
@@ -178,6 +216,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 4
+      pilots: 8
     - primary: SEAD
       secondary: air-to-ground
       aircraft:
@@ -189,6 +228,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L3F2
   FOB Tashk:
     - primary: CAS
@@ -196,6 +236,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L3F3
   FOB Chahak:
     - primary: CAS
@@ -203,6 +244,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L3F4
   FOB Plainhold:
     - primary: CAS
@@ -210,6 +252,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L3F4 split
   FOB Robat:
     - primary: CAS
@@ -217,6 +260,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L3F5
   FOB Plainguard:
     - primary: CAS
@@ -224,6 +268,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L3F6
   FOB Hasanabad:
     - primary: CAS
@@ -231,6 +276,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L3F6 split
   FOB Najafabad:
     - primary: CAS
@@ -238,6 +284,7 @@ squadrons:
       aircraft:
         - Mi-28N Havoc
       size: 6
+      pilots: 10
   # OPFOR L3F7
   FOB Kabutarkhan:
     - primary: CAS
@@ -245,6 +292,7 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # OPFOR L3F8
   FOB Sa'di:
     - primary: CAS
@@ -252,20 +300,24 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
   # Kerman
   18:
     - primary: AEW&C
       aircraft:
         - A-50
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - IL-78M
       size: 2
+      pilots: 6
     - primary: Transport
       aircraft:
         - IL-78MD
       size: 2
+      pilots: 6
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
@@ -275,6 +327,7 @@ squadrons:
       aircraft:
         - MiG-29A Fulcrum-A
       size: 6
+      pilots: 10
     - primary: Strike
       secondary: air-to-ground
       aircraft:
@@ -284,3 +337,4 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 6
+      pilots: 10

@@ -17,13 +17,16 @@ description:
   Airbase threat range is set to 20 for this campaign to optimise autoplanner.</p>
 miz: operation_velvet_thunder.miz
 performance: 1
+advanced_iads: true
 recommended_start_date: 1970-11-29
 version: "10.9"
 settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: false
   airbase_threat_range: 20
   a4_skyhawk: true
   f111c: true
-  hercules: true
   ov10a_bronco: true
   vietnamwarvessels: true
   squadron_start_full: true
@@ -35,56 +38,73 @@ squadrons:
       aircraft:
         - F-5E Tiger II
       size: 8
+      pilots: 12
     - primary: CAS
       secondary: any
       aircraft:
         - OV-10A Bronco
       size: 8
+      pilots: 12
     - primary: SEAD
       secondary: any
       aircraft:
         - F-4E-45MC Phantom II
       size: 8
+      pilots: 12
     - primary: BAI
       secondary: any
       aircraft:
         - F-111C Aardvark
         - F-4E-45MC Phantom II
       size: 8
+      pilots: 12
     - primary: SEAD Sweep
       secondary: any
       aircraft:
         - F-100D Super Sabre
       size: 8
+      pilots: 12
     - primary: Strike
       secondary: any
       aircraft:
         - B-52H Stratofortress
       size: 4
+      pilots: 8
     - primary: Air Assault
       secondary: any
       aircraft:
         - UH-1H Iroquois
       size: 4
+      pilots: 8
     - primary: Transport
       secondary: any
       aircraft:
         - CH-47F Block I
       size: 4
+      pilots: 8
   #Antonio B. Won Pat Intl
   4:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - OV-10A Bronco
+        - UH-1H Iroquois
+      size: 2
+      pilots: 6
     - primary: Air Assault
       secondary: any
       aircraft:
-        - C-130J-30 Super Hercules
         - C-130J-30
       size: 8
+      pilots: 12
     - primary: Armed Recon
       secondary: any
       aircraft:
         - A-1H Skyraider
         - F-100D Super Sabre
       size: 8
+      pilots: 12
   #Blue CV
   Blue-CV:
     - primary: BARCAP
@@ -93,20 +113,24 @@ squadrons:
         - F-8E Crusader
         - A-4E Skyhawk
       size: 8
+      pilots: 12
     - primary: BAI
       secondary: any
       aircraft:
         - A-4E Skyhawk
       size: 8
+      pilots: 12
     - primary: DEAD
       secondary: any
       aircraft:
         - A-6E Intruder
       size: 8
+      pilots: 12
     - primary: AEW&C
       aircraft:
         - E-2C Hawkeye
       size: 2
+      pilots: 6
   #Rota Intl
   1:
     - primary: Escort
@@ -115,6 +139,7 @@ squadrons:
         - MiG-17F Fresco-C
         - MiG-19P Farmer-B
       size: 8
+      pilots: 12
   #Tinian Intl
   3:
     - primary: Air Assault
@@ -122,17 +147,28 @@ squadrons:
       aircraft:
         - Mi-8MTV2 Hip
       size: 4
+      pilots: 8
   #Saipan Intl
   2:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - Mi-8MTV2 Hip
+      size: 2
+      pilots: 6
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - MiG-21MF Fishbed-J
         - MiG-21bis Fishbed-N
       size: 8
+      pilots: 12
     - primary: Escort
       secondary: air-to-ground
       aircraft:
         - MiG-19P Farmer-B
 
       size: 8
+
+      pilots: 12

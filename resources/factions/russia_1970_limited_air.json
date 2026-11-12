@@ -10,7 +10,8 @@
     "Mi-24V Hind-E",
     "Mi-8MTV2 Hip",
     "MiG-19P Farmer-B",
-    "MiG-21bis Fishbed-N"
+    "MiG-21bis Fishbed-N",
+    "L-39ZA Albatros"
   ],
   "frontline_units": [
     "BMD-1",
@@ -35,7 +36,9 @@
     "Infantry RPG"
   ],
   "preset_groups": [
+    "SA-5/S-200",
     "SA-2/S-75",
+    "SA-2/SA-3 Mixed Site",
     "SA-3/S-125",
     "SA-6",
     "SA-11",
@@ -63,3 +66,4 @@
   "has_jtac": false,
   "doctrine": "coldwar"
 }
+

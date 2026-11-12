@@ -20,7 +20,6 @@
     "C-101CC Aviojet",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "C-47 Dakota",
     "CH-47D",
     "CH-47F Block I",
@@ -30,6 +29,7 @@
     "F-14B(U) Tomcat",
     "F-15C Eagle",
     "F-15E Strike Eagle (Suite 4+)",
+    "F-16A",
     "F-16CM Fighting Falcon (Block 50)",
     "F/A-18C Hornet (Lot 20)",
     "F-4E Phantom II",
@@ -121,5 +121,12 @@
   ],
   "has_jtac": true,
   "jtac_unit": "MQ-9 Reaper",
-  "doctrine": "coldwar"
+  "doctrine": "coldwar",
+  "weapons_introduction_year_overrides": {
+    "4 x BGM-71D TOW ATGM": 1970,
+    "AGM-84D": 1979,
+    "AGM-65D": 1975,
+    "2xAGM-65D": 1975,
+    "3xAGM-65D": 1975
+  }
 }

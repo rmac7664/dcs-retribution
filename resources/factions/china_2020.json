@@ -15,7 +15,8 @@
     "Mi-24P Hind-F",
     "Mi-8MTV2 Hip",
     "Su-30MKK Flanker-G",
-    "H-6J Badger"
+    "H-6J Badger",
+    "WingLoong-I"
   ],
   "awacs": [
     "KJ-2000"
@@ -62,7 +63,8 @@
     "HQ-7",
     "HQ-22",
     "Silkworm",
-    "Chinese Navy"
+    "Chinese Navy",
+    "GPS Jamming Site (Red)"
   ],
   "naval_units": [
     "Type 052B Destroyer",
@@ -81,11 +83,8 @@
     "EWR 1L13",
     "EWR 55G6",
     "AAA ZU-23 Closed Emplacement",
-    "[CH] LD-3000 C-RAM Mobile",
-    "[CH] LD-3000 C-RAM Stationary",
-    "[CH] PGZ-09 SPAAG",
-    "[CH] PGZ-95 SPAAG",
-    "[CH] HQ-17A SHORAD"
+    "HEMTT C-RAM Phalanx",
+    "SA-15 Tor"
   ],
   "carrier_names": [
     "001 Liaoning",

@@ -17,7 +17,6 @@
     "B-52H Stratofortress",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "C-17A",
     "CH-47D",
     "CH-47F Block I",
@@ -45,7 +44,9 @@
     "UH-1H Iroquois",
     "UH-60A",
     "UH-60L",
-    "MH-60L DAP"
+    "MH-60L DAP",
+    "RQ-1A Predator",
+    "MQ-9 Reaper"
   ],
   "awacs": [
     "E-2C Hawkeye",
@@ -88,7 +89,8 @@
   ],
   "preset_groups": [
     "Patriot",
-    "NASAMS AIM-120C"
+    "NASAMS AIM-120C",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "FFG Oliver Hazard Perry",

@@ -37,7 +37,8 @@
     "Su-34 Fullback",
     "Tu-142 Bear-F",
     "Tu-22M3 Backfire-C",
-    "[CH] Tu-160M2"
+    "[CH] Tu-160M2",
+    "WingLoong-I"
   ],
   "awacs": [
     "A-50"
@@ -85,7 +86,8 @@
     "SA-10/S-300PS",
     "SA-10B/S-300PS",
     "SA-11",
-    "S-350"
+    "S-350",
+    "GPS Jamming Site (Red)"
   ],
   "naval_units": [
     "Project 22160 Patrol Ship [CH]",

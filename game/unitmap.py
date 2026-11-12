@@ -1,9 +1,10 @@
-"""Maps generated units back to their Retribution types."""
+"""Maps generated units back to their Escalation types."""
 
 from __future__ import annotations
 
 import itertools
 import math
+import re
 from dataclasses import dataclass
 from typing import Dict, Optional, Any, TYPE_CHECKING
 
@@ -58,13 +59,26 @@ class AirliftUnits:
     transfer: TransferOrder
 
 
+# Compatibility with results from missions generated before TIC was retired. TIC
+# despawns each late-activated original group and respawns every unit as its
+# own single-unit group via MOOSE SPAWN, which renames units to
+# "<original group name>-<index>#<spawn:03d>-<unit:02d>" (the "-<index>#<NNN>"
+# segment repeats when TIC respawns dismounting infantry). The original group
+# name is recovered by stripping those suffixes.
+TIC_CLONE_NAME = re.compile(r"^(?P<group>.+?)(?:-\d+#\d{3})+-\d{2}$")
+
+
 class UnitMap:
     def __init__(self) -> None:
+        # Final generated ground registry, used to verify AFAC discovery credits.
+        self.afac_targets: dict[str, tuple[str, int]] = {}
         self.aircraft: Dict[str, FlyingUnit] = {}
         self.airfields: Dict[str, Airfield] = {}
         self.front_line_units: Dict[str, FrontLineUnit] = {}
+        self.front_line_groups: Dict[str, FrontLineUnit] = {}
         self.motorpool_units: Dict[str, FrontLineUnit] = {}
         self.theater_objects: Dict[str, TheaterUnitMapping] = {}
+        self.ground_transport_cargo: dict[str, list[TheaterUnitMapping]] = {}
         self.scenery_objects: Dict[str, SceneryObjectMapping] = {}
         self.convoys: Dict[str, ConvoyUnit] = {}
         self.cargo_ships: Dict[str, CargoShip] = {}
@@ -96,6 +110,10 @@ class UnitMap:
     def add_front_line_units(
         self, group: VehicleGroup, origin: ControlPoint, unit_type: GroundUnitType
     ) -> None:
+        group_name = str(group.name)
+        if group_name in self.front_line_groups:
+            raise RuntimeError(f"Duplicate front line group: {group_name}")
+        self.front_line_groups[group_name] = FrontLineUnit(unit_type, origin)
         for unit in group.units:
             # The actual name is a String (the pydcs translatable string), which
             # doesn't define __eq__.
@@ -106,6 +124,23 @@ class UnitMap:
 
     def front_line_unit(self, name: str) -> Optional[FrontLineUnit]:
         return self.front_line_units.get(name, None)
+
+    def front_line_unit_from_tic_clone(self, name: str) -> Optional[FrontLineUnit]:
+        """Maps a dead TIC clone unit back to its original frontline group.
+
+        Each clone is a single-unit group, so every clone death corresponds to
+        exactly one original unit loss. Clones share their group's unit type
+        and origin, which is all the debriefing needs.
+        """
+        match = TIC_CLONE_NAME.match(name)
+        if match is None:
+            return None
+        # getattr for save compat: a UnitMap pickled by an older build has no
+        # front_line_groups attribute.
+        groups = getattr(self, "front_line_groups", None)
+        if not groups:
+            return None
+        return groups.get(match.group("group"))
 
     def add_motorpool_units(
         self, group: VehicleGroup, origin: ControlPoint, unit_type: GroundUnitType

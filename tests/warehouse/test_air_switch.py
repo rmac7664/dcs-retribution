@@ -247,6 +247,7 @@ def convoy_run(
         origin,
         destination,
         trucks,
+        player=origin.captured,
         supplies=SupplyLoad(munitions=munitions, fuel_kg=fuel, tons=tons, carriers=2),
     )
     run.transport = FakeConvoy()

@@ -28,6 +28,7 @@ recommended_player_faction:
     - SH-60B Seahawk
     - UH-1H Iroquois
     - UH-60L
+    - RQ-1A Predator
   awacs:
     - E-2C Hawkeye
   tankers:
@@ -179,6 +180,7 @@ description:
 version: "10.7"
 miz: operation_allied_sword.miz
 performance: 2
+advanced_iads: true
 recommended_start_date: 2004-07-17
 recommended_player_money: 1200
 recommended_enemy_money: 1500
@@ -192,6 +194,7 @@ squadrons:
       aircraft:
         - VF-143
       size: 14
+      pilots: 18
     - primary: SEAD
       secondary: any
       aircraft:
@@ -200,19 +203,23 @@ squadrons:
       aircraft:
         - VAW-125
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - VS-35 (Tanker)
       size: 4
+      pilots: 8
     - primary: Anti-ship
       secondary: air-to-ground
       aircraft:
         - VS-35
       size: 8
+      pilots: 12
     - primary: Transport
       aircraft:
         - HSM-40
       size: 2
+      pilots: 6
   #BLUFOR LHA
   Naval-3:
     - primary: BAI
@@ -220,16 +227,19 @@ squadrons:
       aircraft:
         - VMA-214
       size: 10
+      pilots: 14
     - primary: Transport
       secondary: air-to-ground
       aircraft:
         - HMLA-269 (UH-1H)
       size: 4
+      pilots: 8
     - primary: CAS
       secondary: air-to-ground
       aircraft:
         - HMLA-269 (AH-1W)
       size: 6
+      pilots: 10
   # OPFOR CVN
   Naval-2:
     - primary: BARCAP
@@ -247,8 +257,16 @@ squadrons:
       aircraft:
         - Mi-24V Hind-E
       size: 6
+      pilots: 10
   #Haifa
   13:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "RQ-1A Predator"
+      size: 2
+      pilots: 6
     - primary: CAS
       secondary: air-to-ground
       aircraft:
@@ -265,20 +283,24 @@ squadrons:
         - F-4E-45MC Phantom II
         - 201th Squadron
       size: 16
+      pilots: 20
     - primary: Refueling
       aircraft:
         - VMGR-352
       size: 2
+      pilots: 6
     - primary: Strike
       secondary: any
       aircraft:
         - 69th Squadron
       size: 12
+      pilots: 16
     - primary: BAI
       secondary: any
       aircraft:
         - 110th Squadron
       size: 16
+      pilots: 20
   # Damascus
   7:
     - primary: TARCAP
@@ -299,6 +321,13 @@ squadrons:
         - SA 342L Gazelle
   # Beirut-Rafic Hariri
   6:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - SA 342L Gazelle
+      size: 2
+      pilots: 6
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
@@ -318,6 +347,7 @@ squadrons:
       aircraft:
         - SA 342L Gazelle
       size: 6
+      pilots: 10
   # OPFOR Second inland FOB
   FOB Homs:
     - primary: CAS
@@ -325,6 +355,7 @@ squadrons:
       aircraft:
         - SA 342L Gazelle
       size: 6
+      pilots: 10
   # Palmyra
   28:
     - primary: BARCAP
@@ -333,11 +364,13 @@ squadrons:
         - MiG-21bis Fishbed-N
         - MiG-29A Fulcrum-A
       size: 12
+      pilots: 16
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Su-24M Fencer-D
       size: 10
+      pilots: 14
   # Bassel Al-Assad
   21:
     - primary: TARCAP
@@ -352,14 +385,17 @@ squadrons:
       aircraft:
         - IL-78M
       size: 1
+      pilots: 5
     - primary: Transport
       aircraft:
         - IL-76MD
       size: 1
+      pilots: 5
     - primary: AEW&C
       aircraft:
         - A-50
       size: 1
+      pilots: 5
     - primary: Strike
       secondary: air-to-ground
       aircraft:
@@ -375,6 +411,7 @@ squadrons:
       aircraft:
         - Mi-24V Hind-E
       size: 6
+      pilots: 10
   # OPFOR Second coastal FOB
   FOB Samandag:
     - primary: CAS
@@ -382,6 +419,7 @@ squadrons:
       aircraft:
         - Mi-24V Hind-E
       size: 6
+      pilots: 10
   # Aleppo
   27:
     - primary: BARCAP
@@ -394,6 +432,7 @@ squadrons:
       aircraft:
         - Mi-24V Hind-E
       size: 8
+      pilots: 12
   # Kuweires
   31:
     - primary: TARCAP
@@ -406,6 +445,7 @@ squadrons:
       aircraft:
         - MiG-29A Fulcrum-A
       size: 8
+      pilots: 12
     - primary: Strike
       secondary: air-to-ground
       aircraft:
@@ -416,3 +456,9 @@ squadrons:
       aircraft:
         - Mi-8MTV2 Hip
       size: 2
+      pilots: 6
+
+settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: false

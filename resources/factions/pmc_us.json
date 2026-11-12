@@ -9,7 +9,8 @@
     "MB-339A",
     "Mi-8MTV2 Hip",
     "SA 342M Gazelle",
-    "UH-1H Iroquois"
+    "UH-1H Iroquois",
+    "MQ-9 Reaper"
   ],
   "frontline_units": [
     "FV510 Warrior",
@@ -29,7 +30,9 @@
   "air_defense_units": [
     "M1097 Heavy HMMWV Avenger"
   ],
-  "preset_groups": [],
+  "preset_groups": [
+    "GPS Jamming Site (Blue)"
+  ],
   "naval_units": [],
   "missiles": [],
   "has_jtac": true,

@@ -13,6 +13,7 @@ from dcs.task import (
     FighterSweep,
     GroundAttack,
     Nothing,
+    OptECMUsing,
     OptROE,
     OptRTBOnBingoFuel,
     OptRTBOnOutOfAmmo,
@@ -45,6 +46,7 @@ from game.ato.flightplans.packagerefueling import PackageRefuelingFlightPlan
 from game.ato.flightplans.shiprecoverytanker import RecoveryTankerFlightPlan
 from game.ato.flightplans.theaterrefueling import TheaterRefuelingFlightPlan
 from game.missiongenerator.missiondata import MissionData
+from game.squadrons import morale as morale_rules
 from game.utils import nautical_miles, knots, feet
 
 
@@ -72,6 +74,28 @@ class AircraftBehavior:
             self.configure_refueling(group, flight)
         elif self.task == FlightType.RECOVERY:
             self.configure_recovery(group, flight)
+        elif self.task.is_afac:
+            from game.ato.afac import enabled
+
+            if not enabled(flight.squadron.settings):
+                raise ValueError(
+                    "AFAC requires Realistic CAS AFAC search missions enabled"
+                )
+            self.configure_behavior(
+                flight,
+                group,
+                roe=OptROE.Values.WeaponHold,
+                rtb_on_bingo=True,
+                ai_unlimited_fuel=False,
+            )
+            # Observation does not consume weapons; shaken pilots must not RTB
+            # immediately because an unarmed aircraft is already Winchester.
+            group.points[0].tasks[:] = [
+                t for t in group.points[0].tasks if not isinstance(t, OptRTBOnOutOfAmmo)
+            ]
+            # Main-task metadata labels the flight in F10. Native FAC tasks
+            # remain absent; Realistic CAS owns discovery and designation.
+            group.task = AFAC.name
         elif self.task in [FlightType.CAS, FlightType.BAI]:
             self.configure_cas(group, flight)
         elif self.task == FlightType.ARMED_RECON:
@@ -103,6 +127,39 @@ class AircraftBehavior:
             self.configure_unknown_task(group, flight)
 
         self.configure_eplrs(group, flight)
+
+    @staticmethod
+    def _temper_with_morale(
+        flight: Flight,
+        react_on_threat: OptReactOnThreat.Values,
+        rtb_winchester: Optional[OptRTBOnOutOfAmmo.Values],
+    ) -> tuple[OptReactOnThreat.Values, Optional[OptRTBOnOutOfAmmo.Values]]:
+        """How willing this flight is to be shot at, from how its lead is holding up.
+
+        These are group options -- DCS has no way to tell one man in a four-ship to be
+        careful -- so the lead decides for the formation, which is how it works anyway.
+        A shaken flight routes around what frightens it; a broken one turns for home
+        when the threat is serious, and goes home as soon as its weapons are gone
+        rather than hanging about with the gun.
+
+        Only ever more cautious than the task asked for, never less: nothing here talks
+        a flight into being braver than its orders.
+        """
+        settings = flight.squadron.coalition.game.settings
+        if not settings.live_pilots_enabled or not getattr(
+            settings, "morale_enabled", True
+        ):
+            return react_on_threat, rtb_winchester
+        lead = next(iter(flight.roster.iter_pilots()), None)
+        if lead is None or not lead.has_morale:
+            # The player leads his own flight; how careful it is stays his call.
+            return react_on_threat, rtb_winchester
+        wanted = morale_rules.threat_reaction(lead.morale)
+        if wanted.value > react_on_threat.value:
+            react_on_threat = wanted
+        if lead.morale < morale_rules.SHAKEN_BELOW:
+            rtb_winchester = OptRTBOnOutOfAmmo.Values.All
+        return react_on_threat, rtb_winchester
 
     def configure_behavior(
         self,
@@ -149,6 +206,9 @@ class AircraftBehavior:
         if ai_unlimited_fuel and not at_ip_or_combat:
             group.points[0].tasks.append(SetUnlimitedFuelCommand(True))
 
+        react_on_threat, rtb_winchester = self._temper_with_morale(
+            flight, react_on_threat, rtb_winchester
+        )
         group.points[0].tasks.append(OptReactOnThreat(react_on_threat))
         if roe is not None:
             group.points[0].tasks.append(OptROE(roe))
@@ -446,10 +506,18 @@ class AircraftBehavior:
             f"({carrier_position.x}, {carrier_position.y})"
         )
 
+    # Escorts spawn at ReturnFire and escalate to OpenFire at the JOIN waypoint
+    # (JoinPointBuilder). OpenFire means "engage ONLY targets specified in its
+    # taskings", and an escort's one target-designating task (the Escort
+    # ControlledTask) only attaches at JOIN -- so the whole hold/transit window had
+    # an EMPTY legal-target set and the jet could not fire even while under attack
+    # (EvadeFire permits maneuver and countermeasures only). ReturnFire lets a
+    # pre-join escort shoot back at whatever shoots first without freelancing off
+    # its timeline. Adapted from the 414Ret fork.
     def configure_escort(self, group: FlyingGroup[Any], flight: Flight) -> None:
         self.configure_task(flight, group, Escort)
         self.configure_behavior(
-            flight, group, roe=OptROE.Values.OpenFire, restrict_jettison=True
+            flight, group, roe=OptROE.Values.ReturnFire, restrict_jettison=True
         )
 
     def configure_sead_escort(self, group: FlyingGroup[Any], flight: Flight) -> None:
@@ -457,7 +525,8 @@ class AircraftBehavior:
         self.configure_behavior(
             flight,
             group,
-            roe=OptROE.Values.OpenFire,
+            # ReturnFire until JOIN enables Weapon Free for the SEAD Escort.
+            roe=OptROE.Values.ReturnFire,
             # Guided includes ARMs and TALDs (among other things, but those are the useful
             # weapons for SEAD).
             rtb_winchester=OptRTBOnOutOfAmmo.Values.Guided,
@@ -468,7 +537,7 @@ class AircraftBehavior:
     def configure_transport(self, group: FlyingGroup[Any], flight: Flight) -> None:
         self.configure_task(flight, group, Transport)
         roe = OptROE.Values.WeaponHold
-        if flight.is_hercules:
+        if flight.is_c130j:
             group.task = GroundAttack.name
             roe = OptROE.Values.OpenFire
         self.configure_behavior(
@@ -486,7 +555,13 @@ class AircraftBehavior:
             flight,
             group,
             react_on_threat=OptReactOnThreat.Values.EvadeFire,
-            roe=OptROE.Values.WeaponHold,
+            # ReturnFire, not WeaponHold: a ferry is a transit, not a patrol, but held
+            # weapons made it a free kill -- it would evade a missile all the way into
+            # the ground without ever shooting at the fighter that launched it, and a
+            # relocation crossing contested airspace lost the whole squadron for free.
+            # ReturnFire keeps it out of fights it is not sent to pick while letting it
+            # answer the one it did not choose.
+            roe=OptROE.Values.ReturnFire,
             restrict_jettison=True,
             rtb_on_bingo=False,
         )

@@ -1,0 +1,595 @@
+"""Read-only registry export for Realistic CAS (not enabled in campaigns yet).
+
+Names/types/pylons come from the final pydcs mission; roles come from FlightData,
+never the group name or DCS's generic CAS task. Environment, prior intelligence,
+visibility ownership adapters and the actual plugin injection are separate steps.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Collection, Mapping
+from typing import TYPE_CHECKING, Any
+
+from dcs.flyingunit import FlyingUnit
+from game.dcs.afaccapabilities import capabilities_for, smoke_rounds
+from game.dcs.skills import SKILL_LADDER
+from game.ato.afac import station_minutes
+from game.groundmovement.samdefense import transit_defense
+from game.missiongenerator.afacthreats import (
+    disabled_iads_units,
+    envelope,
+    radar_support,
+)
+from game.theater.theatergroundobject import IadsGroundObject
+
+if TYPE_CHECKING:
+    from dcs import Mission
+    from game.unitmap import UnitMap
+    from .missiondata import MissionData
+
+
+# Exact, installed pydcs CLSIDs. No substring heuristics that mistake ECM/IRST
+# for a targeting pod. Integrated optics/radar remain in sensors.lua's profiles.
+TARGETING_PODS = frozenset(
+    {
+        "{AN_ASQ_228}",
+        "{A111396E-D3E8-4b9c-8AC9-2432489304D5}",
+        "{AAQ-28_LEFT}",
+        "{F-15E_AAQ-28_LITENING}",
+        "{F-15E_AAQ-33_XR_ATP-SE}",
+        "{AN_AAQ_33}",
+    }
+)
+
+SCRIPT_ORDER = (
+    "core.lua",
+    "dcs.lua",
+    "f10-contacts.lua",
+    "afac-search.lua",
+    "afac-safety.lua",
+    "afac.lua",
+    "sensors.lua",
+    "environment.lua",
+    "detection.lua",
+    "detectors-dcs.lua",
+    "afac-dcs.lua",
+    "afac-navigation.lua",
+    "bootstrap.lua",
+)
+
+
+PROBABILITY_DEFAULTS = {
+    "visualFarPercent": 10,
+    "visualNearPercent": 80,
+    "opticalFarPercent": 20,
+    "opticalNearPercent": 90,
+    "radarFarPercent": 50,
+    "radarNearPercent": 95,
+    "gmtiFarPercent": 75,
+    "gmtiNearPercent": 98,
+    "airAltitudePenaltyPercent": 60,
+    "retrySeconds": 5,
+    "visualMaxAGL": 3500,
+    "opticalMaxAGL": 7010.4,  # 23,000 ft; saved/Lua heights remain metres.
+}
+
+
+def afac_marking_config(options: Mapping[str, Any]) -> dict[str, int]:
+    """Reject invalid saved options before starting any mission-side effects."""
+    result = {}
+    for key, default, low, high in (
+        ("afacMarkMinutes", 5, 1, 60),
+        ("afacMessageSeconds", 15, 1, 300),
+        ("afacLaserCode", 1688, 1511, 1788),
+        ("afacCoordinateFormat", 0, 0, 2),
+    ):
+        value = options.get(key, default)
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError(f"Realistic CAS: {key} must be an integer {low}..{high}")
+        result[key] = value
+    code = str(result["afacLaserCode"])
+    if any(digit not in "12345678" for digit in code) or code[1] not in "567":
+        raise ValueError("Realistic CAS: invalid AFAC laser code")
+    return {
+        "markSeconds": result["afacMarkMinutes"] * 60,
+        "messageSeconds": result["afacMessageSeconds"],
+        "laserCode": result["afacLaserCode"],
+        "coordinateFormat": result["afacCoordinateFormat"],
+    }
+
+
+def probability_config(options: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate tunable gameplay values before exporting or hiding anything."""
+    result = {}
+    for name, default in PROBABILITY_DEFAULTS.items():
+        value = options.get(name, default)
+        low, high = 0, 100
+        if name == "retrySeconds":
+            low, high = 5, 300
+        elif name in ("visualMaxAGL", "opticalMaxAGL"):
+            low, high = 100, 10000
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or not low <= value <= high
+        ):
+            raise ValueError(f"Realistic CAS: {name} must be {low}..{high}")
+        result[name] = value
+    for mode in ("visual", "optical", "radar", "gmti"):
+        if result[f"{mode}FarPercent"] > result[f"{mode}NearPercent"]:
+            raise ValueError(f"Realistic CAS: {mode} far chance exceeds near chance")
+    return result
+
+
+def render_startup(config: Mapping[str, Any]) -> str | None:
+    """Render the final action after SCRIPT_ORDER, without mutating the mission.
+
+    The caller supplies an explicit environment and the final registry. This is
+    not wired to the campaign plugin checkbox yet: external visibility adapters remain open.
+    """
+    if config.get("enabled") is not True:
+        return None
+    if config.get("registry", {}).get("schemaVersion") != 1:
+        raise ValueError("Unsupported Realistic CAS registry schema")
+    seconds = config.get("acquisitionSeconds")
+    if (
+        isinstance(seconds, bool)
+        or not isinstance(seconds, (int, float))
+        or not math.isfinite(seconds)
+        or not 0 <= seconds <= 600
+    ):
+        raise ValueError(
+            "Acquisition time must be explicit and between 0 and 600 seconds"
+        )
+    if not isinstance(config.get("environment"), Mapping):
+        raise ValueError("Explicit Realistic CAS environment required")
+    if type(config.get("contactReports", False)) is not bool:
+        raise ValueError("Realistic CAS contact reports must be boolean")
+    report_seconds = config.get("contactReportSeconds", 15)
+    if type(report_seconds) is not int or not 1 <= report_seconds <= 300:
+        raise ValueError("Realistic CAS contact report duration must be 1..300 seconds")
+    if type(config.get("f10FrontlineContacts", False)) is not bool:
+        raise ValueError("Realistic CAS F10 frontline contacts must be boolean")
+    if config.get("f10FrontlineContacts"):
+        groups = config.get("frontlineMapGroups")
+        if not isinstance(groups, list):
+            raise ValueError("Explicit frontline map group list required")
+        managed = {g["name"] for g in config["registry"]["groups"]}
+        ids: set[int] = set()
+        names: set[str] = set()
+        for group in groups:
+            if (
+                not isinstance(group, Mapping)
+                or group.get("name") not in managed
+                or group.get("name") in names
+                or type(group.get("coalition")) is not int
+                or group.get("coalition") != 1
+                or type(group.get("id")) is not int
+                or group["id"] <= 0
+                or group["id"] in ids
+            ):
+                raise ValueError("Invalid or duplicate F10 frontline group")
+            ids.add(group["id"])
+            names.add(group["name"])
+    if (
+        "probabilisticDetection" in config
+        and type(config["probabilisticDetection"]) is not bool
+    ):
+        raise ValueError("Realistic CAS probabilistic detection must be boolean")
+    if "probability" in config:
+        if not isinstance(config["probability"], Mapping):
+            raise ValueError("Realistic CAS probability configuration must be a map")
+        probability_config(config["probability"])
+    return (
+        "do local ok, instance, why = pcall(RealisticCAS.startMission, "
+        + lua_literal(config)
+        + ")\n"
+        "if not ok or not instance then\n"
+        "local detail = tostring(ok and why or instance)\n"
+        "env.error('REALISTIC_CAS_MISSION|STARTUP_FAILED|' .. detail)\n"
+        "trigger.action.outText('Realistic CAS failed to start. See dcs.log: ' .. detail, 30)\n"
+        "end end\n"
+    )
+
+
+def lua_literal(value: Any) -> str:
+    """Strict typed serializer, independent of LuaData's string-only subtrees."""
+    if value is None:
+        return "nil"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            raise ValueError("Non-finite Realistic CAS value")
+        return repr(value)
+    if isinstance(value, str):
+        escaped = []
+        for char in value:
+            n = ord(char)
+            if char in ('"', "\\"):
+                escaped.append("\\" + char)
+            elif n < 32 or n == 127:
+                escaped.append(f"\\{n:03d}")
+            else:
+                escaped.append(char)
+        return '"' + "".join(escaped) + '"'
+    if isinstance(value, (list, tuple)):
+        return "{" + ",".join(lua_literal(v) for v in value) + "}"
+    if isinstance(value, Mapping):
+        if not all(isinstance(k, str) for k in value):
+            raise TypeError("Realistic CAS object keys must be strings")
+        return (
+            "{"
+            + ",".join(
+                "[" + lua_literal(k) + "]=" + lua_literal(value[k])
+                for k in sorted(value)
+            )
+            + "}"
+        )
+    raise TypeError(f"Unsupported Realistic CAS value: {type(value).__name__}")
+
+
+def _controls_visibility(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("id") == "SetInvisible":
+            return True
+        return any(_controls_visibility(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_controls_visibility(v) for v in value)
+    return False
+
+
+def _native_route_value(value: Any) -> Any:
+    """Convert pydcs one-based task tables to Lua arrays without changing indices."""
+    if isinstance(value, dict):
+        if value and all(type(key) is int for key in value):
+            if set(value) != set(range(1, len(value) + 1)):
+                raise ValueError("Realistic CAS: non-contiguous native route table")
+            return [_native_route_value(value[i]) for i in range(1, len(value) + 1)]
+        return {key: _native_route_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_native_route_value(item) for item in value]
+    return value
+
+
+def collect_registry(
+    mission: Mission,
+    mission_data: MissionData,
+    *,
+    enabled: bool,
+    unit_map: UnitMap | None = None,
+    excluded_groups: Collection[str] = (),
+    include_armor_groups: bool = False,
+    iads_network: Any = None,
+) -> dict[str, Any] | None:
+    """Collect declared units without modifying pydcs or activating any Lua.
+
+    Off short-circuits before touching either argument.
+    Explicit exclusions and ANY waypoint invisibility owner (even SetInvisible
+    false) are preserved. Runtime-created groups/trigger-owned visibility require
+    adapters and are NOT certified by this registry's waypoint inspection alone.
+    """
+    if not enabled:
+        return None
+    if type(include_armor_groups) is not bool:
+        raise ValueError("Realistic CAS: armor group discovery must be boolean")
+    if unit_map is None:
+        raise ValueError(
+            "Realistic CAS requires UnitMap to distinguish SAM objectives from frontline SAMs"
+        )
+    disabled = disabled_iads_units(iads_network, unit_map)
+    result: dict[str, Any] = {
+        "schemaVersion": 1,
+        "groups": [],
+        "targets": [],
+        "observers": [],
+        "warnings": [],
+        "knownAirDefenseGroups": [],
+        "knownGroundGroups": [],
+        "airDefenseThreats": [],
+        "afacKnownTargets": [],
+    }
+    roles: dict[str, str] = {}
+    afac: dict[str, dict[str, Any]] = {}
+    for flight in mission_data.flights:
+        role = flight.flight_type.value
+        for flight_unit in flight.units:
+            if flight_unit.name in roles:
+                raise ValueError(f"Duplicate FlightData unit: {flight_unit.name}")
+            roles[flight_unit.name] = role
+            if role in ("AFAC — Area", "AFAC — Frontline"):
+                if flight_unit.is_human():
+                    raise ValueError("AFAC missions currently support AI aircraft only")
+                zone = flight.work_zone
+                afac_mapping = unit_map.flight(flight_unit.name)
+                profile = capabilities_for(flight_unit.type)
+                if (
+                    zone is None
+                    or afac_mapping is None
+                    or afac_mapping.pilot is None
+                    or profile is None
+                ):
+                    raise ValueError(
+                        "AFAC requires work zone, pilot mapping and supported aircraft"
+                    )
+                if profile.can_embark_jtac:
+                    profile = capabilities_for(flight_unit.type, embarked_jtac=True)
+                assert profile is not None
+                afac[flight_unit.name] = {
+                    "zone": {
+                        "points": [{"x": p.x, "z": p.y} for p in zone.points],
+                        "radius": zone.radius.meters,
+                    },
+                    "groupName": flight.group_name,
+                    "stationSeconds": station_minutes(
+                        afac_mapping.flight.coalition.game.settings
+                    )
+                    * 60,
+                    "skill": SKILL_LADDER.index(
+                        flight.squadron.pilot_skill(afac_mapping.pilot)
+                    ),
+                    "equipment": profile.equipment(),
+                }
+    for jtac in mission_data.jtacs:
+        previous = roles.get(jtac.unit_name)
+        if previous is not None and previous != "JTAC":
+            raise ValueError(f"Conflicting JTAC/flight role: {jtac.unit_name}")
+        roles[jtac.unit_name] = "JTAC"
+
+    excluded = set(excluded_groups)
+    group_names: set[str] = set()
+    unit_names: set[str] = set()
+    present_air: set[str] = set()
+    for side_name, side in (("red", 1), ("blue", 2)):
+        coalition = mission.coalition.get(side_name)
+        if coalition is None:
+            continue
+        for country in coalition.countries.values():
+            for category, groups in (
+                ("ground", country.vehicle_group),
+                ("air", country.plane_group),
+                ("air", country.helicopter_group),
+            ):
+                for group in groups:
+                    if group.name in group_names:
+                        raise ValueError(f"Duplicate DCS group name: {group.name}")
+                    group_names.add(group.name)
+                    # SamGroundObject has category 'aa'. Use campaign ownership,
+                    # NEVER vehicle type, radar range, unit/group name, or movement.
+                    # Its generated support groups belong to the same objective.
+                    sites = set()
+                    armor = False
+                    if category == "ground":
+                        for unit in group.units:
+                            mapping = unit_map.theater_objects.get(unit.name)
+                            if mapping is not None:
+                                objective = mapping.theater_unit.ground_object
+                                if objective.category == "aa":
+                                    sites.add(objective.name)
+                                if objective.category == "armor":
+                                    armor = True
+                    if sites:
+                        result["knownAirDefenseGroups"].append(
+                            {
+                                "name": group.name,
+                                "coalition": side,
+                                "objectives": sorted(sites),
+                            }
+                        )
+                    foreign_owner = group.name in excluded or (
+                        category == "ground"
+                        and any(
+                            _controls_visibility(task.dict())
+                            for point in group.points
+                            for task in point.tasks
+                        )
+                    )
+                    if foreign_owner:
+                        result["warnings"].append(
+                            f"Excluded visibility-owned group: {group.name}"
+                        )
+                    concealed = not sites and (
+                        group.name
+                        in getattr(mission_data, "frontline_visibility_groups", set())
+                        or (include_armor_groups and armor)
+                    )
+                    if (
+                        category == "ground"
+                        and not foreign_owner
+                        and not sites
+                        and not concealed
+                        and group.units
+                    ):
+                        result["knownGroundGroups"].append(
+                            {"name": group.name, "coalition": side}
+                        )
+                    if (
+                        category == "ground"
+                        and not foreign_owner
+                        and concealed
+                        and group.units
+                    ):
+                        result["groups"].append(
+                            {
+                                "name": group.name,
+                                "coalition": side,
+                                "originalInvisible": False,
+                            }
+                        )
+                    for unit in group.units:
+                        if not unit.name or unit.name in unit_names:
+                            raise ValueError(
+                                f"Empty/duplicate DCS unit name: {unit.name}"
+                            )
+                        unit_names.add(unit.name)
+                        if category == "air":
+                            present_air.add(unit.name)
+                        if foreign_owner:
+                            continue
+                        if category == "ground":
+                            mapping = unit_map.theater_objects.get(unit.name)
+                            threat_objective = (
+                                mapping.theater_unit.ground_object
+                                if mapping is not None
+                                else None
+                            )
+                            packed = isinstance(
+                                threat_objective, IadsGroundObject
+                            ) and getattr(threat_objective, "in_transit", False)
+                            reactive = (
+                                packed
+                                and threat_objective is not None
+                                and len(group.points) > 1
+                                and transit_defense(u.type for u in group.units)
+                                is not None
+                                and not any(
+                                    u.alive and u.transported_by_id is not None
+                                    for u in threat_objective.units
+                                )
+                            )
+                            threat = (
+                                None if packed and not reactive else envelope(unit.type)
+                            )
+                            if threat is not None:
+                                threat = dict(threat)
+                                if reactive:
+                                    threat["transitDefense"] = True
+                                if not concealed and not reactive:
+                                    threat["initialPoint"] = {
+                                        "x": unit.position.x,
+                                        "z": unit.position.y,
+                                    }
+                                result["airDefenseThreats"].append(
+                                    dict(
+                                        threat,
+                                        name=unit.name,
+                                        groupName=group.name,
+                                        coalition=side,
+                                        typeName=unit.type,
+                                        known=not concealed,
+                                        iadsDisabled=unit.name in disabled,
+                                        **(
+                                            {"needsRadar": False, "radars": []}
+                                            if reactive
+                                            else radar_support(unit, group, unit_map)
+                                        ),
+                                    )
+                                )
+                            if not concealed:
+                                result["afacKnownTargets"].append(
+                                    {
+                                        "name": unit.name,
+                                        "groupName": group.name,
+                                        "coalition": side,
+                                        "typeName": unit.type,
+                                    }
+                                )
+                        if category == "ground" and concealed:
+                            result["targets"].append(
+                                {
+                                    "name": unit.name,
+                                    "groupName": group.name,
+                                    "coalition": side,
+                                    "typeName": unit.type,
+                                }
+                            )
+                        # Players do not provide scripted AI sensor reports. In a
+                        # mixed flight, retain AI wingmen without touching tasks.
+                        if unit.name not in afac and getattr(
+                            unit.skill, "value", unit.skill
+                        ) in (
+                            "Client",
+                            "Player",
+                        ):
+                            continue
+                        observer = {
+                            "name": unit.name,
+                            "typeName": unit.type,
+                            "category": category,
+                            "coalition": side,
+                        }
+                        if category == "air":
+                            if not isinstance(unit, FlyingUnit):
+                                raise ValueError(
+                                    f"Non-aircraft unit in flying group: {unit.name}"
+                                )
+                            if unit.name not in roles:
+                                result["warnings"].append(
+                                    f"No FlightData/JTAC role; observer omitted: {unit.name}"
+                                )
+                                continue
+                            observer["role"] = roles[unit.name]
+                            clsids = sorted(
+                                {
+                                    v["CLSID"]
+                                    for v in unit.pylons.values()
+                                    if v.get("CLSID")
+                                }
+                            )
+                            observer["payloadClsids"] = clsids
+                            observer["equipment"] = {
+                                "targetingPod": bool(
+                                    TARGETING_PODS.intersection(clsids)
+                                )
+                            }
+                            if unit.name in afac:
+                                meta = dict(afac[unit.name])
+                                search_point = getattr(
+                                    group, "_afac_search_point", None
+                                )
+                                if search_point in group.points:
+                                    index = group.points.index(search_point)
+                                    loop = getattr(group, "_afac_search_loop", ())
+                                    end = group.points[index + len(loop) + 1]
+                                    meta["navigation"] = {
+                                        "searchWaypoint": index + 1,
+                                        "exitWaypoint": index + len(loop) + 3,
+                                        "route": [
+                                            _native_route_value(p.dict())
+                                            for p in group.points
+                                        ],
+                                        "restoreUnlimitedFuel": getattr(
+                                            group, "_afac_restore_unlimited_fuel", False
+                                        ),
+                                        "speed": getattr(
+                                            group,
+                                            "_afac_patrol_speed",
+                                            search_point.speed,
+                                        ),
+                                        "altitude": search_point.alt,
+                                        "altType": search_point.alt_type,
+                                        "points": [
+                                            {"x": p.position.x, "z": p.position.y}
+                                            for p in (search_point, end)
+                                        ],
+                                    }
+                                    if loop:
+                                        meta["navigation"]["searchPath"] = [
+                                            {"x": p.position.x, "z": p.position.y}
+                                            for p in loop
+                                        ]
+                                meta["smokeRounds"] = smoke_rounds(
+                                    v["CLSID"]
+                                    for v in unit.pylons.values()
+                                    if v.get("CLSID")
+                                )
+                                observer["equipment"].update(meta.pop("equipment"))
+                                observer["afac"] = meta
+                                observer["allowPlayer"] = False
+                        result["observers"].append(observer)
+    for name in sorted(roles.keys() - present_air):
+        result["warnings"].append(
+            f"FlightData/JTAC absent from generated mission: {name}"
+        )
+    for field in (
+        "groups",
+        "targets",
+        "observers",
+        "knownAirDefenseGroups",
+        "knownGroundGroups",
+    ):
+        result[field].sort(key=lambda row: row["name"])
+    result["warnings"].sort()
+    return result

@@ -9,7 +9,8 @@
     "Mi-24P Hind-F",
     "Mi-8MTV2 Hip",
     "Su-25 Frogfoot",
-    "UH-1H Iroquois"
+    "UH-1H Iroquois",
+    "RQ-1A Predator"
   ],
   "frontline_units": [
     "BMP-1",
@@ -42,12 +43,14 @@
     "SA-15 Tor",
     "AAA ZU-23 Closed Emplacement",
     "ZU-23 on Ural-375",
-    "ZSU-23-4 Shilka"
+    "ZSU-23-4 Shilka",
+    "EWR 1L13"
   ],
   "preset_groups": [
     "SA-3/S-125",
     "SA-6",
-    "SA-11"
+    "SA-11",
+    "GPS Jamming Site (Red)"
   ],
   "naval_units": [
     "FAC La Combattante IIa"

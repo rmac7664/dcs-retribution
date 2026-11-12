@@ -7,10 +7,10 @@
     "AH-1W SuperCobra",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "F/A-18C Hornet (Lot 20)",
     "SH-60B Seahawk",
-    "UH-1H Iroquois"
+    "UH-1H Iroquois",
+    "OH-58D(R) Kiowa Warrior"
   ],
   "awacs": [
     "E-3A"
@@ -37,7 +37,8 @@
   ],
   "preset_groups": [
     "Hawk",
-    "Rapier"
+    "Rapier",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "DDG Arleigh Burke IIa",
@@ -50,9 +51,7 @@
     "EWR AN/FPS-117 Radar",
     "HEMTT C-RAM Phalanx"
   ],
-  "requirements": {
-    "C-130J-30 Super Hercules Mod by Anubis": "https://forums.eagle.ru/topic/252075-dcs-super-hercules-mod-by-anubis/"
-  },
+  "requirements": {},
   "carrier_names": [],
   "helicopter_carrier_names": [
     "HMAS Canberra",

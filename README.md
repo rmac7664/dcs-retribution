@@ -1,103 +1,574 @@
-[![Logo](https://github.com/dcs-retribution/dcs-retribution/raw/main/resources/ui/splash_screen.png)](https://shdwp.github.io/ukraine/)
+<p align="center">
+  <img src="resources/ui/splash_screen.png" width="720" alt="DCS Escalation">
+</p>
 
-(Github Readme Banner and Splash screen Artwork by Andriy Dankovych, CC BY-SA 4.0)
+# DCS Escalation
 
-[![Download](https://img.shields.io/github/downloads/dcs-retribution/dcs-retribution/total?label=Download)](https://github.com/dcs-retribution/dcs-retribution/releases)
+A dynamic campaign generator for DCS World, and the third name in one line of work:
+**DCS Liberation** was written by shdwp and rewritten by Khopa; **DCS Retribution**
+was forked from it in 2022 and is still
+[actively developed](https://github.com/dcs-retribution/dcs-retribution). **DCS
+Escalation** is a personal fork of Retribution by **juanjux**, carrying features and
+fixes that are not (yet) in it — some of them adapted from the
+[414Ret fork](https://github.com/bradyccox/414Ret).
 
-[![Discord](https://img.shields.io/discord/1015931619187621999?label=Discord&logo=discord)](https://discord.gg/b4x34Bg4We)
+Everything Retribution does, Escalation does. What follows is what it does on top.
 
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/dcs-retribution/dcs-retribution)](https://github.com/dcs-retribution/dcs-retribution/pulls)
-[![GitHub issues](https://img.shields.io/github/issues/dcs-retribution/dcs-retribution)](https://github.com/dcs-retribution/dcs-retribution/issues)
-![GitHub stars](https://img.shields.io/github/stars/dcs-retribution/dcs-retribution?style=social)
+# What is this exactly?
 
-## About DCS Retribution 
-(Last update: 2026-03-22)
+In a nutshell, Escalation is turn based dynamic campaign generator where every turn is about 4 hours if passing time. Using a UI separate from DCS,
+you decide what packages and flights will do, what targets will be attacked, what you will 
+improve of your air defenses and money-producing buildings, et cetera. You could assign yourself as a player (or several players, for multiplayer missions) to any of the defined packages. 
+Then you would click on "take off", and it will generate a DCS mission. You would then hop into DCS, load and play that mission, and everything that happened during it would be recorded and persisted 
+for the next turn, then you would go back to Escalation UI and repeat, until either your side (OWNFOR) or the enemy one (OPFOR) wins.
 
-DCS Retribution was forked in 2022 from [DCS Liberation](https://github.com/dcs-liberation/dcs_liberation),
-which is a [DCS World](https://www.digitalcombatsimulator.com/en/products/world/) turn based single-player or co-op dynamic campaign. 
-It is an external program that generates full and complex DCS missions and manage a persistent combat environment.
+# What does Escalation adds over it's ancestors Liberation and Retribution?
 
-![Screenshot](https://user-images.githubusercontent.com/315852/120939254-0b4a9f80-c6cc-11eb-82f5-ce3f8d714bfe.png)
+## LLM-controlled OPFOR (REST API + MCP)
+An external LLM (Claude, ChatGPT, etc) can play the enemy commander. A REST API and an MCP server expose a
+token-frugal turn context (forces, targets, threats, economy, naval, motorpools, runway
+states, plus an optional rendered map image) and full player parity to act on it:
+packages and flights, buying and selling, front-line stances, squadron relocation,
+fleet movement, repairs and rebuilds. The LLM gets its own briefing at `/start` and
+`/howtoplay`. Just copy the local URL from the button to Claude Coword, ChatGPT Codex, Grok build
+or any other LLM that has a local interface, and start playing with it controlling OPFOR.
 
-DCS Retribution is no longer relying on DCS Liberation updates,
-though occasionally we might still sync a feature to our fork.
-However, we are no longer backwards compatible with Liberation, and will no longer attempt to do so.
+**This is probably the biggest difference and how Escalation is meant to be played**; having a reasonably competent enemy totally 
+changes the engagement and fun factor of every campaign. While the current version still keeps the inherited dumb OPFOR planner, 
+it will probably be removed in the future.
 
-Instead, we are focussing on keeping our campaigns forward compatible so that you as a user
-can continue on whatever campaign you had going on.
-Please keep in mind that once you save a campaign that was started
-in a previous (save-compatibility breaking) build, your save file
-will have been migrated and thus no longer compatible with the previous build.
-Therefore, we recommend backing up your saves and perhaps organizing them by version/build number.
+## In-Mission Air Commander (IMAC)
 
-In the past, we've relied very little on GitHub's "Releases" since our setup is rather based on
-preview builds which are made easily available through our Discord server, where a channel
-will trigger a message with a link to the latest preview build whenever we push a commit to the dev branch.
-However, we're planning to change this strategy and attempt to publish a new release whenever DCS releases a new
-version, unless it's a minor patch which doesn't require any changes on our end.
+Optional in-mission scripted air coordination for each coalition, without an LLM. While an operating airborne AWACS or a powered command centre survives, IMAC redirects available BARCAP/TARCAP patrols and returning fighter-capable flights against detected air threats, including interceptable cruise and anti-ship missiles. It temporarily repositions vulnerable flights and holds attacks behind known SAM defences while DEAD remains available. SAM avoidance and protective fighter evasion have independent switches; DEAD/SEAD missions ignore SAM rings by default, and Escort/Fighter Sweep flights do not evade fighters by default. Orders retain fuel, terrain and pursuit limits; the original mission remains suspended underneath. Active attack and escort missions are not interrupted for interception. Player/Client groups are never tasked, and F10 controls can pause automatic command before manual orders. Off by default; see [IMAC behaviour and limits](docs/imac.md).
 
-Over the years we've extended the original DCS Liberation with a lot of features, 
-such as support for road-bases, neutral bases, weapon-settings, additional mission types, etc.
-For a more complete overview of our features, check the
-[changelog](https://github.com/dcs-retribution/dcs-retribution/blob/main/changelog.md).
+## Saved map drawings
 
-## Downloads
+Taken from Retlab: Use the map's Draw tool to add vertices, then save a named line or area to a
+player aircraft.
 
-Latest release is available here : https://github.com/dcs-retribution/dcs-retribution/releases
+## Reactive BARCAP refuelling
 
-To download preview builds of the next version of DCS Retribution, see https://github.com/dcs-retribution/dcs-retribution/wiki/Betas.
+AI-only BARCAPs with compatible planned tanker support monitor the flight's
+estimated briefing BINGO against actual remaining fuel while on station. If more
+than twenty minutes remain and a live compatible tanker is reachable with reserve,
+the flight pushes a native refuelling task and resumes its suspended orbit after
+topping off. Its original station end does not change.
 
-## DCS bugs
 
-~~These DCS bugs prevent us from improving AI behavior. Please upvote them! (But please
-_don't_ spam them with comments):~~
+## Frontline MANPADS teams
 
-* ~~[A2A and SEAD escorts don't escort](https://forums.eagle.ru/topic/251798-options-for-alternate-ai-escort-behavior/?tab=comments#comment-4668033)~~
-* ~~[DEAD can't use mixed loadouts effectively](https://forums.eagle.ru/topic/271941-ai-rtbs-after-firing-decoys-despite-full-load-of-bombs/)~~
+Frontline MANPADS use a vehicle-based allowance rather than a chance per group.
+By default, each side receives one team per eight combat vehicles on each front,
+rounded to the nearest team, minus any MANPADS already deployed there. Trucks and
+infantry do not increase the allowance. Each added team has one launcher and a
+rifleman from its faction when available. Teams are spread among formations,
+prefer APCs/IFVs, and defend their initial positions even with normal infantry
+generation off. The ratio is configurable under Difficulty; zero or switching off
+*Manpads on frontlines* disables additional teams. Generated support teams are
+still recreated for each mission; persistent losses and stock-based replacements
+are not implemented yet.
 
-While DCS bugs are still a thing, we don't quite agree with the ones stated above.
-We believe to have addressed these, although some quirks still exist.
-For example, SEAD Escorts tend to be a little picky with what they engage,
-especially with older SAM systems.
+## Live Pilots
 
-## Bugs and feature requests
+A squadron of people instead of a list of slots with RPG-like interactions. Switched on, a pilot has a name, a
+rank and a history, and DCS shows him by name in the cockpit label rather than as
+"Pilot #2". What happens to him is remembered, and it feeds back into how he flies:
+the campaign is not only aircraft and fuel any more, it is also who is left and how
+they are holding up.
 
-If you need to report a bug or want to suggest a new feature, you can do this on our 
-[bug tracker](https://github.com/dcs-retribution/dcs-retribution/issues).
-In either case, please use the search bar at the top of the page to see if it has already been reported.
-Note that you may need to remove the filter for open bugs if it's something we've recently fixed.
+- **He earns his rank.** Experience comes from flying the mission and from what he
+  destroys, and each rung of it is a real DCS skill level — a promotion makes him
+  measurably better in the air. Ranks are named in the nation's own convention.
 
-## Roadmap
+- **He has good weeks and bad ones.** Morale moves with everything that happens to
+  him: a mission flown, a kill, a promotion, a squadron mate lost, a week at home. It
+  shifts the rung he actually flies at, and at the bottom of the scale he refuses to
+  fly and may walk away for good. Leave is worth granting.
 
-Our plans for future releases can be found on our
-[Projects page](https://github.com/dcs-retribution/dcs-retribution/projects).
-Each planned release has a Project, and the page for that project has columns for to do,
-in progress, and done. Items in the Done column are in the
-[preview build](https://github.com/dcs-retribution/dcs-retribution/wiki/Preview-builds)
-for that release. Items in the To do column are planned to be added to that release.
+- **He gets used to it.** A man who has been through a run of bad turns is harder to
+  shake, likelier to walk away from a wreck, and slower to get close to anybody —
+  which is the price of it.
 
-## Resources
+- **He has opinions about the others.** Every pair of pilots has a relationship, and a
+  directed one: what he thinks of a man and what that man thinks back need not agree.
+  A crew that gets on flies better and looks after its own when somebody goes down;
+  one that does not pays for it the same way. Friends ask for leave together, and
+  losing one costs more than losing a stranger.
 
-Tutorials, contributors and developer's guides are available in the project's
-[Wiki](https://github.com/dcs-retribution/dcs-retribution/wiki/)
+- **And it is all readable.** Double-clicking a pilot opens his record: his rank and
+  what the next one costs, every kill grouped the way he would tell it and openable to
+  the individual ones, what he has survived, how he died and who did it, his morale
+  with the log of everything that moved it, and his relationships in both directions.
+  An optional cheat strip renames, promotes, heals and revives.
+  
+Still to come:
 
-(Some historical information is also availabe on
-[Liberation's Wiki](https://github.com/dcs-liberation/dcs_liberation/wiki/))
+- **Rivals.** Two pilots who cannot stand each other try to out-score one another in
+  the same flight or package, and fly better for it. Maverick and Ice. Over time a
+  rivalry tends to turn into friendship.
 
-## Special Thanks
+- **Mate's quests.** Now and then a pilot asks for something specific — an escort on
+  his next mission, a SEAD sortie flown alongside an experienced hand. Optional, and
+  worth experience and friendship to both men when it comes off.
 
-First, a big thanks to shdwp, for starting the original DCS Liberation project. 
+- **The cantina.** One place for the whole crew room: who gets on with whom, a man's
+  history and statistics, morale across the squadron, leave requests, and whatever is
+  worth a warning.
 
-Then, DCS Liberation/Retribution uses [pydcs](https://github.com/pydcs/dcs) for mission generation, and nothing would be possible without this.
-It also uses the popular [Mist](https://github.com/mrSkortch/MissionScriptingTools) lua framework for mission scripting. Support for the 
-impressive [Moose](https://github.com/FlightControl-Master/MOOSE) framework was also introduced,
-allowing for even more customization.
+  
+## High Command
 
-Excellent lua scripts DCS Liberation/Retribution uses as plugins:
+- **Each turn the High Command requests enemy objectives taken, each with a prize**
+  paid at once or as a ticket to spend later. Its window, opened from the command
+  bar, lists the requests open and spends the tickets.
+  ([#421](https://github.com/juanjux/dcs-escalation/pull/421),
+  [#432](https://github.com/juanjux/dcs-escalation/pull/432),
+  [#433](https://github.com/juanjux/dcs-escalation/pull/433))
 
-* For the JTAC feature, DCS Retribution embeds Ciribob's JTAC Autolase [script](https://github.com/ciribob/DCS-JTACAutoLaze).
-* Walder's [Skynet-IADS](https://github.com/walder/Skynet-IADS) is used for Integrated Air Defense System.
-* Carstens Arty Spotter https://www.digitalcombatsimulator.com/en/files/3339128/ is an amazing force multiplyer to drop the hammer on enemies.
-* MBot's [Call Artillery Script](https://forum.dcs.world/topic/310506-call-artillery-script/) uses in-map artillery and forward observers to enable artillery fire missions.
+## Campaign alerts
 
-Please also show some support to these projects ! 
+The bell at the top right highlights campaign events and problems requiring attention:
+very low pilot morale, weak fronts, captures and losses, completed buildings, and
+missile assignments needing review. Open an alert to reach its pilot, base or site.
+Acknowledgements persist in the campaign save; unresolved conditions return next turn,
+including confirmed missile GPS assignments with no known target. Weapon-stock alerts
+are reserved for a future stock system.
+
+## Missile target assignments
+
+Assign a persistent land-attack target to a missile site or capable ship from its
+location dialog, using an enemy objective's code name, GPS coordinates or the main
+map. Selection checks minimum and maximum range and the campaign's launch limits.
+Linked objectives are cleared when destroyed or captured; empty GPS points require
+confirmation and keep firing each turn until cancelled. Ships retain their finite
+campaign magazines. OPFOR has equivalent REST/MCP commands and target discovery.
+
+## Ground Movement
+
+The optional Ground Movement plugin moves convoys and reserve armor groups over
+multiple turns, with route previews, transport requirements and persistent losses.
+From a base's Transfer Units dialog, deploy a custom mix of available vehicles to
+friendly GPS coordinates. Survivors form an active Reserve Armor Group that can
+defend its position or be moved again. Choose a GPS destination on an interactive
+map with route highlighting, distance, estimated arrival and validity feedback.
+Intel's Transfers tab includes these active deployments with the group name,
+surviving/original unit count, GPS destination and progress. Stopping a movement
+leaves its units deployed at their current position, without returning base stock.
+Groups reached or passed by their front automatically reinforce its supporting
+base, including groups in transit. Normal deployment limits apply, with surplus
+kept in the Motor Pool. Ground Movement requires Motor Pool.
+The OPFOR REST/MCP API supports the same reserve movements and base-stock deployments
+under BLUE's territory, transport and distance rules. Mobile SAM batteries with towed
+units can buy faction towing trucks from their location dialog or the OPFOR API,
+without replacing the battery. The total truck limit is the number of towable units
+plus two, including existing and destroyed trucks so repairs cannot exceed it.
+Mobile SAM/radar sites can also
+relocate whole to friendly GPS positions. Each towed piece needs a surviving tractor
+in the battery; fixed/unknown units and pending repairs block relocation. Radars,
+jammers and weapons start packed and offline during transit, while the convoy remains
+attackable. Validated Osa, HEMTT C-RAM, Tor-M2K and complete Buk-M3 configurations can
+stop to engage their own detected enemies within a range/height envelope, or defend
+after a hit, then pack and resume their remaining route. Native reloading
+can delay recovery by several minutes. Unknown/mixed batteries, loaded weapons,
+Sky Sabre and S-350 remain packed. Moving sites stay outside the IADS network.
+Arrival or an explicit stop redeploys survivors in their original formation
+without changing the site or unit identities. The same controls are available through
+the OPFOR API with `source_kind:"sam"`.
+
+Select units, then use **Choose on map…** in the movement dialog or Transfer Units'
+GPS mode. The main map temporarily switches to destination selection without
+loading a second map. Move the cursor to preview the route, distance and arrival
+estimate; an X marks blocked positions. Click a valid destination to return to the dialog,
+then confirm with **Dispatch**. Escape or Cancel leaves orders unchanged. The
+previous map view and campaign controls are restored when selection ends.
+
+## Interface
+
+- **The interface has been rebuilt.** Dialogs, lists and panels were redrawn to one
+  visual language.
+
+  <img src="https://raw.githubusercontent.com/juanjux/dcs-escalation/juanjux/screenshots/airwing-redesign.png" width="760">
+
+- **Destroyed-site filters are separate for each coalition and repairability.**
+  Map layers can hide destroyed repairable sites independently from permanent losses.
+  Partially damaged sites remain visible, and campaign saves retain the filter choices.
+
+- **Coordinates anywhere on the map, in the format of choice.** A picker reads any
+  point, the objective dialog gives the coordinates of every unit and building, and both
+  copy to the clipboard. DMS, decimal minutes, decimal degrees and MGRS, set on the new
+  General settings page.
+  ([#296](https://github.com/juanjux/dcs-escalation/pull/296))
+
+- **A point on the map can be saved into the player's aircraft**, as a waypoint or a
+  markpoint, with the height of the ground under it looked up from an open elevation
+  model. Mostly useful for targets: a fleet's last reported position, a power station,
+  anything the flight plan does not already pass through.
+
+  They are kept **out of the route**, so they cannot collide with the flight plan the
+  mission generated. The Hornet and the Viper get them numbered after the last route
+  waypoint and on route sequence 2 -- SEQ1 is still the route. The A-10, whose navigation
+  computer works differently, gets them on a flight plan of its own called EXTRA, leaving
+  MSN untouched.
+
+- **A window for what you are flying this turn**, opened with *Playable aircraft* on
+  the top panel: each aircraft with its squadron and package, and the points saved to it, which
+  can also be typed or pasted in by hand instead of clicked on the map. They also get a kneeboard page of their own.
+  ([#343](https://github.com/juanjux/dcs-escalation/pull/343),
+  [#354](https://github.com/juanjux/dcs-escalation/pull/354),
+  [#360](https://github.com/juanjux/dcs-escalation/pull/360),
+  [#364](https://github.com/juanjux/dcs-escalation/pull/364))
+
+  <img src="https://raw.githubusercontent.com/juanjux/dcs-escalation/juanjux/screenshots/playable-aircraft.png" width="760">
+
+## IADS Reworked
+
+- **Automatic topology.** Each coalition's advanced IADS is rebuilt from current
+  objectives at the start of every turn and when loading a save. Sites connect to
+  a sparse radio backbone through nearby towers and command centres, with one
+  active radio uplink and a configurable number of fixed power-station feeds
+  per site (default: two, under **Power stations per node** in the Skynet options).
+  Radio links switch to available infrastructure in range when a tower or command
+  centre fails; electricity never switches to an unwired station. Radio
+  and power coverage default to 35 nm and remain
+  configurable in the Skynet plugin; campaign-authored links are no longer used.
+  Powered towers and command centres relay communications along
+  multi-hop paths. Isolated sectors cannot exchange radar cues or HARM warnings,
+  and losses or repairs update the paths during the mission. Power stations do not
+  relay radio traffic. GPS jammers need only power, not a radio path to command.
+  Destroyed power feeds remain visible as broken links, and ships do not depend
+  on shore infrastructure.
+
+- **Custom Skynetfork**, [juanjux/Skynet-IADS](https://github.com/juanjux/Skynet-IADS): upstream 3.3.0 with its
+  HARM fixes, plus `ActMobile` and the four High Digit SAMs systems (S-400, S-300V4,
+  SAMP/T, Pantsir-SM), and many, many fixes and performance improvements including (optional) culling of the network based on the
+  planned flight packages
+
+- **Batteries with their own generator can survive a power grid cut.** A Patriot's EPP-III or a
+  SAMP/T's MGE keeps the site powered when the nearest substation is bombed until the defined
+   generator unit itself is destroyed.
+
+- **IADS infrastructure can be rebuilt.**
+  
+- **Autonomous and dark sites are told apart from working ones.** A dark site draws no range rings
+  and its health bar color and tooltip says why, network links are coloured by state.
+  
+- **Radar, missile battery and jamming sites are interchangeable** You can buy any of these in the place of others.
+  They still have distinct icons.
+  
+- **Many fixed on campaigns that used IADS but had some errors in the topology or configuration.**
+
+## Kneeboards
+- **Friendly-packages list** plus a **package-targets map** page.
+  ([#11](https://github.com/juanjux/dcs-escalation/pull/11))
+- **DEAD/SEAD target page** — one waypoint per target with an STPT column.
+  ([#18](https://github.com/juanjux/dcs-escalation/pull/18))
+- **COMM2 presets** mirrored from COMM1 on twin-radio aircraft (plus an
+  F/A-18-family COMM1/COMM2 fix) and clearer auto-assigned **TACAN** codes.
+  Automatic presets use one channel per frequency on each radio, even when
+  several support flights or airfields share that frequency.
+  ([#12](https://github.com/juanjux/dcs-escalation/pull/12),
+  [#20](https://github.com/juanjux/dcs-escalation/pull/20))
+- The **Support Info** page spans several pages when a package has many flights, instead
+  of silently pushing the AEW&C, tanker and JTAC tables off the bottom of one.
+  ([#69](https://github.com/juanjux/dcs-escalation/pull/69))
+
+
+## Missions, AI & tasking
+- **A flight can arrive lined up with the runway.** The route ends at the airfield,
+  which is a point and not a direction, so the last leg arrives on whatever heading the
+  one before it left. An optional ALIGN waypoint goes on the approach course of the
+  **preferred** runway -- the one the campaign selects from the wind and available
+  approach aids, also shown in the kneeboard -- a settable distance out and at the
+  height a three-degree slope puts it. With zero surface wind, the stored wind
+  direction is ignored. DCS ATC selects independently and can assign another runway.
+  On by default, under Mission Generator.
+
+  Carriers get one on their base recovery course, at the position the ship will have
+  reached by the time the flight lands: fifty miles astern by default, which is where a
+  Case III approach starts. DCS exposes a runway's heading but no coordinates, so at a
+  field with more than one runway the course is correct but the waypoint can be
+  laterally offset. In calm air the ILS runway is preferred, which is usually the one
+  the field's reference point sits on.
+
+  The hold point works the same way at the departure end, under its own setting: the
+  flight climbs out along the runway it took off from, or a carrier's recovery course,
+  instead of turning straight for the target. How far out it sits is settable too.
+
+- **Realistic CAS** — an experimental, off-by-default Mission Plugin that makes
+  ground targets something to discover instead of immediately available to every
+  AI attacker. Both sides search using visual, EO/IR and ground-radar observations,
+  with terrain line of sight and approximate weather, daylight and cover effects.
+  Firing reveals a group immediately; observed contacts expire after a configurable
+  time. Ground units also spot enemies, and revealing one vehicle reveals its group.
+  Fixed map SAM sites stay known; frontline SAMs participate in the fog. F10 and
+  weapon accuracy are unchanged. Enable **Realistic CAS (experimental)** in Mission
+  Plugins; **Moose Autolase must be disabled**. CTLD logistics can remain
+  enabled with **JTAC autolase targets** off; runtime-created units are not yet
+  registered in the fog. Legacy generated JTACs are omitted.
+
+  Enable **AFAC missions** separately in the plugin options to add **AFAC — Area**
+  and **AFAC — Frontline**. Compatible aircraft search without attacking, report
+  contacts and mark targets with laser, night IR and finite coloured payload smoke.
+  An optional BLUE-view F10 setting displays discovered enemy-front contacts with
+  their existing lifetime, including support infantry and MANPADS.
+  Eligible transport helicopters carry a thermal-equipped JTAC. Flights coordinate
+  by enemy group, earn discovery and marking experience, and avoid known ground air
+  defences during patrol and recovery. If the work area is blocked, they wait in a
+  reachable safe orbit and recheck access until it clears or BINGO fuel requires RTB.
+  Station time, marking duration, reports and
+  the shared laser code are configurable. Threat avoidance and sensors use gameplay
+  approximations; campaign-scale tuning remains ongoing.
+  [Plugin details](resources/plugins/realisticcas/README.md).
+  ([#195](https://github.com/juanjux/dcs-escalation/pull/195))
+  
+- **Automatic refuelling waypoint and tanker added only if needed.** A package's route is costed leg by leg against and estimation of fuel usage based on the plane, speed and height
+  and a flight that will not make it gets a dialog about adding a refuelling waypoint after the target and optionally a tanker in the same package.
+  ([#211](https://github.com/juanjux/dcs-escalation/pull/211),
+  [#213](https://github.com/juanjux/dcs-escalation/pull/213),
+  [#214](https://github.com/juanjux/dcs-escalation/pull/214))
+  
+- **Mission Log** (plugin, off by default) — a running commentary of what happens to your
+  side while you fly: who shot down whom and with what, which targets went down, who
+  ejected, who crashed, and which bases were captured or lost.
+  ([#120](https://github.com/juanjux/dcs-escalation/pull/120))
+  
+- **Turn times from the sun** — the four turn slots are derived from the theater's
+  latitude and the campaign date rather than one fixed window per map, so a December dawn
+  turn no longer starts in the pitch dark. North of the arctic circle the slots hang off
+  solar noon and stay dark. A theater keeps its old table with `daytime_mode: table`.
+  ([#113](https://github.com/juanjux/dcs-escalation/pull/113))
+  
+- **ATMOS-X live weather** — with the ATMOS-X pack selected, the turn's weather can be a
+  real METAR observation fetched through the ATMOS-X CLI, for a station picked
+  automatically or set by ICAO. Fetched when the turn is built, so kneeboards, the active
+  runway and the carrier's course into wind all match.
+  ([#101](https://github.com/juanjux/dcs-escalation/pull/101))
+  
+- **Custom cloud preset packs** — a campaign setting that makes a community cloud-preset
+  mod's presets available to the generator: Bandit's Cloud Presets, Weather 2.0 or
+  ATMOS-X, one at a time since the packs reuse the same preset keys.
+  ([#53](https://github.com/juanjux/dcs-escalation/pull/53))
+  
+- **Smart Threat Reaction** — a plugin that keeps AI aircraft at Passive Defense and
+  switches only the flight a missile is actually guiding on to Evade Fire, so one SAM
+  launch no longer sends 200 planes defensive and aborting their mission, only the flight of the targeted plane does.
+  ([#63](https://github.com/juanjux/dcs-escalation/pull/63))
+  
+- **Campaign Doctrine: "non-combat (crash) air losses don't count"** — AI crashes and
+  collisions DCS credits to no weapon no longer deplete a squadron or kill the pilot.
+  This makes campaigns longer and harder with more planes in the air after some turns.
+  ([#1](https://github.com/juanjux/dcs-escalation/pull/1))
+  
+- **One-way air assault ("remain at destination")** — a helicopter-only option: the helos
+  land at the objective and do not return, so the assault uses their full ferry range. At
+  turn end the survivors redeploy there if you capture the base, otherwise they are lost.
+  ([#64](https://github.com/juanjux/dcs-escalation/pull/64))
+
+- **Automated ground-object / building repair** — the HQ repairs damaged SAM sites,
+  vehicle groups and buildings each turn, with tunable budgets and priorities, and the
+  turn panel reports what each side finished and what is still in progress.
+  ([#29](https://github.com/juanjux/dcs-escalation/pull/29),
+  [#43](https://github.com/juanjux/dcs-escalation/pull/43))
+  
+- **Set loadout as default** — a named payload can be made the default for an aircraft
+  and mission type, so new flights start with it. 
+  ([#49](https://github.com/juanjux/dcs-escalation/pull/49),
+  [#51](https://github.com/juanjux/dcs-escalation/pull/51))
+
+- **Payload library editor** — open Edit → Payloads, or use Payloads editor in a
+  flight's Payload tab to start with its aircraft selected. Browse separate Escalation
+  and Custom presets, edit stores and weapon settings, create, duplicate or delete
+  presets. Changes apply across campaigns without changing already assigned flight
+  payloads; original Escalation presets can be restored for each aircraft.
+  
+- **A fuel estimate for the plan**, beside the route total and the per-leg distances:
+  taxi, the legs at their own climb/cruise/combat rates, the landing reserve and a
+  margin, against what the flight carries. Only 24 aircraft have measured consumption
+  figures; the rest are estimated from their capacity over a nominal range for their
+  kind, leaning high.
+  ([#190](https://github.com/juanjux/dcs-escalation/pull/190),
+  [#189](https://github.com/juanjux/dcs-escalation/pull/189),
+  [#191](https://github.com/juanjux/dcs-escalation/pull/191))
+  
+- **The debriefing is kept in the save**, so it can be reopened from the Misc bar after
+  the session that produced it.
+
+## Campaigns
+- **Battle for Area 51: both sides get a real IADS.** Red's west, central and east
+  groups shared no node and drew as three networks a few miles apart; the comms are
+  cross-linked into one and the three power stations feed a single grid, so the network
+  survives losing a station and goes dark all at once when the last one falls. Blue had
+  nothing but the bunker -- no radar, no comms, no power, so every site of its own went
+  autonomous whatever happened -- and gets two early-warning radars, three relay towers
+  and two power stations, so it is one working network too.
+  ([#221](https://github.com/juanjux/dcs-escalation/pull/221),
+  [#225](https://github.com/juanjux/dcs-escalation/pull/225))
+- **Syria — Invasion of the Canary Islands 2030, new campaign**, with the **Spain 2030** and
+  **Morocco 2030** factions. A rework of NoGoodNews' original: both sides fly what they
+  are expected to field by 2030 (so it required the Eurofighter and F35 mods, which this fork also adds support for), and both navies are built from real hulls with pinned compositions. Air defenses are about a third lighter than the original, the IADS is fully wired, and every base on a front has a motor pool holding its undeployed armor as a bombable target and Morocco has been made stronger to better balance the campaign.
+  ([#98](https://github.com/juanjux/dcs-escalation/pull/98))
+  
+- **South Atlantic — Gran Polvorin gets an air defence network.** Both sides are now wired into one network each,
+  
+- with vehicle depots and
+  a GPS jamming site per side.
+  ([#290](https://github.com/juanjux/dcs-escalation/pull/290),
+  [#295](https://github.com/juanjux/dcs-escalation/pull/295))
+
+- **GPS jamming (a feature from the 414ret fork) is available in every modern campaign.** 
+  ([#183](https://github.com/juanjux/dcs-escalation/pull/183))
+
+## Modding & data
+- **F-15EX Eagle II, F-15C EG (Golden Eagle) and Eurofighter Typhoon** mod aircraft.
+  F-15EX v3.0 includes the EX, EX with CFTs and IA variants as air-to-air fighters only; install the mod's generated external models and hooks separately.
+  ([#31](https://github.com/juanjux/dcs-escalation/pull/31),
+  [#32](https://github.com/juanjux/dcs-escalation/pull/32),
+  [#33](https://github.com/juanjux/dcs-escalation/pull/33))
+  
+- **High Digit SAMs Ultimate Compilation, as a second selectable build.** The two builds
+  cannot both be installed, so the New Game wizard offers them as mutually exclusive
+  choices and a faction only sees the presets its chosen build ships. Campaign authors
+  no longer need to define links for new sites: topology is built automatically.
+  (branch [`juanjux/hds_2_1_0_and_ultimate`](https://github.com/juanjux/dcs-escalation/tree/juanjux/hds_2_1_0_and_ultimate),
+  upstream [#956](https://github.com/dcs-retribution/dcs-retribution/pull/956))
+
+## Taken and adapted From the 414Ret fork
+
+These are adapted from the [**414Ret** fork](https://github.com/bradyccox/414Ret)
+(414th Joint Fighter Group), with thanks to its authors — 414Ret bundles many
+more features; listed here are the ones incorporated into this fork, each
+crediting the original 414Ret author (the recent additions land via attributed
+PRs on `juanjux-dev`, so any can be reverted cleanly).
+
+414Ret moves fast, so its feature list is re-reviewed periodically and only a
+part of it is taken: every feature carried here is one more thing to reconcile
+on each upstream sync, so the bar is "clearly worth the maintenance", not
+"interesting". The last review covered the 1087 commits between 2026-06-23 and
+2026-08-22. Ports are cherry-picked with the original author preserved —
+`git log --author=bradyccox` is the authoritative list of what has been taken,
+and it is longer than this section.
+
+- **Mission Impact debrief summary** — bases captured/lost, runway damage and a
+  both-sides loss overview above the casualty tables.
+  
+- **AI routes around the ground battle** — the active front line becomes a
+  navmesh routing hazard, so transit flights detour around it.
+  
+- **Frontline units spread along the line** instead of stacking laterally.
+
+- **Escorts can defend themselves before the JOIN point** — an escort was generated at an
+  ROE that only permits engaging *designated* targets, and the task that designates them
+  attaches at JOIN. Escorts now spawn able to return fire and escalate at JOIN.  
+  
+- **Coastal batteries can engage ships** — land-based anti-ship sites fire on their own at
+  hulls in range, the way fleets do. Off by default (a mod battery firing anti-ship
+  missiles has crashed DCS).
+  
+- **DEAD reachability gate** — the planner no longer marks a SAM "cleared" when the
+  assigned flight cannot actually reach it.
+  ([#37](https://github.com/juanjux/dcs-escalation/pull/37), porting 414Ret #83)
+  
+- **Weapons coverage refresh** — more modern PGMs and air-to-air missiles across
+  factions, without the era date-gating (our introduction years are kept).
+  ([#35](https://github.com/juanjux/dcs-escalation/pull/35), porting 414Ret #82) 
+  
+- **Two guidance radars per SAM site** — every layout fielded exactly one engagement
+  radar, so a single anti-radiation missile was a functional site kill. The Track Radar
+  slot doubles across the generic layouts, SA-2, SA-3, SA-5, S-300, HQ-22, S-350, the
+  mixed SA-2/SA-3 site, the reinforced SA-6, NASAMS-3 and Sky Sabre, with the second
+  position 45-121 m from the first. (porting 414Ret #582)
+  
+- **More SAM site layouts, tighter EWR radar pool** — dedicated battery layouts
+  instead of every site reusing the same handful of shapes.
+  
+- **Bulk flight altitude** — "apply to all" for en-route waypoint altitude, and the
+  per-waypoint arrows step 1000 ft instead of 1 ft. (porting 414Ret #805)
+
+- **Ship groups generate as task groups** — a group was N copies of one hull, so a carrier
+  screen was four identical destroyers. A slot now takes one type per position, drawn from
+  the lead's own class family and capped at three types. Naval layouts only; the buy menu
+  still gives exactly the hull that was picked.
+  ([#104](https://github.com/juanjux/dcs-escalation/pull/104), porting 414Ret #764)
+  
+- **Every generated mission is archived** to
+  `Missions/Retribution Archive/<campaign>_turn<NN>_<timestamp>.miz`, self-pruning, with
+  the fixed output path unchanged. Each turn used to overwrite the mission just flown.
+  ([#103](https://github.com/juanjux/dcs-escalation/pull/103), porting 414Ret #615)
+  
+- **GPS jamming** — a JDAM, JSOW, JASSM or SLAM-ER released against a target inside an
+  enemy jamming bubble lands off the aimpoint, further off the deeper in. Laser, TV and
+  anti-radiation weapons are unaffected, and killing the jammer restores accuracy on the
+  next weapon in the same mission. The jammer is an ordinary bombable ground unit and is
+  not a SEAD target. Off by default.
+  ([#109](https://github.com/juanjux/dcs-escalation/pull/109), porting 414Ret #778)
+  
+- **Finite anti-ship magazines, and a staggered weapons release** — a warship group
+  carries a campaign stock of anti-ship missiles that never rearms, and a group that runs
+  dry drops to return-fire. Optionally, ships spawn on return-fire and are released to
+  weapons-free one group at a time. Enemy attacks release the target and nearby friendly
+  groups in one hop. A configurable six-missile limit applies per group per mission;
+  under attack, a group may exceed it and fire one extra salvo past an empty magazine.
+  ([#106](https://github.com/juanjux/dcs-escalation/pull/106), porting 414Ret #766)
+  
+- **The AI buys its better ground units more often** — the ground buy rolled uniformly
+  over everything affordable of the right class. The roll is weighted by price; a
+  weighting, not a maximum, so the cheap end still appears.
+  ([#105](https://github.com/juanjux/dcs-escalation/pull/105), porting the
+  capability-weighted half of 414Ret #68)
+
+- **Tanker, AEW&C and CAP orbits on the F10 map** — each blue tanker and AEW&C
+  racetrack is drawn with its callsign, type, frequency and TACAN, as wide as the AI
+  actually flies it, and each CAP station once as a thinner racetrack.
+  ([#414](https://github.com/juanjux/dcs-escalation/pull/414), porting RetLab #442,
+  #678 and #1032)
+
+- **More in the player aircraft's data cartridge:**
+  - the Hornet family's TACAN station list and ingress-to-split attack corridor,
+    plus CAS/SEAD work areas on the Viper's HSD, when the flight plan defines one
+    (adapted from [Retribution #966](https://github.com/dcs-retribution/dcs-retribution/pull/966));
+  - the Hornet family's recovery-base TACAN, ICLS and Link4/ACLS, when available;
+    each flight uses its arrival base, normally also its departure base. This uses
+    carrier ICLS, not terrestrial ILS, and leaves unsupported cartridges unchanged;
+  - every front joined into one line, the only one the Hornet's SA page shows
+    ([#415](https://github.com/juanjux/dcs-escalation/pull/415), porting RetLab #1008);
+  - a box round each tanker the aircraft can refuel from, nearest its target first
+    ([#416](https://github.com/juanjux/dcs-escalation/pull/416), porting RetLab #1008
+    and #1015);
+  - optionally, the Viper's MAN 1 as flares only and MAN 6 as chaff only, both on the
+    stick ([#417](https://github.com/juanjux/dcs-escalation/pull/417), porting RetLab
+    #1008);
+  - the Viper's ROE tab filled from the campaign: a family only one side flies is that
+    side's ([#418](https://github.com/juanjux/dcs-escalation/pull/418), porting RetLab
+    #992);
+  - a cartridge for the Apache: the front line on its TSD and the enemy air defence as
+    target points under the TSD's own symbols, its route left as the mission gives it
+    ([#419](https://github.com/juanjux/dcs-escalation/pull/419), porting RetLab #992).
+
+## Removed from upstream
+
+- **Anubis' C-130J-30 Super Hercules mod**, unsupported here and by its own authors. It
+  was the only aircraft that could drop paratroopers, and it did it as a carpet-bombing
+  task releasing the mod's own thirty-soldier store — something the stock C-130J-30 does
+  not carry. Saves, factions and campaigns that used it read the stock C-130J-30 instead.
+
+- **Fast forward.** It never worked well enough to be worth the machinery. Take Off hands
+  DCS the mission at the time it was planned for.  
+  ([#176](https://github.com/juanjux/dcs-escalation/pull/176))
+  
+- **Four obsolete or duplicated plugins removed.** EWRS is the 2016 script BigEye EWR was rewritten from; Mbot's Call
+  Artillery only ever answered a player flying Armed Recon, while Carsten's answers
+  anyone in range; the C-130 cargo script is for a mod their authors don't support anymore; and the EW
+  Jammer script cannot model jamming honestly without engine support.
+  ([#175](https://github.com/juanjux/dcs-escalation/pull/175))
+  
+- **DCS: Pretense support.** A one-way export into a second, parallel game that never
+  comes back to the Escalation campaign — ~5,400 lines of Python plus 590 KB of
+  third-party Lua, carried through every upstream sync, for a project that is no longer
+  maintained on either side. Gone with it: `game/pretense/`, the plugin resources, the
+  toolbar actions, the settings page, `FlightType.PRETENSE_CARGO` and the four `*_full`
+  campaigns tuned for it.
+
+---
+
+For installation and general usage, see the upstream
+[DCS Escalation](https://github.com/dcs-retribution/dcs-retribution) documentation.

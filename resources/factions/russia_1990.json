@@ -25,7 +25,9 @@
     "Tu-142 Bear-F",
     "Tu-160 Blackjack",
     "Tu-22M3 Backfire-C",
-    "Tu-95MS Bear-H"
+    "Tu-95MS Bear-H",
+    "L-39ZA Albatros",
+    "WingLoong-I"
   ],
   "awacs": [
     "A-50"
@@ -58,14 +60,17 @@
   ],
   "missiles": [],
   "preset_groups": [
-    "SA-2/S-75",
+    "SA-5/S-200",
     "SA-2/S-75 V-759/5V23",
+    "SA-2/S-75",
+    "SA-2/SA-3 Mixed Site",
     "SA-3/S-125",
     "SA-3/S-125 V-601P/5V27",
     "SA-6",
     "SA-11",
     "SA-10/S-300PS",
-    "Russian Navy"
+    "Russian Navy",
+    "GPS Jamming Site (Red)"
   ],
   "naval_units": [
     "Frigate 1135M Rezky",
@@ -94,3 +99,5 @@
   "has_jtac": true,
   "jtac_unit": "Yak-52"
 }
+
+

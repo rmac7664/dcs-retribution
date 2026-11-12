@@ -22,17 +22,20 @@ from dcs.ships import (
     VINSON,
 )
 from dcs.vehicles import AirDefence
+from dcs.unittype import VehicleType
 
 from pydcs_extensions import highdigitsams as hds
 from pydcs_extensions import iranmilitaryassetspack as imap
 from pydcs_extensions import vietnamwarvessels as vwv
 from pydcs_extensions import chinesemilitaryassetspack as cmap
+from pydcs_extensions import iranmilitaryassetspack as imap
 from pydcs_extensions import russianmilitaryassetspack as rmap
 from pydcs_extensions import swedishmilitaryassetspack as smap
 from pydcs_extensions import ukmilitaryassetspack as ukmap
 from pydcs_extensions import usamilitaryassetspack as usamap
+from pydcs_extensions import germanymilitaryassetspack as demap
 
-TELARS = {
+TELARS: set[type[VehicleType]] = {
     AirDefence.x_2S6_Tunguska,
     AirDefence.SA_11_Buk_LN_9A310M1,
     AirDefence.Osa_9A33_ln,
@@ -72,6 +75,12 @@ TRACK_RADARS = {
     smap.LvS_103_PM103_HX,
     smap.UndE23,
     ukmap.CH_SkySabreGiraffe,
+    # The AN/MPQ-53 is the original Patriot phased array -- the radar the
+    # system is named after. Without it here, a battery built around one has no
+    # tracker its launchers recognise, so it reports a threat range of zero and
+    # the map draws no ring at all, while in the mission it shoots perfectly
+    # well. That is what happened at Baghdad International.
+    demap.CH_MIM104_ANMPQ53_KAT1,
     usamap.CH_MIM104_ANMPQ65,
     usamap.CH_MIM104_ANMPQ65A,
     usamap.CH_MIM104_ANMPQ65_HEMTT,
@@ -138,6 +147,7 @@ LAUNCHER_TRACKER_PAIRS = {
     smap.RBS_98: (smap.UndE23,),
     ukmap.CH_SkySabreLN: (ukmap.CH_SkySabreGiraffe,),
     usamap.CH_MIM104_M903_PAC2: (
+        demap.CH_MIM104_ANMPQ53_KAT1,
         usamap.CH_MIM104_ANMPQ65,
         usamap.CH_MIM104_ANMPQ65A,
         usamap.CH_MIM104_LTAMDS,
@@ -146,6 +156,7 @@ LAUNCHER_TRACKER_PAIRS = {
         usamap.CH_MIM104_LTAMDS_HEMTT,
     ),
     usamap.CH_MIM104_M903_PAC3: (
+        demap.CH_MIM104_ANMPQ53_KAT1,
         usamap.CH_MIM104_ANMPQ65,
         usamap.CH_MIM104_ANMPQ65A,
         usamap.CH_MIM104_LTAMDS,
@@ -154,6 +165,7 @@ LAUNCHER_TRACKER_PAIRS = {
         usamap.CH_MIM104_LTAMDS_HEMTT,
     ),
     usamap.CH_MIM104_M903_PAC2_HEMTT: (
+        demap.CH_MIM104_ANMPQ53_KAT1,
         usamap.CH_MIM104_ANMPQ65,
         usamap.CH_MIM104_ANMPQ65A,
         usamap.CH_MIM104_LTAMDS,
@@ -162,6 +174,7 @@ LAUNCHER_TRACKER_PAIRS = {
         usamap.CH_MIM104_LTAMDS_HEMTT,
     ),
     usamap.CH_MIM104_M903_PAC3_HEMTT: (
+        demap.CH_MIM104_ANMPQ53_KAT1,
         usamap.CH_MIM104_ANMPQ65,
         usamap.CH_MIM104_ANMPQ65A,
         usamap.CH_MIM104_LTAMDS,
@@ -170,6 +183,32 @@ LAUNCHER_TRACKER_PAIRS = {
         usamap.CH_MIM104_LTAMDS_HEMTT,
     ),
     usamap.CH_THAAD_M1120: (usamap.CH_THAAD_ANTPY2,),
+}
+
+# Integrated air defences carry their own sensors, weapons and power supply.
+# Some TELARs still require a separate tracker or battery command post.
+SELF_CONTAINED_AIR_DEFENCES: set[type[VehicleType]] = (
+    TELARS
+    - LAUNCHER_TRACKER_PAIRS.keys()
+    - {AirDefence.SA_11_Buk_LN_9A310M1, hds.SAM_SA_17_Buk_M1_2_LN_9A310M1_2}
+) | {
+    AirDefence.Gepard,
+    AirDefence.Vulcan,
+    AirDefence.ZSU_23_4_Shilka,
+    AirDefence.HEMTT_C_RAM_Phalanx,
+    AirDefence.CHAP_PantsirS1,
+    AirDefence.CHAP_TorM2,
+    hds.SAM_SA_22_Pantsir_SM,
+    cmap.CH_PGZ09,
+    cmap.CH_PGZ95,
+    cmap.CH_LD3000,
+    cmap.CH_LD3000_stationary,
+    demap.CH_FlaRakRad,
+    demap.CH_SkynexHX,
+    rmap.CH_PantsirS2,
+    rmap.CH_TorM2K,
+    rmap.CH_ZSU234,
+    usamap.CH_Centurion_C_RAM,
 }
 
 UNITS_WITH_RADAR = {

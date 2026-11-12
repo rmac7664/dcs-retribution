@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import copy
 import datetime
+import json
 import logging
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Iterator, Optional, TYPE_CHECKING, Type, Dict, Any
 
 from dcs.unittype import FlyingType
@@ -12,11 +14,71 @@ from game.ato.flighttype import FlightType
 from game.data.weapons import Pylon, Weapon, WeaponType
 from game.dcs.aircrafttype import AircraftType
 from game.factions.faction import Faction
-from game.persistency import prefer_liberation_payloads
+from game.persistency import payloads_dir, prefer_liberation_payloads
+from game.utils import Distance, max_optional_distance
 
 if TYPE_CHECKING:
     from .flight import Flight
     from game.theater import MissionTarget
+
+
+# Default-loadout overrides: the payload editor's "Set as default" button lets a
+# user mark a specific named payload as the default for an aircraft + flight type.
+# Applies only to the player's side, including its AI flights.
+# Stored globally (all campaigns) next to the DCS payload files, keyed by aircraft
+# id then FlightType name. default_for_task_and_aircraft consults these before the
+# "Escalation <task>" name conventions. This only changes WHICH named payload is
+# picked as default; it never renames or overwrites a payload.
+_DEFAULT_LOADOUT_OVERRIDES_FILE = "retribution_default_loadouts.json"
+
+
+def _default_loadout_overrides_path() -> Path:
+    return payloads_dir() / _DEFAULT_LOADOUT_OVERRIDES_FILE
+
+
+def load_default_loadout_overrides() -> Dict[str, Dict[str, str]]:
+    try:
+        with _default_loadout_overrides_path().open(encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def get_default_loadout_override(aircraft_id: str, task: FlightType) -> Optional[str]:
+    return load_default_loadout_overrides().get(aircraft_id, {}).get(task.name)
+
+
+def _write_default_loadout_overrides(data: Dict[str, Dict[str, str]]) -> None:
+    # Written via a temporary file and replaced in one step: a half-written JSON here
+    # would silently drop every default the user has set.
+    path = _default_loadout_overrides_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    tmp.replace(path)
+
+
+def set_default_loadout_override(
+    aircraft_id: str, task: FlightType, payload_name: str
+) -> None:
+    data = load_default_loadout_overrides()
+    data.setdefault(aircraft_id, {})[task.name] = payload_name
+    _write_default_loadout_overrides(data)
+
+
+def clear_default_loadout_override(aircraft_id: str, task: FlightType) -> bool:
+    """Drop the default for this aircraft + task. True if there was one to drop."""
+    data = load_default_loadout_overrides()
+    per_aircraft = data.get(aircraft_id)
+    if not per_aircraft or task.name not in per_aircraft:
+        return False
+    del per_aircraft[task.name]
+    if not per_aircraft:
+        del data[aircraft_id]
+    _write_default_loadout_overrides(data)
+    return True
 
 
 class Loadout:
@@ -27,6 +89,7 @@ class Loadout:
         date: Optional[datetime.date],
         is_custom: bool = False,
         pylon_settings: Optional[Dict[int, Dict[str, Any]]] = None,
+        ammo_type: Optional[int] = None,
     ) -> None:
         self.name = name
         # We clear unused pylon entries on initialization, but UI actions can still
@@ -38,9 +101,12 @@ class Loadout:
         self.is_custom = is_custom
         # Store weapon settings per pylon (pylon_number -> settings_dict)
         self.pylon_settings: Dict[int, Dict[str, Any]] = pylon_settings or {}
+        # None preserves the aircraft's default for old saves and payload files.
+        self.ammo_type = ammo_type if type(ammo_type) is int and ammo_type > 0 else None
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
-        """Handle loading from old save files that don't have pylon_settings."""
+        """Supply defaults for fields absent from older saves."""
+        state.setdefault("ammo_type", None)
         # Ensure pylon_settings exists for backwards compatibility
         if "pylon_settings" not in state:
             state["pylon_settings"] = {}
@@ -53,6 +119,7 @@ class Loadout:
             self.date,
             is_custom=True,
             pylon_settings=self.pylon_settings.copy(),
+            ammo_type=self.ammo_type,
         )
 
     def clone(self) -> Loadout:
@@ -62,6 +129,7 @@ class Loadout:
             copy.deepcopy(self.date),
             self.is_custom,
             copy.deepcopy(self.pylon_settings),
+            ammo_type=self.ammo_type,
         )
 
     def has_weapon_of_type(self, weapon_type: WeaponType) -> bool:
@@ -69,6 +137,12 @@ class Loadout:
             if weapon is not None and weapon.weapon_group.type is weapon_type:
                 return True
         return False
+
+    def max_standoff_range(self) -> Optional[Distance]:
+        """The longest stand-off launch range among the equipped weapons, if any."""
+        return max_optional_distance(
+            weapon.launch_range for weapon in self.pylons.values() if weapon
+        )
 
     @staticmethod
     def _fallback_for(
@@ -104,6 +178,7 @@ class Loadout:
                 self.date,
                 self.is_custom,
                 pylon_settings=self.pylon_settings.copy(),
+                ammo_type=self.ammo_type,
             )
 
         new_pylons = dict(self.pylons)
@@ -128,6 +203,7 @@ class Loadout:
             date,
             self.is_custom,
             pylon_settings=new_settings,
+            ammo_type=self.ammo_type,
         )
         # If this is not a custom loadout, we should replace any LGBs with iron bombs if
         # the loadout lost its TGP.
@@ -173,20 +249,17 @@ class Loadout:
         This applies weapon-specific settings defined in the weapon YAML files
         for the given target type to all weapons in this loadout.
         """
-        # Convert loadout to pydcs payload format for reuse of adjust_payload_for_target
-        payload = [
-            (pylon_num, {"clsid": weapon.clsid, "settings": {}})
-            for pylon_num, weapon in self.pylons.items()
-            if weapon is not None
-        ]
-
-        # Use the existing method to apply target-based settings
-        adjusted_payload = self.adjust_payload_for_target(payload, target)
-
-        # Extract the updated settings and apply them to our loadout
-        for pylon_number, pylon_data in adjusted_payload:
-            if "settings" in pylon_data and pylon_data["settings"]:
-                self.pylon_settings[pylon_number] = pylon_data["settings"]
+        targets = self.target_unit_ids(target)
+        if not targets:
+            return
+        for pylon_number, weapon in self.pylons.items():
+            if weapon is None:
+                continue
+            settings = weapon.settings_for_target(
+                self.pylon_settings.get(pylon_number), targets
+            )
+            if settings:
+                self.pylon_settings[pylon_number] = settings
 
     @classmethod
     def iter_for(cls, flight: Flight) -> Iterator[Loadout]:
@@ -218,6 +291,7 @@ class Loadout:
                     pylon_settings={
                         p["num"]: p.get("settings", {}) for p in pylons.values()
                     },
+                    ammo_type=payload.get("ammo_type"),
                 )
             except KeyError:
                 # invalid loadout
@@ -226,6 +300,12 @@ class Loadout:
     @staticmethod
     def valid_payload(pylons: Dict[int, Dict[str, str]]) -> bool:
         for p in pylons.values():
+            # An empty pylon is a pylon carrying nothing, not an unknown store.
+            # Treating it as invalid threw away whole payloads: the Tornado IDS
+            # "STRIKE" fit leaves stations 5-8 free, so the aircraft was planned
+            # with no loadout at all rather than with its GBU-16s.
+            if not p["CLSID"]:
+                continue
             if Weapon.with_clsid(p["CLSID"]) is None:
                 return False
         return True
@@ -241,6 +321,10 @@ class Loadout:
         # names, so those have been included here too. The priority goes from first to
         # last - the first element in the tuple will be tried first, then the second,
         # etc.
+        # The payload names keep the old spelling: they are strings inside the
+        # player's own MissionEditor/UnitPayloads, put there by every version of this
+        # program and by Liberation before it. A renamed application still has to find
+        # the loadouts already on his disk.
         loadout_names = {
             t: (
                 [f"Liberation {t.value}", f"Retribution {t.value}"]
@@ -250,6 +334,8 @@ class Loadout:
             for t in FlightType
         }
         legacy_names = {
+            FlightType.AFAC_AREA: ("Retribution AFAC Area",),
+            FlightType.AFAC_FRONTLINE: ("Retribution AFAC Frontline",),
             FlightType.TARCAP: (
                 "CAP HEAVY",
                 "CAP",
@@ -297,7 +383,10 @@ class Loadout:
     @classmethod
     def default_for(cls, flight: Flight) -> Loadout:
         return cls.default_for_task_and_aircraft(
-            flight.flight_type, flight.unit_type.dcs_unit_type, flight.package.target
+            flight.flight_type,
+            flight.unit_type.dcs_unit_type,
+            flight.package.target,
+            use_player_override=flight.blue.is_blue,
         )
 
     @classmethod
@@ -306,13 +395,39 @@ class Loadout:
         task: FlightType,
         dcs_unit_type: Type[FlyingType],
         target: Optional[MissionTarget] = None,
+        *,
+        use_player_override: bool = False,
     ) -> Loadout:
+        # This is cached, but must be called before loadout_by_name will work. A
+        # malformed or unsupported payload .lua (e.g. from a third-party mod)
+        # makes pydcs raise while parsing it; fall back to an empty loadout
+        # instead of aborting mission planning for the whole turn.
+        try:
+            raw_payloads = dcs_unit_type.load_payloads()
+        except Exception:
+            logging.exception(
+                "Could not load payloads for %s; using an empty loadout. This is "
+                "usually a malformed or unsupported payload file, often from a "
+                "third-party mod.",
+                dcs_unit_type.id,
+            )
+            return cls.empty_loadout()
+
+        # A user-chosen default (set via the payload editor's "Set as default"
+        # button) takes priority over the "Escalation <task>" name conventions.
+        # If its payload is missing or invalid we fall through to the conventions.
+        names = list(cls.default_loadout_names_for(task))
+        override = (
+            get_default_loadout_override(dcs_unit_type.id, task)
+            if use_player_override
+            else None
+        )
+        if override:
+            names = [override] + [n for n in names if n != override]
+
         # Iterate through each possible payload type for a given aircraft.
-        # Some aircraft have custom loadouts that in aren't the standard set.
-        for name in cls.default_loadout_names_for(task):
-            # This operation is cached, but must be called before load_by_name will
-            # work.
-            dcs_unit_type.load_payloads()
+        # Some aircraft have custom loadouts that aren't in the standard set.
+        for name in names:
             payload = dcs_unit_type.loadout_by_name(name)
             if payload is not None:
                 if target:
@@ -328,6 +443,7 @@ class Loadout:
                     {i: Weapon.with_clsid(d["clsid"]) for i, d in payload},
                     date=None,
                     pylon_settings={i: d.get("settings", {}) for i, d in payload},
+                    ammo_type=raw_payloads.get(name, {}).get("ammo_type"),
                 )
 
         # TODO: Try group.load_task_default_loadout(loadout_for_task)
@@ -336,6 +452,24 @@ class Loadout:
     @classmethod
     def empty_loadout(cls) -> Loadout:
         return Loadout("Empty", {}, date=None)
+
+    @staticmethod
+    def target_unit_ids(target: Optional[MissionTarget]) -> tuple[str, ...]:
+        """The DCS unit type ids at a target, for weapon target overrides."""
+        from game.theater import TheaterGroundObject
+        from game.transfers import Convoy
+
+        targets: tuple[str, ...] = ()
+        unit: Any
+        if isinstance(target, Convoy):
+            for unit in target.units:
+                if unit.dcs_unit_type and unit.dcs_unit_type.id:
+                    targets += (unit.dcs_unit_type.id,)
+        elif isinstance(target, TheaterGroundObject):
+            for unit in target.units:
+                if unit.type and unit.type.id:
+                    targets += (unit.type.id,)
+        return targets
 
     @classmethod
     def adjust_payload_for_target(cls, payload: Any, target: MissionTarget) -> Any:
@@ -352,23 +486,7 @@ class Loadout:
         Returns:
             The payload with adjusted weapon settings, or the original if no adjustments apply
         """
-        if not target:
-            return payload
-
-        from game.theater import TheaterGroundObject
-        from game.transfers import Convoy
-
-        targets: tuple[Any, ...] = ()
-        unit: Any
-        if isinstance(target, Convoy):
-            for unit in target.units:
-                if unit.dcs_unit_type and unit.dcs_unit_type.id:
-                    targets += (unit.dcs_unit_type.id,)
-        elif isinstance(target, TheaterGroundObject):
-            for unit in target.units:
-                if unit.type and unit.type.id:
-                    targets += (unit.type.id,)
-
+        targets = cls.target_unit_ids(target)
         if not targets:
             return payload
 
@@ -384,9 +502,8 @@ class Loadout:
             if weapon is None:
                 continue
 
-            # Get target-based overrides from the weapon definition
-            target_overrides = weapon.get_target_overrides(targets)
-            if target_overrides:
-                pylon_data["settings"] = target_overrides
+            settings = weapon.settings_for_target(pylon_data.get("settings"), targets)
+            if settings:
+                pylon_data["settings"] = settings
 
         return adjusted_payload

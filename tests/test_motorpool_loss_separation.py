@@ -44,8 +44,11 @@ def test_unitmap_motorpool_and_front_line_are_distinct_registries() -> None:
     from types import SimpleNamespace
 
     unit_map = UnitMap()
-    mp_group = SimpleNamespace(units=[SimpleNamespace(name="mp-001")])
-    fl_group = SimpleNamespace(units=[SimpleNamespace(name="fl-001")])
+    # Groups carry a name like a real VehicleGroup does: add_front_line_units also
+    # registers the group itself (front_line_groups), which is how a dead TIC clone
+    # is mapped back to the group it was cloned from.
+    mp_group = SimpleNamespace(name="mp-group", units=[SimpleNamespace(name="mp-001")])
+    fl_group = SimpleNamespace(name="fl-group", units=[SimpleNamespace(name="fl-001")])
 
     unit_map.add_motorpool_units(mp_group, cp, gut)  # type: ignore[arg-type]
     unit_map.add_front_line_units(fl_group, cp, gut)  # type: ignore[arg-type]

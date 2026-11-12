@@ -1,7 +1,7 @@
 ---
 name: Nevada - WRL - Battle for Area 51 (v1.1) #1.0 - Original Release / #1.1 - Player F15e added
 theater: Nevada
-authors: HolyOrangeJuice, We Run Liberation
+authors: HolyOrangeJuice, We Run Liberation, modified by juanjux
 recommended_player_faction: WRL - Task Force Blue
 recommended_enemy_faction: WRL - Task Force Red
 recommended_start_date: 2022-06-04
@@ -15,90 +15,63 @@ recommended_player_income_multiplier: 5.0
 recommended_enemy_income_multiplier: 1.0
 settings:
   max_frontline_width: 20
+# GPS jamming. The three red EWR markers sit within 15 nm of each other (A to C is
+# 14.9 nm), one jammer's radius, so the middle one covers the cluster and a second
+# would only be redundancy. No radar on it, so it is a STRIKE target, not SEAD.
+ground_forces:
+  EWR-B: GPS Jamming Site (Red)
+
 advanced_iads: true # Campaign has connection_nodes / power_sources / command_centers
-iads_config:
-#COMMAND
-  - COMMAND:
-    - CM-C
-    - CM-B2
-    - PW-C
-#WEST IADS
-  - EWR-A:
-    - CM-A
-    - PW-A
-  - SAM-A:
-    - CM-A
-    - PW-A
-#CENTRAL IADS
-  - EWR-B:
-    - CM-A2
-    - PW-B
-  - SAM-A2:
-    - CM-A2
-    - PW-B
-  - SAM-B:
-    - CM-B
-    - PW-B
-#EAST IADS
-  - EWR-C:
-    - CM-C
-    - PW-C
-  - SAM-C1:
-    - CM-B2
-    - PW-C
-  - SAM-C2:
-    - CM-B2
-    - PW-C
-  - SAM-C3:
-    - CM-C
-    - PW-C
-  - NATO SAM-1:
-    - NATO COMMAND
-  - NATO SAM-2:
-    - NATO COMMAND
-  - NATO NELLIS 1:
-    - NATO COMMAND
-  - NATO NELLIS 2:
-    - NATO COMMAND
-  - NATO NELLIS 3:
-    - NATO COMMAND
-  - NATO NELLIS 4:
-    - NATO COMMAND
+
 squadrons:
 # Nellis AFB
   4:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - MQ-9 Reaper
+      size: 2
+      pilots: 6
     - primary: AEW&C
       aircraft:
         - E-3A
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - KC-135 Stratotanker
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - KC-130
       size: 2  
+      pilots: 6
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - B-52H Stratofortress
       size: 2
+      pilots: 6
     - primary: Strike
       secondary: any
       aircraft:
         - B-1B Lancer
       size: 2
+      pilots: 6
     - primary: BAI
       secondary: any
       aircraft:
         - F-117A Nighthawk
       size: 5           
+      pilots: 9
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
         - F-15C Eagle
       size: 16
+      pilots: 20
 # Creech
   1:
     - primary: BAI
@@ -106,88 +79,112 @@ squadrons:
       aircraft:
         - F-15E Strike Eagle (Suite 4+)
       size: 16 
+      pilots: 20
     - primary: SEAD
       secondary: air-to-ground
       aircraft:
         - VMFA-251 #Hornet - Marines
       size: 16
+      pilots: 20
     - primary: Strike
       secondary: any
       aircraft:
         - 23rd FS #Viper USAF
       size: 16
+      pilots: 20
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
         - 58th FS #F15c
       size: 16
+      pilots: 20
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - A-10C Thunderbolt II (Suite 7)
       size: 16
+      pilots: 20
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - AV-8B Harrier II Night Attack
       size: 16
+      pilots: 20
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - A Company, 1-211th ARB #AH-64D Apache Longbow
       size: 10       
+      pilots: 14
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - Mi-24P Hind-F
       size: 10
+      pilots: 14
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - Ka-50 Hokum III
       size: 10
+      pilots: 14
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - SA 342M Gazelle
       size: 4
+      pilots: 8
     - primary: Transport
       secondary: any
       aircraft:
         - HMLA-169 (UH-1H) #UH-1H Iroquois
       size: 4
+      pilots: 8
     - primary: Transport
       secondary: any
       aircraft:
         - Mi-8MTV2 Hip
       size: 4
+      pilots: 8
 # Groom Lake
   2:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - WingLoong-I
+      size: 2
+      pilots: 6
     - primary: BARCAP
       secondary: any
       aircraft:
         - MiG-21bis Fishbed-N
       size: 16
+      pilots: 20
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Su-17M4 Fitter-K
       size: 16
+      pilots: 20
     - primary: BARCAP
       secondary: any
       aircraft:
         - F-5E Tiger II
       size: 16
+      pilots: 20
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Su-24M Fencer-D
       size: 16
+      pilots: 20
     - primary: CAS
       secondary: air-to-ground
       aircraft:
         - Su-25T Frogfoot
       size: 16
+      pilots: 20
 #FARP A-1
   FARP A1:
     - primary: CAS
@@ -195,11 +192,13 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 4
+      pilots: 8
     - primary: Transport
       secondary: any
       aircraft:
         - Mi-8MTV2 Hip
       size: 4
+      pilots: 8
 #FARP B-1
   FARP B1:
     - primary: CAS
@@ -207,8 +206,10 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 4
+      pilots: 8
     - primary: Transport
       secondary: any
       aircraft:
         - Mi-8MTV2 Hip
       size: 4
+      pilots: 8

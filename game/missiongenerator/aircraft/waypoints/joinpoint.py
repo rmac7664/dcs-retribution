@@ -1,4 +1,5 @@
 import random
+from datetime import datetime, timedelta
 from typing import List
 
 from dcs.point import MovingPoint
@@ -7,6 +8,7 @@ from dcs.task import (
     EscortTaskAction,
     OptECMUsing,
     OptFormation,
+    OptROE,
     Targets,
     SetUnlimitedFuelCommand,
 )
@@ -37,6 +39,7 @@ class JoinPointBuilder(PydcsWaypointBuilder):
         doctrine = self.flight.coalition.doctrine
 
         if self.flight.flight_type == FlightType.ESCORT:
+            waypoint.tasks.append(OptROE(OptROE.Values.OpenFire))
             targets = [
                 Targets.All.Air.Planes.Fighters.id,
                 Targets.All.Air.Planes.MultiroleFighters.id,
@@ -62,13 +65,9 @@ class JoinPointBuilder(PydcsWaypointBuilder):
             FlightType.SEAD_ESCORT,
             FlightType.DEAD,
         ]:
-            settings = self.flight.coalition.game.settings
-            ai_jammer = settings.plugin_option("ewrj.ai_jammer_enabled")
-            if settings.plugins.get("ewrj") and ai_jammer:
-                self.offensive_jamming(waypoint, "start")
-                self.defensive_jamming(waypoint, "start")
-
             if self.flight.flight_type == FlightType.SEAD_ESCORT:
+                # DCS does not release HARMs for the Escort task under Open Fire.
+                waypoint.tasks.append(OptROE(OptROE.Values.OpenFireWeaponFree))
                 self.handle_sead_escort(doctrine, waypoint)
                 # Let the AI use ECM to preemptively defend themselves.
                 ecm_option = OptECMUsing(
@@ -140,4 +139,50 @@ class JoinPointBuilder(PydcsWaypointBuilder):
 
         escort.stop_if_user_flag(f"split-{id(self.package)}", True)
 
+        handover = self.escort_handover()
+        if handover is not None:
+            escort.start_after_time(handover)
+
         waypoint.tasks.append(escort)
+
+    def escort_handover(self) -> int | None:
+        """When an escort flying *ahead* takes up station, in seconds from mission start.
+
+        The DCS Escort task ties a flight to the one it protects from the join point
+        on, so an escort given an "ahead" TOT offset used to spend the whole head
+        start orbiting the join and cross the target with its package anyway. Pushing
+        the formation station forward instead does not help: DCS clamps the offset and
+        the flight ends up less than a minute in front (flown, 12-09-2026).
+
+        Holding the task back does. The escort flies its own route and keeps the head
+        start; the task takes over when the flight it protects reaches its ingress
+        point, which is roughly where it would have picked it up anyway, so the attack
+        and the way home are still covered.
+
+        None for an escort that is not ahead of its package: it takes up station at
+        the join as it always has.
+        """
+        if self.flight.flight_plan.tot_offset >= timedelta():
+            return None
+        handover = self._protected_ingress_time()
+        if handover is None:
+            return None
+        elapsed = int((handover - self.now).total_seconds())
+        # Not ahead of the mission start after all (a late-planned package, a flight
+        # spawned in mid-air): escort from the join, as before.
+        return elapsed if elapsed > 0 else None
+
+    def _protected_ingress_time(self) -> datetime | None:
+        """When the flight this escort protects reaches its ingress point."""
+        primary = self.package.primary_flight
+        if primary is not None and primary is not self.flight:
+            ingress = getattr(primary.flight_plan, "ingress_time", None)
+            if ingress is not None:
+                return ingress
+        # Nothing with an ingress to protect -- a tanker or an AWACS on a racetrack.
+        # The escort's own ingress is the package's less the head start, so give the
+        # head start back to find the moment the package gets there.
+        own = getattr(self.flight.flight_plan, "ingress_time", None)
+        if own is None:
+            return None
+        return own - self.flight.flight_plan.tot_offset

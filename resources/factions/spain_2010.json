@@ -7,10 +7,10 @@
     "es_ES"
   ],
   "aircrafts": [
+    "Eurofighter Typhoon",
     "AV-8B Harrier II Night Attack",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "C-101CC Aviojet",
     "F/A-18C Hornet (Lot 20)",
     "EF-18A+ Hornet",
@@ -44,7 +44,8 @@
   "preset_groups": [
     "Hawk",
     "Roland",
-    "Patriot"
+    "Patriot",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "FFG Oliver Hazard Perry",

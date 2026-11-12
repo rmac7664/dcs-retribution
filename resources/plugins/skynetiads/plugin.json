@@ -1,15 +1,15 @@
 {
-    "nameInUI": "Skynet IADS",
-    "descriptionInUI": "Networks each coalition's SAMs and EWRs into an Integrated Air Defense System, coordinating detection and engagement and letting mobile SAMs shoot-and-scoot instead of fighting as isolated sites.",
+    "nameInUI": "Skynet IADS (juanjux's fork)",
+    "descriptionInUI": "Networks each coalition's SAMs and EWRs into an Integrated Air Defense System, coordinating detection and engagement and letting mobile SAMs shoot-and-scoot instead of fighting as isolated sites. This is a modified build: it carries performance work on the network update loop, and it knows the CurrentHill and Swedish systems that stock Skynet does not. How much of the map it networks is set outside the plugin, under Mission Generator - Performance (\"Skynet IADS radius from the action\"): 0 is the whole theatre, and anything else leaves the sites far from the fighting to defend themselves.",
     "defaultValue": true,
     "specificOptions": [
         {
-            "nameInUI": "create IADS for RED coalition",
+            "nameInUI": "Create IADS for RED coalition",
             "mnemonic": "createRedIADS",
             "defaultValue": true
         },
         {
-            "nameInUI": "create IADS for BLUE coalition",
+            "nameInUI": "Create IADS for BLUE coalition",
             "mnemonic": "createBlueIADS",
             "defaultValue": true
         },
@@ -34,85 +34,126 @@
             "defaultValue": false
         },
         {
-            "nameInUI": "Enable Mobile SAMs SHORAD (SA-8/9/13/15/19)",
+            "nameInUI": "Enable mobile SHORAD shoot-and-scoot (SA-8/9/13/15/19)",
             "mnemonic": "actMobile",
             "defaultValue": false
         },
         {
-            "nameInUI": "Maximum emission time (s) for Mobile SHORAD",
+            "nameInUI": "Mobile SHORAD: max emission time before scooting (s)",
             "mnemonic": "actMobileMaxEmissionTime",
             "defaultValue": 30
         },
         {
-            "nameInUI": "Minimum scoot distance (m) for Mobile SHORAD",
+            "nameInUI": "Mobile SHORAD: minimum scoot distance (m)",
             "mnemonic": "actMobileMinimumScootDistance",
             "defaultValue": 300
         },
         {
-            "nameInUI": "Maximum scoot distance (m) for Mobile SHORAD",
+            "nameInUI": "Mobile SHORAD: maximum scoot distance (m)",
             "mnemonic": "actMobileMaximumScootDistance",
             "defaultValue": 500
         },
         {
-            "nameInUI": "Exclude SA-15",
+            "nameInUI": "Exclude SA-15 from mobile SHORAD scooting",
             "mnemonic": "actMobile_exclude_SA15",
             "defaultValue": false
         },
         {
-            "nameInUI": "Enable Mobile SAMs MERAD (SA-6/11/17)",
+            "nameInUI": "Enable mobile MERAD shoot-and-scoot (SA-6/11/17)",
             "mnemonic": "actMobile_merad",
             "defaultValue": false
         },
         {
-            "nameInUI": "Maximum emission time (s) for Mobile MERAD",
+            "nameInUI": "Mobile MERAD: max emission time before scooting (s)",
             "mnemonic": "actMobileMaxEmissionTime_merad",
             "defaultValue": 120
         },
         {
-            "nameInUI": "Minimum scoot distance (m) for Mobile MERAD",
+            "nameInUI": "Mobile MERAD: minimum scoot distance (m)",
             "mnemonic": "actMobileMinimumScootDistance_merad",
             "defaultValue": 500
         },
         {
-            "nameInUI": "Maximum scoot distance (m) for Mobile MERAD",
+            "nameInUI": "Mobile MERAD: maximum scoot distance (m)",
             "mnemonic": "actMobileMaximumScootDistance_merad",
             "defaultValue": 3000
         },
         {
-            "nameInUI": "Adjust default SAMs GoLiveRange",
+            "nameInUI": "Network update interval (s) - raise it if the mission stutters",
+            "mnemonic": "contactUpdateInterval",
+            "defaultValue": 15
+        },
+        {
+            "nameInUI": "Adjust default SAM go-live range",
             "mnemonic": "adjustGoLiveRange",
             "defaultValue": false
         },
         {
-            "nameInUI": "SA-5 GoLiveRange (% max interceptor range)",
+            "nameInUI": "SA-5 go-live range (% of max interceptor range)",
             "mnemonic": "adjustGoLiveRange_SA5",
             "defaultValue": 100
         },
         {
-            "nameInUI": "SA-10 GoLiveRange (% max interceptor range)",
+            "nameInUI": "SA-10 go-live range (% of max interceptor range)",
             "mnemonic": "adjustGoLiveRange_SA10",
             "defaultValue": 100
         },
         {
-            "nameInUI": "SA-17 GoLiveRange (% max interceptor range)",
+            "nameInUI": "SA-17 go-live range (% of max interceptor range)",
             "mnemonic": "adjustGoLiveRange_SA17",
             "defaultValue": 100
         },
         {
-            "nameInUI": "SA-20 GoLiveRange (% max interceptor range)",
+            "nameInUI": "SA-20 go-live range (% of max interceptor range)",
             "mnemonic": "adjustGoLiveRange_SA20",
             "defaultValue": 100
         },
         {
-            "nameInUI": "SA-23 GoLiveRange (% max interceptor range)",
+            "nameInUI": "SA-23 go-live range (% of max interceptor range)",
             "mnemonic": "adjustGoLiveRange_SA23",
             "defaultValue": 100
+        },
+        {
+            "nameInUI": "Comms tower / command centre range (nm)",
+            "descriptionInUI": "Maximum radio hop for the sparse automatic backbone. Each site has one active uplink, switching to another available tower or command centre in range if needed. Sites without a path to command fight autonomously.",
+            "mnemonic": "commsRangeNm",
+            "defaultValue": 35,
+            "minimumValue": 1,
+            "maximumValue": 500
+        },
+        {
+            "nameInUI": "Power station range (nm)",
+            "descriptionInUI": "Maximum distance to a power station. Each land site uses a configurable number of fixed feeds from the nearest stations. Losing its feeds does not connect another station. Towers do not relay electricity; wiring is rebuilt each turn.",
+            "mnemonic": "powerRangeNm",
+            "defaultValue": 35,
+            "minimumValue": 1,
+            "maximumValue": 500
+        },
+        {
+            "nameInUI": "Power stations per node",
+            "descriptionInUI": "Maximum number of nearest friendly power stations wired to each node, including SAMs, EWRs, command centres, comms towers and GPS jammers. Default: 2. Only stations in range count, regardless of damage; destroyed feeds are not replaced. Applied when topology is rebuilt at turn start or on loading a save.",
+            "mnemonic": "powerSourceCount",
+            "defaultValue": 2,
+            "minimumValue": 1,
+            "maximumValue": 10000
+        },
+        {
+            "nameInUI": "Radius from the action (km, 0 = whole map)",
+            "descriptionInUI": "Skynet gets slower the more radars it coordinates, and it is handed every site on the map, for both coalitions. Set a radius and it is handed only what lies within that distance of the front line, a package target or a carrier. The rest are still generated and still fight -- they go to red alert and defend themselves -- they are simply not in the network: they never go dark, never share contacts and never react to a HARM.",
+            "mnemonic": "radiusKm",
+            "defaultValue": 0,
+            "minimumValue": 0,
+            "maximumValue": 10000
         }
     ],
     "scriptsWorkOrders": [
         {
             "file": "skynet-iads-compiled.lua",
             "mnemonic": "skynetiads-script"
+        },
+        {
+            "file": "skynet-topology.lua",
+            "mnemonic": "skynetiads-topology"
         }
     ],
     "configurationWorkOrders": [

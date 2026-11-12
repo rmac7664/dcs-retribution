@@ -18,7 +18,9 @@
     "Mi-8MTV2 Hip",
     "Su-30MKK Flanker-G",
     "H-6J Badger",
-    "JF-17 Thunder"
+    "JF-17 Thunder",
+    "WingLoong-I",
+    "MB-339A"
   ],
   "awacs": [
     "KJ-2000"
@@ -58,7 +60,8 @@
     "SA-10/S-300PS",
     "SA-20B/S-300PMU-2",
     "Silkworm",
-    "Chinese Navy"
+    "Chinese Navy",
+    "GPS Jamming Site (Red)"
   ],
   "naval_units": [
     "Type 052B Destroyer",

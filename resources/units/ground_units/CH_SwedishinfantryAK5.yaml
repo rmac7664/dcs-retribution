@@ -1,0 +1,7 @@
+class: Infantry
+is_rifleman: true
+price: 0
+spawn_weight: 5
+variants:
+  Soldier Ak 5: null
+  "[CH] Ak 5 Soldier": null

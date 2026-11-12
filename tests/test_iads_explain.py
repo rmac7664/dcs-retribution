@@ -1,0 +1,475 @@
+"""The chain behind a site: who cues it, who directs it, what powers it.
+
+The rows are what a dialog paints, so the tests read them the way a player would: the
+chip is the verdict for that link and the note says what breaking it costs.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+
+from game.data.units import UnitClass
+from game.theater.iadsnetwork.iadsexplain import LinkTone, NoNetwork, describe
+from game.theater.iadsnetwork.iadsrole import IadsRole
+from game.theater.iadsnetwork.iadsnetwork import IadsNetworkNode
+
+BLUE = True
+
+
+def _unit(alive: bool = True, detection: float = 0.0, power: bool = False) -> Any:
+    return SimpleNamespace(
+        alive=alive,
+        detection_range=SimpleNamespace(meters=detection if alive else 0.0),
+        unit_type=SimpleNamespace(
+            unit_class=UnitClass.POWER if power else UnitClass.LAUNCHER,
+            display_name="EPP-III" if power else "Launcher",
+            skynet_properties=SimpleNamespace(autonomous_behaviour=None),
+        ),
+    )
+
+
+class _Tgo:
+    """A ground object keyed by identity, as the real one is."""
+
+    def __init__(self, name: str, at: tuple[float, float]) -> None:
+        self.name = name
+        self.control_point = SimpleNamespace(captured=SimpleNamespace(is_blue=BLUE))
+        self.position = SimpleNamespace(
+            distance_to_point=lambda other, _a=at: (
+                (_a[0] - other.x) ** 2 + (_a[1] - other.y) ** 2
+            )
+            ** 0.5,
+            x=at[0],
+            y=at[1],
+        )
+        self.groups: list[Any] = []
+        self.carries_gps_jammer = False
+
+
+def _group(
+    name: str, role: IadsRole, *units: Any, at: tuple[float, float] = (0.0, 0.0)
+) -> Any:
+    units = units or (_unit(),)
+    tgo = _Tgo(name, at)
+    group = SimpleNamespace(
+        name=name,
+        iads_role=role,
+        units=list(units),
+        alive_units=sum(1 for u in units if u.alive),
+        ground_object=tgo,
+    )
+    tgo.groups = [group]
+    return group
+
+
+def _node(group: Any, *connections: Any) -> Any:
+    node = IadsNetworkNode(group)
+    for connection in connections:
+        node.add_connection_for_group(connection)
+    return node
+
+
+def _network(*nodes: Any) -> Any:
+    return SimpleNamespace(
+        nodes=list(nodes),
+        state_map=SimpleNamespace(status_for=lambda tgo: None, connectivity=None),
+    )
+
+
+def _link(picture: Any, caption: str) -> Any:
+    for link in picture.links:
+        if link.caption == caption:
+            return link
+    raise AssertionError(f"no {caption} row in {[l.caption for l in picture.links]}")
+
+
+def test_the_plugin_being_off_is_the_whole_answer() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    network = _network(_node(sam))
+
+    picture = describe(sam.ground_object, network, plugin_enabled=False)
+
+    assert picture.off is NoNetwork.PLUGIN_OFF
+    assert picture.links == ()
+    assert "options" in picture.summary
+
+
+def test_a_campaign_without_an_iads_says_so() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+
+    picture = describe(sam.ground_object, _network())
+
+    assert picture.off is NoNetwork.CAMPAIGN
+    assert picture.verdict == "NO IADS"
+
+
+def test_a_site_outside_an_existing_network_is_standalone() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    other = _group("ORIOLE", IadsRole.SAM)
+
+    picture = describe(sam.ground_object, _network(_node(other)))
+
+    assert picture.off is NoNetwork.STANDALONE
+    assert picture.verdict == "STANDALONE"
+
+
+def test_a_live_radar_in_range_is_cueing_the_site() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    ewr = _group("Tonopah", IadsRole.EWR, _unit(detection=100_000), at=(10.0, 0.0))
+    network = _network(_node(sam), _node(ewr))
+
+    early_warning = _link(describe(sam.ground_object, network), "EARLY WARNING")
+
+    assert early_warning.chip == "CUEING"
+    assert early_warning.tone is LinkTone.GOOD
+    assert early_warning.title == "Tonopah"
+
+
+def test_a_radar_whose_comms_are_cut_is_named_with_the_comms_node() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    ewr = _group("Tonopah", IadsRole.EWR, _unit(detection=100_000), at=(10.0, 0.0))
+    comms = _group("Beatty", IadsRole.CONNECTION_NODE, _unit(alive=False))
+    network = _network(_node(sam), _node(ewr, comms))
+
+    early_warning = _link(describe(sam.ground_object, network), "EARLY WARNING")
+
+    assert early_warning.chip == "LINK CUT"
+    assert early_warning.tone is LinkTone.WARN
+    assert "Beatty" in early_warning.note
+
+
+def test_a_destroyed_radar_stops_covering_the_site() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    ewr = _group(
+        "Tonopah", IadsRole.EWR, _unit(alive=False, detection=100_000), at=(10.0, 0.0)
+    )
+    network = _network(_node(sam), _node(ewr))
+
+    early_warning = _link(describe(sam.ground_object, network), "EARLY WARNING")
+
+    # A dead radar has no range, so it does not even count as covering the site: the
+    # row says nothing covers it rather than naming a wreck.
+    assert early_warning.chip == "NO COVER"
+
+
+def test_nothing_in_range_says_nothing_covers_it() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    ewr = _group("Tonopah", IadsRole.EWR, _unit(detection=1.0), at=(10_000.0, 0.0))
+    network = _network(_node(sam), _node(ewr))
+
+    early_warning = _link(describe(sam.ground_object, network), "EARLY WARNING")
+
+    assert early_warning.chip == "NO COVER"
+    assert early_warning.tone is LinkTone.WARN
+
+
+def test_an_awacs_on_station_gets_its_own_row() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    network = _network(_node(sam))
+
+    picture = describe(sam.ground_object, network, awacs=["Magic 11"])
+
+    rows = [link for link in picture.links if link.chip == "CUES WHEN AIRBORNE"]
+    assert len(rows) == 1
+    assert rows[0].title == "Magic 11"
+
+
+def test_a_standing_command_centre_is_directing() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    centre = _group("Indian Springs", IadsRole.COMMAND_CENTER)
+    network = _network(_node(sam), _node(centre))
+
+    command = _link(describe(sam.ground_object, network), "COMMAND")
+
+    assert command.chip == "DIRECTING"
+    assert command.title == "Indian Springs"
+
+
+def test_a_site_with_its_comms_cut_is_cut_off_from_its_command_centre() -> None:
+    """Skynet reaches a site only through its comms, so a live command centre does not
+    hear a radar whose tower is down."""
+    ewr = _group("Tonopah", IadsRole.EWR, _unit(detection=100_000))
+    comms = _group("Beatty", IadsRole.CONNECTION_NODE, _unit(alive=False))
+    centre = _group("Indian Springs", IadsRole.COMMAND_CENTER)
+    network = _network(_node(ewr, comms), _node(centre))
+
+    command = _link(describe(ewr.ground_object, network), "COMMAND")
+
+    assert command.chip == "CUT OFF"
+    assert command.tone is LinkTone.WARN
+    assert "does not reach the command centre" in command.note
+
+
+def test_a_network_without_command_centres_needs_none() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    network = _network(_node(sam))
+
+    command = _link(describe(sam.ground_object, network), "COMMAND")
+
+    assert command.chip == "NOT NEEDED"
+    assert command.tone is LinkTone.INFO
+
+
+def test_basic_iads_keeps_its_independent_power_supply() -> None:
+    """Basic IADS retains Skynet's native empty-dependency behavior."""
+    sam = _group("KAKAPO", IadsRole.SAM)
+
+    power = _link(describe(sam.ground_object, _network(_node(sam))), "POWER")
+
+    assert power.chip == "POWERED"
+
+
+def test_a_dead_substation_leaves_the_site_on_its_generator() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM, _unit(), _unit(power=True))
+    substation = _group("Creech", IadsRole.POWER_SOURCE, _unit(alive=False))
+    network = _network(_node(sam, substation))
+
+    picture = describe(sam.ground_object, network)
+
+    assert _link(picture, "POWER").chip == "GRID DOWN"
+    assert _link(picture, "OWN POWER").chip == "RUNNING ON IT"
+
+
+def test_a_site_without_a_generator_stays_switched_off() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    substation = _group("Creech", IadsRole.POWER_SOURCE, _unit(alive=False))
+    network = _network(_node(sam, substation))
+
+    picture = describe(sam.ground_object, network)
+
+    assert _link(picture, "POWER").tone is LinkTone.BAD
+    assert [link for link in picture.links if link.caption == "OWN POWER"] == []
+
+
+def test_a_radar_lists_what_it_cues_instead_of_who_cues_it() -> None:
+    ewr = _group("Tonopah", IadsRole.EWR, _unit(detection=100_000))
+    first = _group("KAKAPO", IadsRole.SAM, at=(10.0, 0.0))
+    second = _group("ORIOLE", IadsRole.SAM, at=(20.0, 0.0))
+    network = _network(_node(ewr), _node(first), _node(second))
+
+    cues = _link(describe(ewr.ground_object, network), "CUES")
+
+    assert cues.chip == "2 SITES"
+    assert cues.title == "KAKAPO · ORIOLE"
+
+
+def test_a_radar_with_its_comms_cut_reaches_nobody() -> None:
+    ewr = _group("Tonopah", IadsRole.EWR, _unit(detection=100_000))
+    comms = _group("Beatty", IadsRole.CONNECTION_NODE, _unit(alive=False))
+    sam = _group("KAKAPO", IadsRole.SAM, at=(10.0, 0.0))
+    network = _network(_node(ewr, comms), _node(sam))
+
+    cues = _link(describe(ewr.ground_object, network), "CUES")
+
+    assert cues.chip == "REACHES NOBODY"
+
+
+def test_a_gps_jammer_gives_jamming_and_asks_only_for_power() -> None:
+    jammer = _group("SCARAB", IadsRole.EWR)
+    jammer.ground_object.carries_gps_jammer = True
+    network = _network(_node(jammer))
+
+    picture = describe(jammer.ground_object, network)
+
+    assert [link.caption for link in picture.gives] == ["JAMMING"]
+    assert [link.caption for link in picture.gets] == ["POWER"]
+
+
+def test_a_jammer_with_the_power_out_says_it_is_jamming_nothing() -> None:
+    """The row used to claim the bubble was up whatever the site's state."""
+    from game.theater.iadsnetwork.iadsstate import IadsState, IadsStatus
+
+    jammer = _group("SCARAB", IadsRole.EWR)
+    jammer.ground_object.carries_gps_jammer = True
+    network = _network(_node(jammer))
+    network.state_map = SimpleNamespace(
+        status_for=lambda _tgo: IadsStatus(IadsState.DARK, "", False),
+        connectivity=None,
+    )
+
+    jamming = _link(describe(jammer.ground_object, network), "JAMMING")
+
+    assert jamming.chip == "SWITCHED OFF"
+    assert jamming.tone is LinkTone.BAD
+
+
+def test_a_radar_gives_what_it_cues_and_asks_for_power() -> None:
+    ewr = _group("Tonopah", IadsRole.EWR, _unit(detection=100_000))
+    sam = _group("KAKAPO", IadsRole.SAM, at=(10.0, 0.0))
+    centre = _group("Indian Springs", IadsRole.COMMAND_CENTER)
+    network = _network(_node(ewr), _node(sam), _node(centre))
+
+    picture = describe(ewr.ground_object, network)
+
+    assert [link.caption for link in picture.gives] == ["CUES", "COMMAND"]
+    assert [link.caption for link in picture.gets] == ["POWER"]
+
+
+def test_a_battery_asks_for_early_warning_command_and_power() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    centre = _group("Indian Springs", IadsRole.COMMAND_CENTER)
+    network = _network(_node(sam), _node(centre))
+
+    picture = describe(sam.ground_object, network)
+
+    assert picture.gives == ()
+    assert [link.caption for link in picture.gets] == [
+        "EARLY WARNING",
+        "COMMAND",
+        "POWER",
+    ]
+
+
+def test_a_command_centre_gives_what_it_directs() -> None:
+    centre = _group("Indian Springs", IadsRole.COMMAND_CENTER)
+    first = _group("KAKAPO", IadsRole.SAM)
+    second = _group("Tonopah", IadsRole.EWR)
+    network = _network(_node(centre), _node(first), _node(second))
+
+    picture = describe(centre.ground_object, network)
+
+    directs = _link(picture, "DIRECTS")
+    assert directs.chip == "2 SITES"
+    assert directs.title == "KAKAPO · Tonopah"
+    # It is the command: nothing cues it and nothing directs it.
+    assert [link.caption for link in picture.gets] == ["POWER"]
+
+
+def test_the_comms_a_site_hangs_off_are_a_row_of_their_own() -> None:
+    sam = _group("KAKAPO", IadsRole.SAM)
+    comms = _group("Beatty", IadsRole.CONNECTION_NODE, _unit(alive=False))
+    network = _network(_node(sam, comms))
+
+    picture = describe(sam.ground_object, network)
+
+    assert _link(picture, "COMMS").chip == "CUT"
+
+
+def test_a_long_list_of_sites_is_counted_rather_than_read() -> None:
+    centre = _group("Indian Springs", IadsRole.COMMAND_CENTER)
+    sams = [_group(f"SITE {i}", IadsRole.SAM) for i in range(6)]
+    network = _network(_node(centre), *[_node(sam) for sam in sams])
+
+    directs = _link(describe(centre.ground_object, network), "DIRECTS")
+
+    assert directs.chip == "6 SITES"
+    assert "and 2 more" in directs.title
+
+
+def test_an_enemy_site_reads_as_a_target_list() -> None:
+    sam = _group("ORIOLE", IadsRole.SAM)
+    ewr = _group("Tonopah", IadsRole.EWR, _unit(detection=100_000), at=(10.0, 0.0))
+    network = _network(_node(sam), _node(ewr))
+
+    early_warning = _link(
+        describe(sam.ground_object, network, friendly=False), "EARLY WARNING"
+    )
+
+    assert "kill it" in early_warning.note
+
+
+def test_a_substation_says_what_it_holds_up() -> None:
+    """Power and comms are not sites with a state: they are what others stand on."""
+    substation = _group("Creech", IadsRole.POWER_SOURCE)
+    first = _group("KAKAPO", IadsRole.SAM)
+    second = _group("ORIOLE", IadsRole.SAM)
+    network = _network(_node(first, substation), _node(second, substation))
+
+    picture = describe(substation.ground_object, network)
+
+    assert picture.verdict == "INFRASTRUCTURE"
+    assert "2 sites" in picture.summary
+    feeds = _link(picture, "POWERS")
+    assert feeds.chip == "2 SITES"
+    assert feeds.title == "KAKAPO · ORIOLE"
+
+
+def test_a_destroyed_substation_says_what_it_cost() -> None:
+    substation = _group("Creech", IadsRole.POWER_SOURCE, _unit(alive=False))
+    sam = _group("KAKAPO", IadsRole.SAM)
+    network = _network(_node(sam, substation))
+
+    picture = describe(substation.ground_object, network)
+
+    assert _link(picture, "POWERS").chip == "CUT"
+    assert "alternate supplies or radio paths" in picture.summary
+
+
+def test_two_fixed_feeds_do_not_claim_losing_one_switches_the_site_off() -> None:
+    first = _group("FIRST", IadsRole.POWER_SOURCE, _unit(alive=False))
+    backup = _group("BACKUP", IadsRole.POWER_SOURCE)
+    sam = _group("KAKAPO", IadsRole.SAM)
+    network = _network(_node(sam, first, backup))
+
+    power = _link(describe(sam.ground_object, network, friendly=False), "POWER")
+
+    assert power.chip == "GRID UP"
+    assert "both fixed feeds" in power.note
+    destroyed = describe(first.ground_object, network)
+    assert "alternate supplies" in destroyed.summary
+
+
+def test_an_antenna_connects_rather_than_feeding() -> None:
+    antenna = _group("CARACAL", IadsRole.CONNECTION_NODE)
+    sam = _group("KAKAPO", IadsRole.SAM)
+    network = _network(_node(sam, antenna))
+
+    picture = describe(antenna.ground_object, network)
+
+    link = _link(picture, "CONNECTS")
+    assert "losing comms" in link.note
+
+
+def test_a_row_carries_the_objectives_it_names() -> None:
+    """So the names in it can be opened."""
+    sam = _group("KAKAPO", IadsRole.SAM)
+    substation = _group("Creech", IadsRole.POWER_SOURCE)
+    network = _network(_node(sam, substation))
+
+    power = _link(describe(sam.ground_object, network), "POWER")
+
+    assert [place.name for place in power.places] == ["Creech"]
+    assert power.places[0].objective is substation.ground_object
+
+
+def test_a_jammer_is_not_asked_about_comms() -> None:
+    jammer = _group("SCARAB", IadsRole.EWR)
+    jammer.ground_object.carries_gps_jammer = True
+    comms = _group("CARACAL", IadsRole.CONNECTION_NODE)
+    network = _network(_node(jammer, comms))
+
+    picture = describe(jammer.ground_object, network)
+
+    assert [link.caption for link in picture.gets] == ["POWER"]
+
+
+def test_the_command_centre_is_a_way_into_its_own_dialog() -> None:
+    """Every other row names its objectives as openable; this one did not."""
+    sam = _group("Creech", IadsRole.SAM)
+    centre = _group("Indian Springs", IadsRole.COMMAND_CENTER)
+    network = _network(_node(sam), _node(centre))
+
+    command = _link(describe(sam.ground_object, network), "COMMAND")
+
+    assert [place.name for place in command.places] == ["Indian Springs"]
+    assert command.places[0].objective is centre.ground_object
+
+
+def test_a_command_centre_that_is_down_can_still_be_opened() -> None:
+    sam = _group("Creech", IadsRole.SAM)
+    centre = _group("Indian Springs", IadsRole.COMMAND_CENTER, _unit(alive=False))
+    network = _network(_node(sam), _node(centre))
+
+    command = _link(describe(sam.ground_object, network), "COMMAND")
+
+    assert [place.name for place in command.places] == ["Indian Springs"]
+
+
+def test_a_network_with_no_command_centre_names_nothing() -> None:
+    sam = _group("Creech", IadsRole.SAM)
+    network = _network(_node(sam))
+
+    command = _link(describe(sam.ground_object, network), "COMMAND")
+
+    assert command.places == ()

@@ -1,0 +1,177 @@
+"""Lean campaign networks retain coverage after any single command-centre loss."""
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from game.campaignloader.campaign import Campaign
+from game.point_with_heading import PointWithHeading
+from game.settings import Settings
+from game.theater.iadsnetwork.connectivity import IadsConnectivity
+from game.theater.iadsnetwork.iadsnetwork import IadsNetwork, SkynetNode
+from game.theater.iadsnetwork.iadsrole import IadsRole
+from game.utils import Heading
+from game.theater.player import Player
+from tests.missiongenerator.test_iads_topology_runtime import exported, start, vm
+from tests.campaignloader.test_iads_campaign_expansion import ROLES
+from tests.test_iads_automatic_topology import site
+
+MANIFEST = json.loads(Path(__file__).with_name("iads_resilience.json").read_text())
+
+
+@pytest.mark.parametrize("filename", MANIFEST)
+def test_network_survives_any_single_command_loss(filename: str, vm: Any) -> None:
+    campaign = Campaign.from_file(Path("resources/campaigns") / filename)
+    assert campaign.advanced_iads
+    theater = campaign.load_theater(True)
+    row = MANIFEST[filename]
+    settings = Settings()
+    settings.set_plugin_option("skynetiads.commsRangeNm", 35)
+    settings.set_plugin_option("skynetiads.powerRangeNm", 35)
+    objects: list[Any] = []
+    for cp in theater.controlpoints:
+        if cp.starting_coalition.is_neutral:
+            continue
+        placements = [
+            (point.original_name, point, role)
+            for kind, role in ROLES.items()
+            for point in getattr(cp.preset_locations, kind)
+        ]
+        placements.extend(
+            (
+                scenery.zone_def.name,
+                scenery.position,
+                IadsRole.for_category(scenery.category),
+            )
+            for scenery in cp.preset_locations.scenery
+            if IadsRole.for_category(scenery.category) is not IadsRole.NO_BEHAVIOR
+        )
+        for name, point, role in placements:
+            obj = site(name, role, side=cp.starting_coalition, settings=settings)
+            obj.position = PointWithHeading.from_point(point, Heading.from_degrees(0))
+            objects.append(obj)
+            if any(
+                marker in name
+                for marker in (
+                    " IADS Regional Command ",
+                    " IADS Consolidated Relay ",
+                    " IADS Relocated Relay ",
+                )
+            ):
+                if not theater.is_on_land(point, ignore_exclusion=True):
+                    assert [point.x, point.y] == row["island_mask_exceptions"][name]
+            if name in row.get("relocation", {}).get("new_locations", {}):
+                assert [point.x, point.y] == row["relocation"]["new_locations"][name]
+    network = IadsNetwork(True)
+    network.initialize_network(iter(objects))
+    relays = [n for n in network.nodes if n.group.iads_role is IadsRole.CONNECTION_NODE]
+    commands = [
+        n for n in network.nodes if n.group.iads_role is IadsRole.COMMAND_CENTER
+    ]
+    assert len(relays) == row["after"]["relays"]
+    assert len(commands) == row["after"]["command_centres"]
+    assert len(relays) <= row["before"]["relays"]
+    for node in network.nodes:
+        feeds = [
+            g for g in node.connections.values() if g.iads_role is IadsRole.POWER_SOURCE
+        ]
+        assert len(feeds) <= 2
+        radio = [
+            g
+            for g in network.effective_connections(node).values()
+            if g.iads_role in (IadsRole.CONNECTION_NODE, IadsRole.COMMAND_CENTER)
+        ]
+        assert len(radio) <= 1
+    if "relocation" in row:
+        relocation = row["relocation"]
+        assert len(relays) == relocation["after_relays"]
+        assert len(relays) < relocation["before_relays"]
+        assert set(relocation["new_locations"]) <= {
+            n.group.ground_object.original_name for n in relays
+        }
+    # Require resilience only for previously connected sites. Autonomous
+    # outposts are not a reason to introduce additional command networks.
+    targets = [
+        n
+        for n in network.nodes
+        if n.group.iads_role in (IadsRole.SAM, IadsRole.EWR)
+        and n.group.ground_object.original_name not in row["autonomous_sites"]
+    ]
+    by_name = {n.group.ground_object.original_name: n for n in targets}
+    normal = IadsConnectivity(network)
+    for sector in row["network_sectors"]:
+        shared = [normal.roots(by_name[name]) for name in sector]
+        assert shared and set.intersection(*(set(roots) for roots in shared)), (
+            "An existing command sector no longer shares contacts",
+            sector,
+        )
+    for loss in [[], *[[n.group.ground_object] for n in commands]]:
+        connectivity = IadsConnectivity(network, loss)
+        assert all(connectivity.connected(n) for n in targets), [
+            n.group.ground_object.original_name
+            for n in targets
+            if not connectivity.connected(n)
+        ]
+    for side in (Player.BLUE, Player.RED):
+        start(vm, exported(network, side), 2 if side.is_blue else 1)
+        side_losses = [
+            n
+            for n in network.nodes
+            if n.group.iads_role in (IadsRole.COMMAND_CENTER, IadsRole.POWER_SOURCE)
+            and n.group.ground_object.control_point.captured is side
+        ]
+        side_targets = [
+            n for n in targets if n.group.ground_object.control_point.captured is side
+        ]
+        side_nodes = [
+            n
+            for n in network.nodes
+            if n.group.ground_object.control_point.captured is side
+        ]
+        # Compare Python and the actual mission Lua for every command and power
+        # loss. Regional outages are expected; disagreement between them is not.
+        for failed in [None, *side_losses]:
+            loss = [failed.group.ground_object] if failed is not None else []
+            if failed is not None:
+                vm.globals().objects[
+                    SkynetNode.dcs_name_for_group(failed.group)
+                ].live = False
+            topology = vm.globals().iads.topology
+            topology.beginCycle(topology)
+            connectivity = IadsConnectivity(network, loss)
+            for target in side_nodes:
+                name = SkynetNode.dcs_name_for_group(target.group)
+                parent = connectivity.radio_parent(target)
+                assert topology.radioParents[name] == (
+                    SkynetNode.dcs_name_for_group(parent)
+                    if parent is not None
+                    else None
+                ), (
+                    filename,
+                    name,
+                    failed.group.ground_object.original_name if failed else None,
+                )
+                assert (
+                    sum(
+                        group.iads_role
+                        in (IadsRole.CONNECTION_NODE, IadsRole.COMMAND_CENTER)
+                        for group in connectivity.effective_connections(target).values()
+                    )
+                    <= 1
+                )
+            for target in side_targets:
+                element = vm.globals().elements[
+                    SkynetNode.dcs_name_for_group(target.group)
+                ]
+                assert element.hasActiveConnectionNode(
+                    element
+                ) == connectivity.connected(target)
+                assert element.hasWorkingPowerSource(element) == connectivity.powered(
+                    target
+                )
+            if failed is not None:
+                vm.globals().objects[
+                    SkynetNode.dcs_name_for_group(failed.group)
+                ].live = True

@@ -1,7 +1,7 @@
 ---
 name: Kola Peninsula - The Anvil of War
 theater: Kola
-authors: Starfire
+authors: Starfire, modified by juanjux
 recommended_player_faction: Blufor Current
 recommended_enemy_faction: Redfor Current
 description:
@@ -16,16 +16,19 @@ description:
   The fate of Europe hangs in the balance, as this new offensive threatens to forever alter the geopolitical map.</p>
 miz: the_anvil_of_war.miz
 performance: 2
+advanced_iads: true
 recommended_start_date: 2007-05-13
 version: "10.9"
 settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: true
   russianmilitaryassetspack: true
   chinesemilitaryassetspack: true
   usamilitaryassetspack: true
   swedishmilitaryassetspack: true
   f22_raptor: true
   fa_18efg: true
-  hercules: true
   uh_60l: true
   squadron_start_full: true
 squadrons:
@@ -37,30 +40,36 @@ squadrons:
         - EA-18G Growler
         - F/A-18C Hornet (Lot 20)
       size: 16
+      pilots: 20
     - primary: SEAD
       secondary: any
       aircraft:
         - F/A-18C Hornet (Lot 20)
       size: 16
+      pilots: 20
     - primary: Strike
       secondary: any
       aircraft:
         - F-14B(U) Tomcat
       size: 16
+      pilots: 20
     - primary: AEW&C
       aircraft:
         - E-2D Advanced Hawkeye
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - S-3B Tanker
       size: 4
+      pilots: 8
     - primary: Air Assault
       secondary: any
       aircraft:
         - UH-60L
         - UH-60A
       size: 4
+      pilots: 8
   #Bodo
   7:
     - primary: TARCAP
@@ -69,17 +78,20 @@ squadrons:
         - F-22A Raptor
         - F-15C Eagle
       size: 12
+      pilots: 16
     - primary: Armed Recon
       secondary: any
       aircraft:
         - F-15E Strike Eagle (Suite 4+)
       size: 12
+      pilots: 16
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - "[CH] B-21"
         - B-1B Lancer
       size: 4
+      pilots: 8
   #Andoya
   20:
     - primary: Strike
@@ -87,10 +99,12 @@ squadrons:
       aircraft:
         - B-52H Stratofortress
       size: 4
+      pilots: 8
     - primary: Refueling
       aircraft:
         - KC-135 Stratotanker
       size: 1
+      pilots: 5
   #Bardufoss
   21:
     - primary: Escort
@@ -98,12 +112,13 @@ squadrons:
       aircraft:
         - F-15C Eagle
       size: 12
+      pilots: 16
     - primary: Transport
       secondary: any
       aircraft:
-        - C-130J-30 Super Hercules
         - C-130J-30
       size: 1
+      pilots: 5
   #Kiruna
   5:
     - primary: BARCAP
@@ -112,6 +127,7 @@ squadrons:
         - "[CH] JAS 39C Gripen"
         - Mirage 2000C
       size: 12
+      pilots: 16
   #Kalixfors
   13:
     - primary: CAS
@@ -119,16 +135,19 @@ squadrons:
       aircraft:
         - AH-64D Apache Longbow
       size: 8
+      pilots: 12
     - primary: Escort
       secondary: any
       aircraft:
         - OH-58D(R) Kiowa Warrior
       size: 4
+      pilots: 8
     - primary: Air Assault
       secondary: any
       aircraft:
         - CH-47F Block I
       size: 4
+      pilots: 8
   #Jokkmokk
   11:
     - primary: Armed Recon
@@ -136,30 +155,41 @@ squadrons:
       aircraft:
         - A-10C Thunderbolt II (Suite 7)
       size: 8
+      pilots: 12
     - primary: SEAD Sweep
       secondary: air-to-ground
       aircraft:
         - AV-8B Harrier II Night Attack
       size: 12
+      pilots: 16
   #Vidsel
   17:
     - primary: Transport
       secondary: any
       aircraft:
-        - C-130J-30 Super Hercules
         - C-130J-30
       size: 4
+      pilots: 8
   #Kallax
   15:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "RQ-1A Predator"
+      size: 2
+      pilots: 6
     - primary: DEAD
       secondary: any
       aircraft:
         - F-16CM Fighting Falcon (Block 50)
       size: 12
+      pilots: 16
     - primary: AEW&C
       aircraft:
         - E-3A
       size: 1
+      pilots: 5
   #Opfor Carrier
   Red-CV:
     - primary: BARCAP
@@ -167,6 +197,7 @@ squadrons:
       aircraft:
         - Su-33 Flanker-D
       size: 12
+      pilots: 16
   #Banak
   1:
     - primary: SEAD Escort
@@ -174,6 +205,7 @@ squadrons:
       aircraft:
         - JF-17 Thunder
       size: 12
+      pilots: 16
 #Ivalo
   18:
     - primary: Air Assault
@@ -181,29 +213,41 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 4
+      pilots: 8
     - primary: Escort
       secondary: any
       aircraft:
         - Mi-28N Havoc
       size: 4
+      pilots: 8
     - primary: CAS
       secondary: any
       aircraft:
         - "[CH] Ka-52"
         - Ka-50 Hokum III
       size: 4
+      pilots: 8
     - primary: Transport
       secondary: any
       aircraft:
         - Mi-26
       size: 2
+      pilots: 6
   #Kittila
   22:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "WingLoong-I"
+      size: 2
+      pilots: 6
     - primary: SEAD Sweep
       secondary: air-to-ground
       aircraft:
         - Su-25T Frogfoot
       size: 8
+      pilots: 12
   #Rovaniemi
   2:
     - primary: Escort
@@ -211,6 +255,7 @@ squadrons:
       aircraft:
         - Su-27 Flanker-B
       size: 12
+      pilots: 16
   #Severomorsk-1
   8:
     - primary: Anti-ship
@@ -219,22 +264,26 @@ squadrons:
         - "[CH] Tu-160M2"
         - Tu-160 Blackjack
       size: 4
+      pilots: 8
     - primary: SEAD
       secondary: air-to-ground
       aircraft:
         - Su-24M Fencer-D
       size: 12
+      pilots: 16
   #Severomorsk-3
   6:
     - primary: Refueling
       aircraft:
         - IL-78M
       size: 2
+      pilots: 6
     - primary: Escort
       secondary: air-to-air
       aircraft:
         - MIG-29-FULCRUM
       size: 12
+      pilots: 16
   #Olenya
   9:
     - primary: Strike
@@ -242,21 +291,25 @@ squadrons:
       aircraft:
         - Tu-95MS Bear-H
       size: 12
+      pilots: 16
     - primary: OCA/Runway
       secondary: any
       aircraft:
         - Tu-22M3 Backfire-C
       size: 12
+      pilots: 16
     - primary: DEAD
       secondary: any
       aircraft:
         - Tu-16 Badger
       size: 12
+      pilots: 16
     - primary: Transport
       secondary: any
       aircraft:
         - IL-76MD
       size: 2
+      pilots: 6
   #Monchegorsk
   10:
     - primary: BAI
@@ -264,7 +317,13 @@ squadrons:
       aircraft:
         - Su-34 Fullback
       size: 12
+      pilots: 16
     - primary: AEW&C
       aircraft:
         - KJ-2000
       size: 2
+      pilots: 6
+
+ground_forces:
+  "Ground-33": GPS Jamming Site (Red, Unescorted)
+  "Blue GPS Jammer Kiruna": GPS Jamming Site (Blue, Unescorted)

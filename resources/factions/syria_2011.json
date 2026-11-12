@@ -17,7 +17,8 @@
     "SA 342L Gazelle",
     "SA 342M Gazelle",
     "Su-17M4 Fitter-K",
-    "Su-24M Fencer-D"
+    "Su-24M Fencer-D",
+    "WingLoong-I"
   ],
   "awacs": [
     "A-50"
@@ -56,15 +57,17 @@
   ],
   "preset_groups": [
     "SA-5/S-200",
-    "SA-2/S-75",
     "SA-2/S-75 V-759/5V23",
+    "SA-2/S-75",
+    "SA-2/SA-3 Mixed Site",
     "SA-3/S-125",
     "SA-3/S-125 V-601P/5V27",
     "SA-6",
     "SA-11",
     "SA-17",
     "Cold-War-Flak",
-    "KS-19/SON-9"
+    "KS-19/SON-9",
+    "GPS Jamming Site (Red)"
   ],
   "naval_units": [
     "Corvette 1124.4 Grish",
@@ -88,3 +91,4 @@
   "requirements": {},
   "carrier_names": []
 }
+

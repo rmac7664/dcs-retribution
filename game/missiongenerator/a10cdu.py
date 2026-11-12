@@ -1,0 +1,253 @@
+"""Add saved points to the A-10 CDU through cockpit settings.
+
+Saved points use ``Avionics/<type>/<unit id>/CDU/SETTINGS.lua`` and a separate
+EXTRA flight plan. Elevations in this file are stored in metres.
+
+Do not write mission-route points into these settings. DCS imports their planned
+MSL/AGL altitudes correctly from the native route, but reloading them through
+cockpit settings replaces those altitudes with terrain heights. Only additional
+saved points belong here, numbered after the native route's last point.
+"""
+
+from __future__ import annotations
+
+import logging
+import zipfile
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterable, Sequence
+
+from dcs.mapping import Point
+from dcs.point import PointProperties, VNav
+
+from game.ato.savedpoints import SavedPoint, capacity_for, points_of
+
+if TYPE_CHECKING:
+    from game import Game
+    from game.ato.flight import Flight
+    from game.missiongenerator.aircraft.flightdata import FlightData
+    from dcs.unitgroup import FlyingGroup
+
+#: The aircraft whose cockpit keeps its navigation computer here.
+AIRCRAFT = {"A-10C", "A-10C_2"}
+
+#: As long an identifier as the CDU shows.
+NAME_LENGTH = 12
+
+#: ``Waypoint_Types.WPT_UNK`` in the module's own table.
+UNKNOWN = 20
+
+#: Whatever ellipsoid code 67 is, it is what DCS writes for every point it saves.
+ELLIPSOID = 67
+
+#: The flight plan the saved points get. 1 is the mission's own, built from the route
+#: and not ours to change -- writing it makes no difference, which was measured.
+EXTRA_PLAN = 2
+EXTRA_PLAN_NAME = "EXTRA"
+
+TAB = "\t"
+
+
+def flights_with_points(game: Game) -> Iterable[Flight]:
+    """Every A-10 the player is flying that has something written down for it."""
+    for package in game.blue.ato.packages:
+        for flight in package.flights:
+            if flight.client_count <= 0:
+                continue
+            if flight.unit_type.dcs_unit_type.id not in AIRCRAFT:
+                continue
+            if points_of(flight):
+                yield flight
+
+
+def numbers_for(route_length: int, count: int) -> list[int]:
+    """The numbers the saved points end up with in the cockpit.
+
+    The aircraft numbers a waypoint by where it sits in the table, not by the
+    ``wpt_num`` beside it. DCS creates point 0 itself, so only route points 1 onward
+    occupy table slots; saved points follow the last route point.
+    """
+    first = max(1, route_length)
+    last = capacity_for("A-10C_2").waypoints
+    return list(range(first, min(first + count, last + 1)))
+
+
+def uses_custom_cdu(flight: FlightData) -> bool:
+    """Whether this flight receives additional saved CDU points."""
+    return bool(
+        flight.client_units
+        and flight.aircraft_type.dcs_unit_type.id in AIRCRAFT
+        and flight.saved_points
+    )
+
+
+def route_numbers(flight: FlightData) -> range:
+    """Route numbers agree with F10 and DCS's native point 0."""
+    return range(len(flight.waypoints))
+
+
+def enable_route_vnav(flight: Flight, group: FlyingGroup[Any]) -> None:
+    """Match the working editor-created A-10 route's VNAV 3D properties.
+
+    Apply after the whole route is built, including the initial spawn point. Keep
+    flight altitudes and all other navigation properties unchanged; this is only
+    for player A-10s, whether or not they have extra saved points.
+    """
+    if not flight.client_count or flight.unit_type.dcs_unit_type.id not in AIRCRAFT:
+        return
+    for waypoint in group.points:
+        if waypoint.properties is None:
+            waypoint.properties = PointProperties()
+        waypoint.properties.vnav = VNav.V3D
+
+
+def _identifier(point: SavedPoint, number: int) -> str:
+    """A name the CDU will take: upper case, short, never empty."""
+    letters = [c for c in point.name.upper() if c.isalnum() or c in " ._-"]
+    return "".join(letters).strip()[:NAME_LENGTH] or f"PT{number}"
+
+
+def _attributes(depth: int) -> list[str]:
+    pad = TAB * depth
+    return [
+        f'{pad}["wpt_attributes"]=',
+        pad + "{",
+        f'{pad}{TAB}["attr_steer"]=0,',
+        f'{pad}{TAB}["attr_angle3d"]=0,',
+        f'{pad}{TAB}["attr_scale"]=0,',
+        f'{pad}{TAB}["attr_vnav"]=1,',
+        f'{pad}{TAB}["attr_vangle"]=1,',
+        pad + "},",
+    ]
+
+
+def _position(latlng: Any) -> list[str]:
+    """One ``wpt_pos``: degrees and the MGRS grid for the same spot."""
+    import mgrs as mgrs_lib
+
+    grid = mgrs_lib.MGRS().toMGRS(latlng.lat, latlng.lng, MGRSPrecision=5)
+    pad = TAB * 3
+    return [
+        f'{pad}["wpt_pos"]=',
+        pad + "{",
+        f'{pad}{TAB}["pos_zone"]="{grid[:3]}",',
+        f'{pad}{TAB}["pos_long"]={latlng.lng:.12f},',
+        f'{pad}{TAB}["pos_digraph"]="{grid[3:5]}",',
+        f'{pad}{TAB}["pos_lat"]={latlng.lat:.12f},',
+        f'{pad}{TAB}["pos_easting"]={int(grid[5:10])},',
+        f'{pad}{TAB}["pos_present"]=1,',
+        f'{pad}{TAB}["pos_northing"]={int(grid[10:15])},',
+        f'{pad}{TAB}["pos_ell"]={ELLIPSOID},',
+        pad + "},",
+    ]
+
+
+def _waypoint(slot: int, name: str, latlng: Any, elevation: float | None) -> list[str]:
+    """One CDU entry, with an explicit MSL elevation in metres when available."""
+    # DCS needs CR set on imported extra points to make their elevation available.
+    # wpt_elev_present alone leaves EL as asterisks, even with a nonzero elevation.
+    return (
+        [
+            f"{TAB * 2}[{slot}]=",
+            TAB * 2 + "{",
+            f'{TAB * 3}["wpt_cr"]=1,',
+            f'{TAB * 3}["wpt_elev_present"]={int(elevation is not None)},',
+            f'{TAB * 3}["wpt_num"]={slot},',
+            f'{TAB * 3}["wpt_dtot_present"]=0,',
+            f'{TAB * 3}["div_present"]=0,',
+            f'{TAB * 3}["wpt_id"]="{name}",',
+        ]
+        + ([f'{TAB * 3}["wpt_elev"]={elevation:.6f},'] if elevation is not None else [])
+        + _attributes(3)
+        + _position(latlng)
+        + [f'{TAB * 3}["wpt_type"]={UNKNOWN},', TAB * 2 + "},"]
+    )
+
+
+def _flight_plan(numbers: Sequence[int]) -> list[str]:
+    lines = [
+        f'{TAB}["flight_plans"]=',
+        TAB + "{",
+        f"{TAB * 2}[{EXTRA_PLAN}]=",
+        TAB * 2 + "{",
+        f'{TAB * 3}["fp_name"]="{EXTRA_PLAN_NAME}",',
+        f'{TAB * 3}["waypoints"]=',
+        TAB * 3 + "{",
+    ]
+    for place, number in enumerate(numbers, start=1):
+        lines += (
+            [
+                f"{TAB * 4}[{place}]=",
+                TAB * 4 + "{",
+                f'{TAB * 5}["wpt_number"]={number},',
+            ]
+            + _attributes(5)
+            + [TAB * 4 + "},"]
+        )
+    return lines + [TAB * 3 + "},", TAB * 2 + "},", TAB + "},"]
+
+
+def settings(flight: Any, terrain: Any) -> str:
+    """Export only saved points, leaving DCS's native route database intact."""
+    route = list(flight.waypoints)
+    saved = list(flight.saved_points)
+    numbers = numbers_for(len(route), len(saved))
+
+    entries: list[str] = []
+    # DCS creates INIT POSIT and all route points itself. Overriding those entries
+    # through cockpit settings discards their planned elevations on reload.
+    for number, point in zip(numbers, saved):
+        entries += _waypoint(
+            number,
+            _identifier(point, number),
+            Point(point.x, point.y, terrain).latlng(),
+            point.altitude_ft * 0.3048,
+        )
+
+    return "\n".join(
+        [
+            "settings=",
+            "{",
+            f'{TAB}["coords_format"]=0,',
+            f'{TAB}["initial_number"]=0,',
+            "\t-- Keep terrain ranging available for points edited in the cockpit.",
+            f'{TAB}["dtsas_func"]=1,',
+            f'{TAB}["dtsas_cr"]=1,',
+            f'{TAB}["dtsas_owc"]=100,',
+            f'{TAB}["steer_number"]=0,',
+        ]
+        + (_flight_plan(numbers) if numbers else [])
+        + [f'{TAB}["waypoints"]=', TAB + "{"]
+        + entries
+        + [TAB + "},", "}", ""]
+    )
+
+
+def inside_mission(flight: Any) -> str:
+    """Where in the .miz this aircraft's navigation computer lives."""
+    aircraft = flight.aircraft_type.dcs_unit_type.id
+    return f"Avionics/{aircraft}/{flight.units[0].id}/CDU/SETTINGS.lua"
+
+
+def write_into_mission(game: Game, mission_data: Any, mission: Path) -> list[str]:
+    """One navigation computer per A-10 the player is flying with points written down."""
+    entries: dict[str, str] = {}
+    for flight in getattr(mission_data, "flights", []):
+        if not uses_custom_cdu(flight):
+            continue
+        entries[inside_mission(flight)] = settings(flight, game.theater.terrain)
+    if not entries:
+        return []
+
+    try:
+        with zipfile.ZipFile(mission, "a", zipfile.ZIP_DEFLATED) as archive:
+            for path, body in entries.items():
+                archive.writestr(path, body)
+    except OSError:
+        logging.exception(
+            "Could not write the A-10 navigation computer into %s", mission
+        )
+        return []
+    logging.info(
+        "Wrote %d A-10 navigation computer(s) into %s", len(entries), mission.name
+    )
+    return sorted(entries)

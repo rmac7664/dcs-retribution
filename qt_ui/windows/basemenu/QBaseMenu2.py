@@ -1,17 +1,16 @@
-from PySide6.QtCore import Qt
+from typing import Optional
+
+from PySide6.QtCore import QSettings, QSize, Qt
 from PySide6.QtGui import QCloseEvent, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPushButton,
     QVBoxLayout,
     QWidget,
-    QGridLayout,
 )
 
-from game import Game
 from game.ato.flighttype import FlightType
 from game.config import RUNWAY_REPAIR_COST
 from game.radio.ICLSContainer import ICLSContainer
@@ -21,17 +20,17 @@ from game.server import EventStream
 from game.sim import GameUpdateEvents
 from game.sim.missionresultsprocessor import MissionResultsProcessor
 from game.theater import (
-    AMMO_DEPOT_FRONTLINE_UNIT_CONTRIBUTION,
     ControlPoint,
     ControlPointType,
-    FREE_FRONTLINE_UNIT_SUPPLY,
     NavalControlPoint,
-    ParkingType,
     Player,
 )
 from qt_ui.dialogs import Dialog
+from qt_ui.widgets.controls import button
+from qt_ui.windows.airwingconfig.common import CHEAT_BORDER, CHEAT_HINT
+from qt_ui.windows.basemenu.header import BaseHeader, FiguresStrip, kind_of
 from qt_ui.models import GameModel
-from qt_ui.uiconstants import EVENT_ICONS
+from qt_ui.uiconstants import app_settings, EVENT_ICONS
 from qt_ui.widgets.QFrequencyWidget import QFrequencyWidget
 from qt_ui.widgets.QICLSWidget import QICLSWidget
 from qt_ui.widgets.QLink4Widget import QLink4Widget
@@ -39,7 +38,12 @@ from qt_ui.widgets.QTacanWidget import QTacanWidget
 from qt_ui.windows.GameUpdateSignal import GameUpdateSignal
 from qt_ui.windows.basemenu.NewUnitTransferDialog import NewUnitTransferDialog
 from qt_ui.windows.basemenu.QBaseMenuTabs import QBaseMenuTabs
-from qt_ui.windows.basemenu.UnitTransactionFrame import UnitTransactionFrame
+
+#: What it opens at, and the floor it cannot be dragged under. The floor is raised
+#: per base to whatever that base's own content needs, because a window asked for a
+#: size its layout will not fit into grows itself the moment it is shown.
+DEFAULT_SIZE = QSize(1280, 900)
+MINIMUM_SIZE = QSize(1200, 760)
 
 
 class QBaseMenu2(QDialog):
@@ -56,126 +60,179 @@ class QBaseMenu2(QDialog):
 
         self.setWindowIcon(EVENT_ICONS["capture"])
 
-        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
-        self.setMinimumSize(300, 200)
-        self.setMinimumWidth(1024)
-        self.setMaximumWidth(1024)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
         self.setModal(True)
 
         self.setWindowTitle(self.cp.name)
 
-        base_menu_header = QWidget()
-        top_layout = QHBoxLayout()
+        header = BaseHeader(self.cp, self.game_model)
+        header.comms_rows = self._comms_rows()
+        header.setLayout(header.layout())
+        banner = header.findChild(QLabel)
+        if banner is not None:
+            pixmap = QPixmap(self.get_base_image())
+            if not pixmap.isNull():
+                banner.setPixmap(
+                    pixmap.scaledToWidth(
+                        1280, Qt.TransformationMode.SmoothTransformation
+                    )
+                )
 
-        header = QLabel(self)
-        header.setGeometry(0, 0, 655, 106)
-        pixmap = QPixmap(self.get_base_image())
-        header.setPixmap(pixmap)
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        main_layout.addWidget(header)
+        self.figures = FiguresStrip(self.cp, self.game_model)
+        main_layout.addWidget(self.figures)
+        # Every purchase and sale emits this, and the strip is what the player checks
+        # to decide whether to make another one.
+        GameUpdateSignal.get_instance().budgetupdated.connect(self.on_budget_changed)
 
-        cp_settings = QGridLayout()
-        top_layout.addLayout(cp_settings)
+        tabs_holder = QVBoxLayout()
+        tabs_holder.setContentsMargins(16, 0, 16, 0)
+        self.tabs = QBaseMenuTabs(cp, self.game_model)
+        tabs_holder.addWidget(self.tabs)
+        main_layout.addLayout(tabs_holder, 1)
+        order_line = self._high_command_line()
+        if order_line is not None:
+            line_holder = QHBoxLayout()
+            line_holder.setContentsMargins(16, 10, 16, 0)
+            line_holder.addWidget(order_line)
+            main_layout.addLayout(line_holder)
+        main_layout.addLayout(self._footer())
+        self.setLayout(main_layout)
 
-        title = QLabel("<b>" + self.cp.name + "</b>")
-        title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        title.setProperty("style", "base-title")
-        cp_settings.addWidget(title, 0, 0, 1, 2)
-        cp_settings.setHorizontalSpacing(20)
+        # Sized once, at the end, to something the layout will accept. Asking for a
+        # size the content will not fit into means Qt grows the window again the
+        # moment it is shown, which is the window dancing its way open; and the
+        # content can demand a surprising amount, so the floor is what was asked for
+        # or what the layout needs, whichever is larger.
+        floor = MINIMUM_SIZE.expandedTo(main_layout.minimumSize())
+        self.setMinimumSize(floor)
+        if self._restore_geometry():
+            self.resize(self.size().expandedTo(floor))
+        else:
+            self.resize(DEFAULT_SIZE.expandedTo(floor))
 
-        counter = 2
+    def _high_command_line(self) -> Optional[QWidget]:
+        """The line saying this base is an order's objective, if it is."""
+        from qt_ui.windows.highcommand.pointline import objective_line, orders_at_base
 
+        game = self.game_model.game
+        if game is None:
+            return None
+        return objective_line(
+            game, orders_at_base(game, self.cp.name), self._open_order, base=True
+        )
+
+    def _open_order(self, objective: str) -> None:
+        """This menu is modal and would keep the High Command window from being
+        used, so it closes first."""
+        from qt_ui.windows.highcommand.dialog import main_window, open_high_command
+
+        self.close()
+        open_high_command(self.game_model, main_window(), objective)
+
+    def _comms_rows(self) -> list:
+        """The radio, TACAN, ICLS and Link 4 editors this base actually has.
+
+        Built here because they need the game model; the header only lays them out.
+        """
+        rows: list = []
         self.freq_widget = None
         self.link4_widget = None
-
-        is_friendly = cp.is_friendly(Player.BLUE)
-        if is_friendly and isinstance(cp, RadioFrequencyContainer):
+        cp = self.cp
+        if not cp.is_friendly(Player.BLUE):
+            return rows
+        if isinstance(cp, RadioFrequencyContainer):
             self.freq_widget = QFrequencyWidget(cp, self.game_model)
-            cp_settings.addWidget(self.freq_widget, counter // 2, counter % 2)
-            counter += 1
-
-        if is_friendly and isinstance(cp, TacanContainer):
+            rows.append(("Frequency", self.freq_widget))
+        if isinstance(cp, TacanContainer):
             self.tacan_widget = QTacanWidget(cp, self.game_model)
-            cp_settings.addWidget(self.tacan_widget, counter // 2, counter % 2)
-            counter += 1
-
-        if is_friendly and isinstance(cp, ICLSContainer):
+            rows.append(("TACAN", self.tacan_widget))
+        if isinstance(cp, ICLSContainer):
             self.icls_widget = QICLSWidget(cp, self.game_model)
-            cp_settings.addWidget(self.icls_widget, counter // 2, counter % 2)
-            counter += 1
-
-        if is_friendly and isinstance(cp, NavalControlPoint):
+            rows.append(("ICLS", self.icls_widget))
+        if isinstance(cp, NavalControlPoint):
             self.link4_widget = QLink4Widget(cp, self.game_model)
-            cp_settings.addWidget(self.link4_widget, counter // 2, counter % 2)
-            counter += 1
-
+            rows.append(("Link 4", self.link4_widget))
         if self.freq_widget and self.link4_widget:
-            # link them so on change they check freq
+            # They have to agree, so each checks the other when it changes.
             self.freq_widget.freq_changed.connect(self.link4_widget.check_freq)
             self.link4_widget.freq_changed.connect(self.freq_widget.check_freq)
+        return rows
 
-        self.intel_summary = QLabel()
-        self.intel_summary.setToolTip(self.generate_intel_tooltip())
-        self.update_intel_summary()
-        top_layout.addWidget(self.intel_summary)
-        top_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+    def _footer(self) -> QHBoxLayout:
+        """One primary action per owner, and the cheats in a block of their own.
 
-        runway_buttons_layout = QVBoxLayout()
-        top_layout.addLayout(runway_buttons_layout)
+        They used to sit in the same row as the real controls, which is how you end
+        up capturing a base you meant to close the window on.
+        """
+        row = QHBoxLayout()
+        row.setContentsMargins(16, 12, 16, 12)
+        row.setSpacing(10)
 
+        cheats = self._cheat_block()
+        if cheats is not None:
+            row.addWidget(cheats)
+        row.addStretch()
+
+        if self.cp.runway_is_destroyable and self.cp.runway_status is not None:
+            if self.cp.runway_status.damaged:
+                self.repair_button = button("", "normal", self.begin_runway_repair)
+                self.update_repair_button()
+                row.addWidget(self.repair_button)
+
+        if FlightType.OCA_RUNWAY in self.cp.mission_types(for_player=Player.BLUE):
+            row.addWidget(button("Plan airfield strike…", "danger", self.new_package))
+
+        if self.cp.captured.is_blue and self.has_transfer_destinations:
+            row.addWidget(
+                button("Transfer units…", "normal", self.open_transfer_dialog)
+            )
+
+        row.addWidget(button("Close", "primary", self.close))
+        return row
+
+    def _cheat_block(self) -> Optional[QWidget]:
+        buttons = []
         if (
             self.cp.runway_is_destroyable
             and self.game_model.game.settings.enable_runway_state_cheat
         ):
-            self.cheat_runway_state = QPushButton()
+            self.cheat_runway_state = button("", "normal", self.on_cheat_runway_state)
             self.update_cheat_runway_state_text()
-            self.cheat_runway_state.clicked.connect(self.on_cheat_runway_state)
-            runway_buttons_layout.addWidget(self.cheat_runway_state)
-
-        self.repair_button = QPushButton()
-        self.repair_button.clicked.connect(self.begin_runway_repair)
-        self.update_repair_button()
-        runway_buttons_layout.addWidget(self.repair_button)
-        runway_buttons_layout.addStretch()
-
-        base_menu_header.setProperty("style", "baseMenuHeader")
-        base_menu_header.setLayout(top_layout)
-
-        main_layout = QVBoxLayout()
-        main_layout.addWidget(header)
-        main_layout.addWidget(base_menu_header)
-        main_layout.addWidget(QBaseMenuTabs(cp, self.game_model))
-        bottom_row = QHBoxLayout()
-        main_layout.addLayout(bottom_row)
-
-        if FlightType.OCA_RUNWAY in self.cp.mission_types(for_player=Player.BLUE):
-            runway_attack_button = QPushButton("Attack airfield")
-            bottom_row.addWidget(runway_attack_button)
-
-            runway_attack_button.setProperty("style", "btn-danger")
-            runway_attack_button.clicked.connect(self.new_package)
-
-        if self.cp.captured.is_blue and self.has_transfer_destinations:
-            transfer_button = QPushButton("Transfer Units")
-            transfer_button.setProperty("style", "btn-success")
-            bottom_row.addWidget(transfer_button)
-            transfer_button.clicked.connect(self.open_transfer_dialog)
-
+            buttons.append(self.cheat_runway_state)
         if self.cheat_capturable:
             label = "Sink/Resurrect" if self.cp.is_fleet else "Capture"
-            capture_button = QPushButton(f"CHEAT: {label}")
-            capture_button.setProperty("style", "btn-danger")
-            bottom_row.addWidget(capture_button)
-            capture_button.clicked.connect(self.cheat_capture)
+            buttons.append(button(label, "normal", self.cheat_capture))
+        if not buttons:
+            return None
 
-        self.budget_display = QLabel(
-            UnitTransactionFrame.BUDGET_FORMAT.format(self.game_model.game.blue.budget)
+        row = QHBoxLayout()
+        row.setContentsMargins(10, 6, 10, 6)
+        row.setSpacing(8)
+        tag = QLabel("CHEAT")
+        tag.setStyleSheet(
+            f"color: {CHEAT_HINT}; font-size: 11px; font-weight: bold;"
+            " letter-spacing: 1px; background: transparent; border: none;"
         )
-        self.budget_display.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+        row.addWidget(tag)
+        for cheat in buttons:
+            row.addWidget(cheat)
+
+        # Marked off with an amber outline rather than filled with one. The Air Wing
+        # card's amber fill sits on a card two shades darker than this footer; against
+        # this one the same brown reads as a mud puddle in the corner of the window.
+        holder = QWidget()
+        holder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        holder.setObjectName("baseCheats")
+        holder.setStyleSheet(
+            f"#baseCheats {{ background: transparent;"
+            f" border: 1px dashed {CHEAT_BORDER}; border-radius: 3px; }}"
         )
-        self.budget_display.setProperty("style", "budget-label")
-        bottom_row.addWidget(self.budget_display)
-        GameUpdateSignal.get_instance().budgetupdated.connect(self.update_budget)
-        self.setLayout(main_layout)
+        holder.setLayout(row)
+        return holder
 
     @property
     def cheat_capturable(self) -> bool:
@@ -226,7 +283,7 @@ class QBaseMenu2(QDialog):
             self.cp.runway_status.damage()
         self.update_cheat_runway_state_text()
         self.update_repair_button()
-        self.update_intel_summary()
+        self.figures.refresh()
         with EventStream.event_context() as events:
             events.update_control_point(self.cp)
 
@@ -260,7 +317,7 @@ class QBaseMenu2(QDialog):
         self.cp.begin_runway_repair()
         self.game_model.game.blue.budget -= RUNWAY_REPAIR_COST
         self.update_repair_button()
-        self.update_intel_summary()
+        self.figures.refresh()
         GameUpdateSignal.get_instance().updateGame(self.game_model.game)
 
     def update_repair_button(self) -> None:
@@ -286,88 +343,27 @@ class QBaseMenu2(QDialog):
         self.repair_button.setVisible(False)
         self.repair_button.setDisabled(True)
 
-    def update_intel_summary(self) -> None:
-        parking_type_all = ParkingType(
-            fixed_wing=True, fixed_wing_stol=True, rotary_wing=True
-        )
+    def on_budget_changed(self, _game: object) -> None:
+        self.figures.refresh()
 
-        aircraft = self.cp.allocated_aircraft(parking_type_all).total_present
-        parking = self.cp.total_aircraft_parking(parking_type_all)
+    # --- the size you chose -------------------------------------------------
 
-        parking_type_fixed_wing = ParkingType(
-            fixed_wing=True, fixed_wing_stol=False, rotary_wing=False
-        )
-        parking_type_stol = ParkingType(
-            fixed_wing=False, fixed_wing_stol=True, rotary_wing=False
-        )
-        parking_type_rotary_wing = ParkingType(
-            fixed_wing=False, fixed_wing_stol=False, rotary_wing=True
-        )
+    #: Per kind rather than per base: a carrier holds different things from a FOB and
+    #: wants a different size, but every FOB wants the same one.
+    def geometry_key(self) -> str:
+        return f"baseMenuGeometry/{kind_of(self.cp)}"
 
-        ground_spawn_parking = self.cp.total_aircraft_parking(parking_type_stol)
-        helipads = self.cp.total_aircraft_parking(parking_type_rotary_wing)
-        ground_unit_limit = self.cp.frontline_unit_count_limit
-        deployable_unit_info = ""
+    @staticmethod
+    def _qsettings() -> QSettings:
+        return app_settings()
 
-        allocated = self.cp.allocated_ground_units(
-            self.game_model.game.coalition_for(self.cp.captured).transfers
-        )
-        unit_overage = max(
-            allocated.total_present - self.cp.frontline_unit_count_limit, 0
-        )
-        if self.cp.has_active_frontline:
-            deployable_unit_info = (
-                f" (Up to {ground_unit_limit} deployable, {unit_overage} reserve)"
-            )
-        fixed_wing_airfield_parking = [
-            slot
-            for slot in self.cp.parking_slots
-            if slot.airplanes and not slot.helicopter
-        ]
-        rotary_wing_airfield_parking = [
-            slot
-            for slot in self.cp.parking_slots
-            if slot.helicopter and not slot.airplanes
-        ]
-        mixed_parking = [
-            slot for slot in self.cp.parking_slots if slot.helicopter and slot.airplanes
-        ]
-        self.intel_summary.setText(
-            "\n".join(
-                [
-                    f"{aircraft}/{parking} aircraft",
-                    f"{len(fixed_wing_airfield_parking)} fixed-wing only parking",
-                    f"{len(rotary_wing_airfield_parking) + helipads} rotary-wing only parking",
-                    f"{len(mixed_parking)} mixed parking",
-                    f"{ground_spawn_parking} ground spawns",
-                    f"{self.cp.base.total_armor} ground units" + deployable_unit_info,
-                    f"{allocated.total_transferring} more ground units en route, {allocated.total_ordered} ordered",
-                    str(self.cp.runway_status),
-                    f"{self.cp.active_ammo_depots_count}/{self.cp.total_ammo_depots_count} ammo depots",
-                    f"{'Factory can produce units' if self.cp.has_factory else 'Does not have a factory'}",
-                ]
-            )
-        )
-
-    def generate_intel_tooltip(self) -> str:
-        tooltip = (
-            f"Deployable unit limit ({self.cp.frontline_unit_count_limit}) = {FREE_FRONTLINE_UNIT_SUPPLY} (base) + "
-            f" {AMMO_DEPOT_FRONTLINE_UNIT_CONTRIBUTION} (per connected ammo depot) * {self.cp.total_ammo_depots_count} "
-            f"(depots)"
-        )
-
-        if self.cp.has_active_frontline:
-            unit_overage = max(
-                self.cp.base.total_armor - self.cp.frontline_unit_count_limit, 0
-            )
-            tooltip += (
-                f"\n{unit_overage} units will be held in reserve and will not be deployed to "
-                f"connected frontlines for this turn"
-            )
-
-        return tooltip
+    def _restore_geometry(self) -> bool:
+        """Whether there was a remembered size to go back to."""
+        saved = self._qsettings().value(self.geometry_key())
+        return saved is not None and self.restoreGeometry(saved)
 
     def closeEvent(self, close_event: QCloseEvent):
+        self._qsettings().setValue(self.geometry_key(), self.saveGeometry())
         GameUpdateSignal.get_instance().updateGame(self.game_model.game)
 
     def get_base_image(self):
@@ -376,7 +372,11 @@ class QBaseMenu2(QDialog):
             or self.cp.cptype == ControlPointType.LHA_GROUP
         ):
             carrier_type = self.cp.get_carrier_group_type(always_supercarrier=True)
-            return f"./resources/ui/units/ships/{carrier_type.id}.png"
+            # A hull whose class the lookup does not recognise gives None; show the
+            # generic art rather than taking the whole dialog down.
+            if carrier_type is not None:
+                return f"./resources/ui/units/ships/{carrier_type.id}.png"
+            return "./resources/ui/airbase.png"
         elif self.cp.cptype == ControlPointType.FOB and self.cp.has_helipads:
             return "./resources/ui/heliport.png"
         elif self.cp.cptype == ControlPointType.FOB:
@@ -389,8 +389,3 @@ class QBaseMenu2(QDialog):
 
     def open_transfer_dialog(self) -> None:
         NewUnitTransferDialog(self.game_model, self.cp, parent=self.window()).show()
-
-    def update_budget(self, game: Game) -> None:
-        self.budget_display.setText(
-            UnitTransactionFrame.BUDGET_FORMAT.format(game.blue.budget)
-        )

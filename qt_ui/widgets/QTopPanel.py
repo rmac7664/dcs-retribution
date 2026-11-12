@@ -1,36 +1,60 @@
+import logging
 from datetime import datetime
-from typing import List, Optional
+from pathlib import Path
+from typing import Any, List, Optional
 
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
+    QFileDialog,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
+    QToolBar,
+    QWidget,
 )
 
 import qt_ui.uiconstants as CONST
+from qt_ui.widgets.controls import style_button
+from qt_ui.windows.opforai import CommanderButton, OpforAiDialog
 from game import Game, persistency
+from game.ato.flight import Flight
 from game.ato.flightstate import Uninitialized
 from game.ato.package import Package
+from game.ato.starttype import StartType
 from game.ato.traveltime import TotEstimator
 from game.profiling import logged_duration
-from game.settings.settings import FastForwardStopCondition
-from game.utils import meters
+from game.server import EventStream
+from game.weather.atmosxliveweather import (
+    live_weather_enabled,
+    refresh_live_weather,
+)
+from game.sim import GameUpdateEvents
 from qt_ui.models import GameModel
 from qt_ui.simcontroller import SimController
 from qt_ui.uiflags import UiFlags
-from qt_ui.widgets.QBudgetBox import QBudgetBox
+from qt_ui.widgets import commandbar
+from qt_ui.widgets.QConditionsDialog import QConditionsDialog
 from qt_ui.widgets.QConditionsWidget import QConditionsWidget
-from qt_ui.widgets.QFactionsInfos import QFactionsInfos
-from qt_ui.widgets.QIntelBox import QIntelBox
 from qt_ui.widgets.clientslots import MaxPlayerCount
-from qt_ui.widgets.simspeedcontrols import SimSpeedControls
+from qt_ui.widgets.QMissionProgressPanel import MissionProgressPanel
+from game.income import Income
+from game.missiongenerator.realisticcascampaign import (
+    RealisticCASConfigurationError,
+    validate_compatibility,
+)
+from game.plugins.manager import LuaPluginManager
+from game.theater import Player
+from qt_ui.dialogs import open_once
 from qt_ui.windows.AirWingDialog import AirWingDialog
+from qt_ui.windows.finances.QFinancesMenu import QFinancesMenu
+from qt_ui.windows.intel import IntelWindow
 from qt_ui.windows.GameUpdateSignal import GameUpdateSignal
-from qt_ui.windows.PendingTransfersDialog import PendingTransfersDialog
-from qt_ui.windows.QWaitingForMissionResultWindow import QWaitingForMissionResultWindow
+from qt_ui.windows.QWaitingForMissionResultWindow import DebriefingFileWrittenSignal
 
 
 class QTopPanel(QFrame):
@@ -40,92 +64,196 @@ class QTopPanel(QFrame):
         super(QTopPanel, self).__init__()
         self.game_model = game_model
         self.sim_controller = sim_controller
-        self.dialog: Optional[QDialog] = None
+        # One reference each: they used to share a single `self.dialog`, so opening
+        # one dropped the only reference the other had.
+        self.air_wing_dialog: Optional[QDialog] = None
+        self.playable_dialog: Optional[QDialog] = None
+        self.transfers_dialog: Optional[QDialog] = None
 
-        self.setMaximumHeight(70)
+        # One strip instead of six group boxes. See qt_ui/widgets/commandbar.py for
+        # the cells; the mission-launch machinery below is untouched.
+        self.setFixedHeight(commandbar.BAR_HEIGHT)
+        self.setStyleSheet(f"QTopPanel {{ background: {commandbar.BAR_BG}; }}")
 
+        # Kept alive but not shown: it holds the turn and weather widgets that
+        # QConditionsDialog is built from, which the cells open on a double click.
         self.conditionsWidget = QConditionsWidget(sim_controller)
-        self.budgetBox = QBudgetBox(self.game)
+        self.conditionsWidget.refresh_weather_requested.connect(
+            self.refresh_live_weather
+        )
+        self.conditionsWidget.hide()
+
+        self.turn_cell = commandbar.TurnCell()
+        self.weather_cell = commandbar.WeatherCell(self.refresh_live_weather)
+        for cell in (self.turn_cell, self.weather_cell):
+            cell.mouseDoubleClickEvent = self._open_conditions  # type: ignore[method-assign]
+        self.factions_cell = commandbar.FactionsCell()
+        self.budget_cell = commandbar.BudgetCell(self.open_finances)
+        self.intel_cell = commandbar.IntelCell(self.open_intel)
+        self.high_command_cell = commandbar.HighCommandCell(self.open_high_command)
 
         pass_turn_text = "Pass Turn"
         if not self.game or self.game.turn == 0:
             pass_turn_text = "Begin Campaign"
         self.passTurnButton = QPushButton(pass_turn_text)
         self.passTurnButton.setIcon(CONST.ICONS["PassTurn"])
-        self.passTurnButton.setProperty("style", "btn-primary")
+        style_button(self.passTurnButton, "primary")
         self.passTurnButton.clicked.connect(self.passTurn)
         if not self.game:
             self.passTurnButton.setEnabled(False)
 
         self.proceedButton = QPushButton("Take off")
         self.proceedButton.setIcon(CONST.ICONS["Proceed"])
-        self.proceedButton.setProperty("style", "start-button")
+        # Red: it is the button that ends the planning and leaves for DCS.
+        style_button(self.proceedButton, "danger")
         self.proceedButton.clicked.connect(self.launch_mission)
         if not self.game or self.game.turn == 0:
             self.proceedButton.setEnabled(False)
 
-        self.factionsInfos = QFactionsInfos(self.game)
-
-        self.air_wing = QPushButton("Air Wing")
+        self.air_wing = QPushButton("Air Wings")
         self.air_wing.setDisabled(True)
-        self.air_wing.setProperty("style", "btn-primary")
+        style_button(self.air_wing)
         self.air_wing.clicked.connect(self.open_air_wing)
+
+        self.playable = QPushButton("Player Aircrafts")
+        self.playable.setDisabled(True)
+        style_button(self.playable)
+        self.playable.setToolTip(
+            "What the player is flying this turn, and the points saved for each one"
+        )
+        self.playable.clicked.connect(self.open_playable_aircraft)
 
         self.transfers = QPushButton("Transfers")
         self.transfers.setDisabled(True)
-        self.transfers.setProperty("style", "btn-primary")
+        style_button(self.transfers)
         self.transfers.clicked.connect(self.open_transfers)
 
         self.logistics = QPushButton("Logistics")
         self.logistics.setDisabled(True)
-        self.logistics.setProperty("style", "btn-primary")
+        style_button(self.logistics)
         self.logistics.setToolTip("Every base's supply situation on one page")
         self.logistics.clicked.connect(self.open_logistics)
 
-        self.intel_box = QIntelBox(self.game)
+        # The debriefing is modal and easily lost behind the main window on an alt-tab,
+        # or closed before it has been read. This puts it back.
+        self.debriefing = QPushButton("Debriefing")
+        self.debriefing.setDisabled(True)
+        style_button(self.debriefing)
+        self.debriefing.setToolTip("Show the last debriefing again")
+        self.debriefing.clicked.connect(self.open_debriefing)
 
-        self.buttonBox = QGroupBox("Misc")
-        self.buttonBoxLayout = QHBoxLayout()
-        self.buttonBoxLayout.addWidget(self.air_wing)
-        self.buttonBoxLayout.addWidget(self.transfers)
-        self.buttonBoxLayout.addWidget(self.logistics)
-        self.buttonBox.setLayout(self.buttonBoxLayout)
+        # OPFOR-AI commander indicator (only shown when the setting is on); lights up for
+        # a few seconds on each API call the LLM makes (no manual on/off), and Take Off
+        # is blocked while it's lit.
+        self.ai_status_button = CommanderButton(self)
+        self.ai_status_button.clicked.connect(self._show_ai_status)
+        self.ai_status_button.setVisible(False)
 
-        self.simSpeedControls = SimSpeedControls(sim_controller)
-
-        self.proceedBox = QGroupBox("Proceed")
-        self.proceedBoxLayout = QHBoxLayout()
-        if ui_flags.show_sim_speed_controls:
-            self.proceedBoxLayout.addLayout(self.simSpeedControls)
-        self.proceedBoxLayout.addLayout(MaxPlayerCount(self.game_model.ato_model))
-        self.proceedBoxLayout.addWidget(self.passTurnButton)
-        self.proceedBoxLayout.addWidget(self.proceedButton)
-        self.proceedBox.setLayout(self.proceedBoxLayout)
+        self._ai_status_timer = QTimer(self)
+        self._ai_status_timer.timeout.connect(self._refresh_ai_status)
+        self._ai_status_timer.start(1000)
 
         self.controls = [
             self.air_wing,
+            self.playable,
             self.transfers,
-            self.simSpeedControls,
             self.passTurnButton,
             self.proceedButton,
         ]
 
+        for button in (
+            self.air_wing,
+            self.playable,
+            self.transfers,
+            self.debriefing,
+            self.logistics,
+            self.ai_status_button,
+            self.passTurnButton,
+            self.proceedButton,
+        ):
+            button.setFixedHeight(30)
+
         self.layout = QHBoxLayout()
+        self.layout.setContentsMargins(16, 0, 16, 0)
+        self.layout.setSpacing(16)
+        # Status on the left, in the order you read a turn: when, then who, then what
+        # you have to spend it on.
+        self._intel_divider = commandbar.Divider()
+        self._high_command_divider = commandbar.Divider()
+        for cell in (
+            self.turn_cell,
+            self.weather_cell,
+            self.factions_cell,
+            self.budget_cell,
+            self.intel_cell,
+            self.high_command_cell,
+        ):
+            if cell is self.intel_cell:
+                divider: Optional[commandbar.Divider] = self._intel_divider
+            elif cell is self.high_command_cell:
+                divider = self._high_command_divider
+            elif cell is self.turn_cell:
+                divider = None
+            else:
+                divider = commandbar.Divider()
+            if divider is not None:
+                self.layout.addWidget(divider, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.layout.addWidget(cell, 0, Qt.AlignmentFlag.AlignVCenter)
+        # The dialogs sit with the status they belong to, not across the window from
+        # it; only what ends the turn is pinned to the right.
+        self.layout.addWidget(commandbar.Divider(), 0, Qt.AlignmentFlag.AlignVCenter)
+        dialogs = QHBoxLayout()
+        dialogs.setContentsMargins(0, 0, 0, 0)
+        dialogs.setSpacing(8)
+        self.transfers.hide()
+        for widget in (self.air_wing, self.playable, self.logistics, self.debriefing):
+            dialogs.addWidget(widget)
+        dialogs.addWidget(self.ai_status_button)
+        self.layout.addLayout(dialogs)
 
-        self.layout.addWidget(self.factionsInfos)
-        self.layout.addWidget(self.conditionsWidget)
-        self.layout.addWidget(self.budgetBox)
-        self.layout.addWidget(self.intel_box)
-        self.layout.addWidget(self.buttonBox)
         self.layout.addStretch(1)
-        self.layout.addWidget(self.proceedBox)
 
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        players = MaxPlayerCount(self.game_model.ato_model)
+        commandbar.blend_into_bar(players)
+        actions.addLayout(players)
+        actions.addWidget(self.passTurnButton)
+        actions.addWidget(self.proceedButton)
+        self.layout.addLayout(actions)
 
         self.setLayout(self.layout)
 
         GameUpdateSignal.get_instance().gameupdated.connect(self.setGame)
         GameUpdateSignal.get_instance().budgetupdated.connect(self.budget_update)
+
+    def refresh_live_weather(self) -> None:
+        """Fetch the observation again and redraw with it."""
+        game = self.game
+        if game is None:
+            return
+        # The fetch shells out to the ATMOS-X CLI and can take a few seconds.
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            refreshed = refresh_live_weather(game)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if refreshed is not None:
+            # The reason comes from the CLI itself ("No METAR data available for
+            # UGKS."), so show it: the player asked for this fetch and can act on it,
+            # by picking a station or waiting, without opening the log.
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("No observation")
+            box.setText(
+                "Could not fetch a METAR observation, so the turn keeps the "
+                "weather it already had."
+            )
+            box.setInformativeText(refreshed)
+            box.exec()
+            return
+        GameUpdateSignal.get_instance().updateGame(game)
 
     @property
     def game(self) -> Optional[Game]:
@@ -136,21 +264,36 @@ class QTopPanel(QFrame):
             return
 
         self.air_wing.setEnabled(True)
+        self.playable.setEnabled(True)
         self.transfers.setEnabled(True)
         self.update_logistics_button(game)
+        self.refresh_debriefing_button()
 
-        self.conditionsWidget.setCurrentTurn(game.turn, game.conditions)
+        # The hidden conditions widget still does the work: it owns the icon, the
+        # tooltip with everything the strip has no room for, and the two widgets
+        # QConditionsDialog is built from.
+        can_refresh = live_weather_enabled(game.settings)
+        self.conditionsWidget.setCurrentTurn(
+            game.turn, game.conditions, can_refresh, theater=game.theater
+        )
+        weather_widget = self.conditionsWidget.weather_widget
 
-        if game.conditions.weather.clouds:
-            base_m = game.conditions.weather.clouds.base
-            base_ft = int(meters(base_m).feet)
-            self.conditionsWidget.setToolTip(f"Cloud Base: {base_m}m / {base_ft}ft")
-        else:
-            self.conditionsWidget.setToolTip("")
-
-        self.intel_box.set_game(game)
-        self.budgetBox.setGame(game)
-        self.factionsInfos.setGame(game)
+        self.turn_cell.set_turn(game.turn, game.conditions)
+        self.weather_cell.set_weather(game.conditions, can_refresh)
+        self.weather_cell.set_icon(weather_widget.weather_icon.pixmap())
+        for cell in (self.turn_cell, self.weather_cell):
+            cell.setToolTip(weather_widget.toolTip())
+        self.factions_cell.set_factions(game.blue.faction.name, game.red.faction.name)
+        self.budget_cell.set_budget(
+            game.blue.budget, Income(game, player=Player.BLUE).total
+        )
+        self.budget_cell.set_enabled(True)
+        self.intel_cell.set_intel(
+            commandbar.intel_ratios(game), gathering=game.turn == 0
+        )
+        self.intel_cell.set_enabled(True)
+        self.refresh_high_command_cell(game)
+        self._fit_cells()
 
         self.setControls(True)
 
@@ -159,13 +302,13 @@ class QTopPanel(QFrame):
         elif game.turn == 0:
             self.passTurnButton.setText("Begin Campaign")
             self.proceedButton.setEnabled(False)
-            self.simSpeedControls.setEnabled(False)
         else:
             raise RuntimeError(f"game.turn out of bounds!\n  value = {game.turn}")
 
-    def open_air_wing(self):
-        self.dialog = AirWingDialog(self.game_model, self.window())
-        self.dialog.show()
+    def open_air_wing(self) -> None:
+        self.air_wing_dialog = open_once(
+            "air-wing", lambda: AirWingDialog(self.game_model, self.window())
+        )
 
     def update_logistics_button(self, game: Optional[Game]) -> None:
         """The Logistics button only shows when the logistics option is on."""
@@ -181,9 +324,49 @@ class QTopPanel(QFrame):
         self.dialog = QLogisticsOverview(self.game, self.window())
         self.dialog.show()
 
-    def open_transfers(self):
-        self.dialog = PendingTransfersDialog(self.game_model)
-        self.dialog.show()
+    def open_playable_aircraft(self) -> None:
+        from qt_ui.windows.playable import PlayableAircraftDialog
+
+        self.playable_dialog = open_once(
+            "playable-aircraft",
+            lambda: PlayableAircraftDialog(self.game_model, self.window()),
+        )
+
+    def open_transfers(self) -> None:
+        self.open_intel()
+        if self.intel_dialog.transfers is not None:
+            self.intel_dialog.tabs.setCurrentWidget(self.intel_dialog.transfers)
+
+    def refresh_debriefing_button(self) -> None:
+        """Offer the last mission's report whenever there is one.
+
+        Called on a game update and the moment a debriefing arrives -- the arrival is
+        exactly when it can go missing behind the main window -- and the report is kept
+        on the game, so a campaign loaded in a later session still has it.
+        """
+        window = self.window()
+        available = getattr(window, "has_debriefing_to_show", None)
+        self.debriefing.setEnabled(bool(available and available()))
+
+    def open_debriefing(self) -> None:
+        window = self.window()
+        show = getattr(window, "show_last_debriefing", None)
+        if show is not None:
+            show()
+
+    def _refresh_ai_status(self) -> None:
+        from game.agent.session import AI_SESSION
+
+        s = self.game.settings if self.game else None
+        enabled = bool(s and s.opfor_ai_enabled)
+        self.ai_status_button.setVisible(enabled)
+        if not enabled:
+            return
+        snap = AI_SESSION.snapshot()
+        self.ai_status_button.set_snapshot(snap)
+
+    def _show_ai_status(self) -> None:
+        self.ai_dialog = open_once("opfor-ai", lambda: OpforAiDialog(self.window()))
 
     def passTurn(self):
         from qt_ui.windows.QMainBaseDialog import QMainBaseDialog
@@ -214,10 +397,10 @@ class QTopPanel(QFrame):
         return packages
 
     @staticmethod
-    def fix_tots(packages: List[Package]) -> None:
+    def fix_tots(packages: List[Package], now: datetime) -> None:
         for package in packages:
             estimator = TotEstimator(package)
-            package.time_over_target = estimator.earliest_tot()
+            package.time_over_target = estimator.earliest_tot(now)
 
     def confirm_no_client_launch(self) -> bool:
         result = QMessageBox.question(
@@ -242,7 +425,9 @@ class QTopPanel(QFrame):
         )
         return result == QMessageBox.StandardButton.Yes
 
-    def confirm_negative_start_time(self, negative_starts: List[Package]) -> bool:
+    def confirm_negative_start_time(
+        self, negative_starts: List[Package], now: datetime
+    ) -> bool:
         formatted = "<br />".join(
             [f"{p.primary_task} {p.target.name}" for p in negative_starts]
         )
@@ -277,7 +462,7 @@ class QTopPanel(QFrame):
         mbox.exec_()
         clicked = mbox.clickedButton()
         if clicked == auto:
-            self.fix_tots(negative_starts)
+            self.fix_tots(negative_starts, now)
             return True
         elif clicked == ignore:
             return True
@@ -315,34 +500,405 @@ class QTopPanel(QFrame):
 
     def launch_mission(self):
         """Finishes planning and waits for mission completion."""
+        from game.agent.session import AI_SESSION
+
+        if AI_SESSION.active:
+            QMessageBox.warning(
+                self,
+                "OPFOR AI is planning",
+                "The OPFOR AI commander is still planning red's turn.\n\n"
+                "Wait for it to finish (the OPFOR AI indicator goes idle) or "
+                "cancel it before taking off.",
+            )
+            return
+
+        LuaPluginManager.load_settings(self.game.settings)
+        try:
+            validate_compatibility(LuaPluginManager.plugins())
+        except RealisticCASConfigurationError as ex:
+            QMessageBox.warning(self, "Incompatible mission plugins", str(ex))
+            return
+
+        # Fill an unplanned OPFOR air turn, but preserve ground orders and any
+        # deliberately empty air plan recorded by the external commander.
+        try:
+            from game.agent import service
+
+            service.run_opfor_fallback_if_needed()
+        except Exception:
+            logging.exception("OPFOR-AI scripted fallback failed; continuing")
+
         if not self.game.ato_has_clients() and not self.confirm_no_client_launch():
             return
 
         if self.check_no_missing_pilots():
             return
 
-        negative_starts = self.negative_start_packages(
-            self.sim_controller.current_time_in_sim
-        )
+        now = self.sim_controller.current_time_in_sim
+        negative_starts = self.negative_start_packages(now)
         if negative_starts:
-            if not self.confirm_negative_start_time(negative_starts):
+            if not self.confirm_negative_start_time(negative_starts, now):
                 return
 
-        if self.game.settings.fast_forward_stop_condition not in [
-            FastForwardStopCondition.DISABLED,
-            FastForwardStopCondition.MANUAL,
-        ]:
-            with logged_duration("Simulating to first contact"):
-                self.sim_controller.run_to_first_contact()
         self.sim_controller.generate_miz(
             persistency.mission_path_for("retribution_nextturn.miz")
         )
 
-        waiting = QWaitingForMissionResultWindow(self.game, self.sim_controller, self)
-        waiting.exec_()
+        self._begin_mission_panel()
+
+    # ------------------------------------------------------------------ #
+    # Embedded "mission in progress" panel (replaces the old waiting dialog).
+    # The live QtWebEngine map is DETACHED (reparented out, not just hidden) and
+    # the panel takes its splitter slot; the rest of the UI is covered with dim
+    # scrims so the panel reads as modal.
+    # ------------------------------------------------------------------ #
+    def _begin_mission_panel(self) -> None:
+        if getattr(self, "_mp_panel", None) is not None:
+            return  # a mission is already in progress; ignore re-entry
+
+        window = self.window()
+        self._mp_map = getattr(window, "liberation_map", None)
+        self._mp_info_panel = getattr(window, "info_panel", None)
+        self._mp_splitter = (
+            self._mp_map.parentWidget() if self._mp_map is not None else None
+        )
+        self._mp_map_index = -1
+        self._mp_splitter_sizes = None
+        self._mp_debriefing = None
+        self._mp_real_start = datetime.now()
+        self._mp_disabled: List[QWidget] = []
+        self._mp_disabled_actions: List[QAction] = []
+
+        panel = MissionProgressPanel()
+        self._mp_panel = panel
+        if self.game is not None:
+            panel.set_doctrine(self.game.settings.ignore_non_combat_air_losses)
+
+        if self._mp_splitter is not None and self._mp_map is not None:
+            self._mp_map_index = self._mp_splitter.indexOf(self._mp_map)
+            self._mp_splitter_sizes = self._mp_splitter.sizes()
+            # DETACH the QtWebEngine map, don't just hide it. setVisible(False)
+            # leaves its native HWND a child of the main window, so subsequent
+            # window ops keep issuing synchronous SendMessage to the Chromium
+            # renderer process and deadlock the GUI thread (NtUserMessageCall).
+            # Reparenting to None takes that HWND out of the main window's tree, so
+            # the renderer can't be messaged. Do it BEFORE adding the panel/scrims.
+            # GPU acceleration stays on (software GL makes the map unusable).
+            self._mp_map.setParent(None)
+            self._mp_map.hide()
+            # Reparenting/hiding does NOT kill the QtWebEngine renderer process, and
+            # the live renderer's desktop-GL compositing is the peer the GUI thread's
+            # wglSwapLayerBuffers swap deadlocks on. Discard it so the renderer stops
+            # while the panel is up (it reloads when the map is shown again).
+            self._mp_map.discard_renderer()
+            self._mp_splitter.insertWidget(self._mp_map_index, panel)
+            # Hide the info panel too so the mission panel owns the whole splitter
+            # column (no leftover strip, no live splitter handle to drag it away).
+            if self._mp_info_panel is not None:
+                self._mp_info_panel.setVisible(False)
+
+        # The old waiting dialog was WindowModal: it blocked the menu bar, toolbars
+        # and their shortcuts (New/Open/Save...). Loading a different game mid-mission
+        # would swap the game underneath the still-running poll thread. Reproduce that
+        # block by disabling those + the top-panel controls for the panel's lifetime.
+        self.setControls(False)
+        # The menu lives in a strip with the toolbar icons now; disabling the
+        # strip blocks both, which is what the block below is for.
+        menu_bar = getattr(window, "menu_strip", None)
+        if menu_bar is None and hasattr(window, "menuBar"):
+            menu_bar = window.menuBar()
+        chrome = [
+            w for w in [menu_bar, *window.findChildren(QToolBar)] if w is not None
+        ]
+        for w in chrome:
+            if w.isEnabled():
+                w.setEnabled(False)
+                self._mp_disabled.append(w)
+        for action in window.findChildren(QAction):
+            if action.isEnabled():
+                action.setEnabled(False)
+                self._mp_disabled_actions.append(action)
+
+        overlay_parent = (
+            window.centralWidget() if hasattr(window, "centralWidget") else window
+        )
+        panel.install_scrims(
+            [self, getattr(window, "ato_panel", None)],
+            overlay_parent,
+        )
+        # The menu bar + toolbars live outside the central widget; disabling alone
+        # doesn't grey them under the custom QSS, so dim them with their own scrims.
+        if chrome:
+            panel.install_scrims(chrome, window)
+
+        panel.accept_btn.clicked.connect(self._mp_accept)
+        panel.manually_submit_btn.clicked.connect(self._mp_submit_manually)
+        panel.abort_btn.clicked.connect(self._mp_abort)
+
+        DebriefingFileWrittenSignal.get_instance().debriefingReceived.connect(
+            self._mp_on_debriefing
+        )
+        self._mp_wait_thread = self.sim_controller.wait_for_debriefing(
+            lambda d: DebriefingFileWrittenSignal.get_instance().sendDebriefing(d)
+        )
+        # Stop the (non-daemon) poll thread if the app quits mid-mission, else it
+        # keeps polling state.json and blocks interpreter shutdown (orphaned process).
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._mp_on_quit)
+
+        self._mp_timer = QTimer(self)
+        self._mp_timer.timeout.connect(self._mp_tick)
+        self._mp_timer.start(1000)
+        self._mp_tick()
+
+    def _mp_on_quit(self) -> None:
+        thread = getattr(self, "_mp_wait_thread", None)
+        if thread is not None:
+            thread.stop()
+        timer = getattr(self, "_mp_timer", None)
+        if timer is not None:
+            timer.stop()
+
+    def _mp_on_debriefing(self, debriefing) -> None:
+        try:
+            self._mp_debriefing = debriefing
+            self._mp_panel.ingest_debriefing(debriefing)
+        except Exception:
+            logging.exception("Failed to ingest debriefing into mission panel")
+
+    def _mp_tick(self) -> None:
+        panel = getattr(self, "_mp_panel", None)
+        if panel is None:
+            return
+        try:
+            sim_time = self.sim_controller.current_time_in_sim_if_game_loaded
+        except Exception:
+            sim_time = None
+        try:
+            # DCS mission elapsed is fed from the debriefing's model_time in
+            # ingest_debriefing; the campaign sim clock is paused during the mission.
+            panel.update_clocks(
+                self._mp_real_start,
+                datetime.now(),
+                sim_time,
+                None,
+                self.game.turn,
+            )
+        except Exception:
+            logging.exception("mission panel: clock update failed")
+        try:
+            self._mp_update_conditions(panel)
+        except Exception:
+            logging.exception("mission panel: conditions update failed")
+        try:
+            self._mp_update_flights(panel)
+        except Exception:
+            logging.exception("mission panel: flights update failed")
+
+    def _mp_update_conditions(self, panel: MissionProgressPanel) -> None:
+        cond = self.game.conditions
+        weather = cond.weather
+        wind = weather.wind.at_0m
+        speed_kt = round(getattr(wind, "speed", 0) * 1.94384)
+        wind_str = f"{round(getattr(wind, 'direction', 0)):03d}° {speed_kt} kt"
+        preset = getattr(weather.clouds, "preset", None)
+        clouds = preset.name if preset is not None else "Clear"
+        temp = getattr(weather.atmospheric, "temperature_celsius", None)
+        tod = cond.time_of_day.name.replace("_", " ").title()
+        panel.update_conditions(wind_str, clouds, temp, tod)
+
+    def _mp_update_flights(self, panel: MissionProgressPanel) -> None:
+        airborne = combat = waiting = 0
+        for _, flight in self.game.db.flights.objects.items():
+            try:
+                if not flight.blue.is_blue:
+                    continue  # the panel reports own-force (BLUE) flights only
+            except Exception:
+                continue
+            state = flight.state
+            if state is None or not state.alive:
+                continue
+            if state.in_combat:
+                combat += 1
+                airborne += 1
+            elif state.in_flight:
+                airborne += 1
+            elif state.is_waiting_for_start:
+                waiting += 1
+        panel.update_flights(airborne, combat, waiting)
+
+    def _mp_accept(self) -> None:
+        debriefing = getattr(self, "_mp_debriefing", None)
+        if debriefing is None:
+            return
+        # Turn processing blocks the UI; show an indeterminate busy dialog meanwhile.
+        progress = QProgressDialog(
+            "End of Mission Detected, processing Mission Data",
+            "",
+            0,
+            0,
+            self.window(),
+        )
+        progress.setWindowTitle("Processing")
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.show()
+        QApplication.processEvents()
+        try:
+            with logged_duration("Turn processing"):
+                self.sim_controller.process_results(debriefing)
+                self.game.pass_turn()
+                GameUpdateSignal.get_instance().sendDebriefing(debriefing)
+                GameUpdateSignal.get_instance().updateGame(self.game)
+        finally:
+            progress.close()
+        self._mp_teardown()
+
+    def _mp_submit_manually(self) -> None:
+        file = QFileDialog.getOpenFileName(
+            self, "Select game file to open", filter="json(*.json)", dir="."
+        )
+        if file[0] == "":
+            return
+        logging.debug("Processing manually submitted %s", file[0])
+        wait_thread = getattr(self, "_mp_wait_thread", None)
+        if wait_thread is not None:
+            wait_thread.stop()
+            self._mp_wait_thread = None
+        DebriefingFileWrittenSignal.get_instance().sendDebriefing(
+            self.sim_controller.debrief_current_state(Path(file[0]), force_end=True)
+        )
+
+    def _mp_abort(self) -> None:
+        self.sim_controller.set_game(self.game)
+        events = GameUpdateEvents()
+        for _, f in self.game.db.flights.objects.items():
+            f.state = Uninitialized(f, self.game.settings)
+            events.update_flight(f)
+        for cp in self.game.theater.controlpoints:
+            cp.release_parking_slots()
+        GameUpdateSignal.get_instance().updateGame(self.game)
+        EventStream().put_nowait(events)
+        self._mp_teardown()
+
+    def _mp_teardown(self) -> None:
+        timer = getattr(self, "_mp_timer", None)
+        if timer is not None:
+            timer.stop()
+            self._mp_timer = None
+        wait_thread = getattr(self, "_mp_wait_thread", None)
+        if wait_thread is not None:
+            wait_thread.stop()
+            self._mp_wait_thread = None
+        try:
+            DebriefingFileWrittenSignal.get_instance().debriefingReceived.disconnect(
+                self._mp_on_debriefing
+            )
+        except (RuntimeError, TypeError):
+            pass
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                app.aboutToQuit.disconnect(self._mp_on_quit)
+            except (RuntimeError, TypeError):
+                pass
+        panel = getattr(self, "_mp_panel", None)
+        if panel is not None:
+            panel.remove_scrims()
+            panel.setParent(None)
+            panel.deleteLater()
+            self._mp_panel = None
+        if getattr(self, "_mp_info_panel", None) is not None:
+            self._mp_info_panel.setVisible(True)
+            self._mp_info_panel = None
+        if getattr(self, "_mp_map", None) is not None:
+            # Reactivate the renderer we discarded in _begin_mission_panel (reloads
+            # the map when it becomes visible again).
+            self._mp_map.restore_renderer()
+            # Re-attach the detached map into its old splitter slot (the panel was
+            # already removed above, so the index lines up with the original layout).
+            # Show it BEFORE setSizes, else the still-hidden widget gets 0px.
+            if self._mp_splitter is not None and self._mp_map_index >= 0:
+                self._mp_splitter.insertWidget(self._mp_map_index, self._mp_map)
+                self._mp_map.setVisible(True)
+                if self._mp_splitter_sizes is not None:
+                    self._mp_splitter.setSizes(self._mp_splitter_sizes)
+            else:
+                self._mp_map.setVisible(True)
+        self._mp_map = None
+        self._mp_splitter = None
+        # Re-enable the chrome we disabled while the panel was up.
+        for w in getattr(self, "_mp_disabled", []):
+            w.setEnabled(True)
+        self._mp_disabled = []
+        for action in getattr(self, "_mp_disabled_actions", []):
+            action.setEnabled(True)
+        self._mp_disabled_actions = []
+        self.setControls(True)
 
     def budget_update(self, game: Game):
-        self.budgetBox.setGame(game)
+        self.budget_cell.set_budget(
+            game.blue.budget, Income(game, player=Player.BLUE).total
+        )
+
+    def resizeEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._fit_cells()
+
+    def refresh_high_command_cell(self, game: Game) -> None:
+        """Orders and tickets at a glance. With the High Command off the cell goes,
+        unless tickets earned before are still there to spend."""
+        from qt_ui.windows.highcommand.model import headline
+
+        figures = headline(game)
+        self._high_command_wanted = (
+            game.settings.high_command_enabled or figures.tickets > 0
+        )
+        self.high_command_cell.set_state(
+            figures.orders, figures.last_turn, figures.soonest, figures.tickets
+        )
+        self.high_command_cell.set_enabled(True)
+
+    def _fit_cells(self) -> None:
+        """Narrow windows give up Intel first, then the High Command, then the
+        winds."""
+        width = self.width()
+        shows_high_command = getattr(self, "_high_command_wanted", False) and (
+            width >= commandbar.MIN_WIDTH_FOR_HIGH_COMMAND
+        )
+        self.high_command_cell.setVisible(shows_high_command)
+        self._high_command_divider.setVisible(shows_high_command)
+        room = commandbar.HIGH_COMMAND_ROOM if shows_high_command else 0
+        shows_intel = width >= commandbar.MIN_WIDTH_FOR_INTEL + room
+        self.intel_cell.setVisible(shows_intel)
+        self._intel_divider.setVisible(shows_intel)
+        self.weather_cell.show_winds(width >= commandbar.MIN_WIDTH_FOR_WINDS)
+
+    def _open_conditions(self, event: Any) -> None:
+        """Double-clicking the turn or weather opens the full conditions dialog."""
+        QConditionsDialog(
+            self.conditionsWidget.time_turn_widget,
+            self.conditionsWidget.weather_widget,
+        ).exec()
+
+    def open_finances(self) -> None:
+        self.finances_dialog = QFinancesMenu(self.game)
+        self.finances_dialog.show()
+
+    def open_intel(self) -> None:
+        if self.game is None:
+            return
+        self.intel_dialog = IntelWindow(self.game, self.game_model)
+        self.intel_dialog.show()
+
+    def open_high_command(self) -> None:
+        from qt_ui.windows.highcommand.dialog import open_high_command
+
+        self.high_command_dialog = open_high_command(self.game_model, self.window())
 
     def setControls(self, enabled: bool):
         for controller in self.controls:

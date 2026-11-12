@@ -1,7 +1,7 @@
 ---
 name: Caucasus - WRL - Battle for Georgia (v1.2) #1.0 - Original Release / #1.1 - Player F15e added / #1.2 - Complete overhaul campaign map and enemy units
 theater: Caucasus
-authors: HolyOrangeJuice
+authors: HolyOrangeJuice, modified by juanjux
 recommended_player_faction: WRL - Task Force Blue
 recommended_enemy_faction: WRL - Task Force Red
 recommended_start_date: 2015-02-02
@@ -13,8 +13,11 @@ recommended_player_money: 5000
 recommended_enemy_money: 2000
 recommended_player_income_multiplier: 5.0
 recommended_enemy_income_multiplier: 1.0
-advanced_iads: false
+advanced_iads: true
 settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: true
   max_frontline_width: 30
 squadrons:
   Blue CV-1:
@@ -23,25 +26,30 @@ squadrons:
       aircraft:
         - VF-142 #F14B
       size: 16
+      pilots: 20
     - primary: Strike
       secondary: any
       aircraft:
         - VFA-192 #Hornet Navy
       size: 16
+      pilots: 20
     - primary: AEW&C
       aircraft:
         - E-2D Advanced Hawkeye
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - S-3B Tanker
       size: 2
+      pilots: 6
   Blue LHA:
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - VMA-223 #AV8B
       size: 16
+      pilots: 20
 # Senaki-Kholki
   23:   
     - primary: CAS
@@ -49,102 +57,129 @@ squadrons:
       aircraft:
         - A-10C Thunderbolt II (Suite 7)
       size: 16
+      pilots: 20
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - AV-8B Harrier II Night Attack
       size: 16
+      pilots: 20
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
         - 58th FS #F15c
       size: 16
+      pilots: 20
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - A Company, 1-211th ARB #AH-64D Apache Longbow
       size: 8       
+      pilots: 12
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - Mi-24P Hind-F
       size: 8
+      pilots: 12
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - Ka-50 Hokum III
       size: 8
+      pilots: 12
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - SA 342M Gazelle
       size: 8
+      pilots: 12
     - primary: Transport
       secondary: any
       aircraft:
         - HMLA-169 (UH-1H) #UH-1H Iroquois
       size: 8
+      pilots: 12
     - primary: Transport
       secondary: any
       aircraft:
         - Mi-8MTV2 Hip
       size: 8
+      pilots: 12
  # Kutaisi
   25:
     - primary: AEW&C
       aircraft:
         - E-3A
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - KC-135 Stratotanker
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - KC-130
       size: 2
+      pilots: 6
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - B-52H Stratofortress
       size: 2
+      pilots: 6
     - primary: Strike
       secondary: any
       aircraft:
         - B-1B Lancer
       size: 2
+      pilots: 6
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - F-15E Strike Eagle (Suite 4+)
       size: 16
+      pilots: 20
     - primary: SEAD
       secondary: air-to-ground
       aircraft:
         - VMFA-251 #Hornet - Marines
       size: 16
+      pilots: 20
     - primary: Strike
       secondary: any
       aircraft:
         - 23rd FS #Viper USAF
       size: 16      
+      pilots: 20
  # Kobuleti
   24:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - MQ-9 Reaper
+      size: 2
+      pilots: 6
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - AJS-37 Viggen
       size: 12  
+      pilots: 16
     - primary: BAI
       secondary: any
       aircraft:
         - JF-17 Thunder
       size: 12
+      pilots: 16
     - primary: BARCAP
       secondary: any
       aircraft:
         - Mirage 2000C
       size: 12
+      pilots: 16
 #Sukhumi-Babushara
   20:
     - primary: BARCAP
@@ -152,59 +187,81 @@ squadrons:
       aircraft:
         - MiG-21bis Fishbed-N
       size: 12
+      pilots: 16
     - primary: SEAD
       secondary: air-to-ground
       aircraft:
         - Su-25T Frogfoot
       size: 12
+      pilots: 16
 # Gudauta
   21:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - WingLoong-I
+      size: 2
+      pilots: 6
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - Su-24M Fencer-D
       size: 12
+      pilots: 16
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Su-17M4 Fitter-K
       size: 12
+      pilots: 16
  # Sochi-Adler
   18:
     - primary: AEW&C
       aircraft:
         - A-50
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - IL-78M
       size: 2
+      pilots: 6
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Tu-142 Bear-F
       size: 4
+      pilots: 8
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Tu-160 Blackjack
       size: 4
+      pilots: 8
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Tu-22M3 Backfire-C
       size: 4
+      pilots: 8
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Tu-95MS Bear-H
       size: 4
+      pilots: 8
     - primary: BARCAP
       secondary: any
       aircraft:
         - MiG-29S Fulcrum-C
       size: 12
+      pilots: 16
+# GPS jamming: one site on the enemy EWR marker whose 15 nm radius covers the
+# most of its own air defences. No radar on it, so it is a STRIKE target, not
+# SEAD, and a satellite-guided weapon aimed inside the bubble lands wide.
 ground_forces:
+  18|21-6: GPS Jamming Site (Red)
   USA1: Hawk
   USA2: Hawk
   USA3: Hawk
@@ -214,10 +271,10 @@ ground_forces:
   USA7: NASAMS AIM-120C
   USA8: NASAMS AIM-120C
   USA9: NASAMS AIM-120C
-  HSAM1: SA-15 SHORAD 
-  HSAM2: SA-15 SHORAD 
-  HSAM3: SA-15 SHORAD 
-  HSAM4: SA-15 SHORAD 
+  HSAM1: SA-15 SHORAD
+  HSAM2: SA-15 SHORAD
+  HSAM3: SA-15 SHORAD
+  HSAM4: SA-15 SHORAD
   FOBA1: SA-3/S-125
   FOBB1: SA-3/S-125
   FOBC1: SA-3/S-125
@@ -229,3 +286,4 @@ ground_forces:
   Sochi2: SA-11
   Sochi3: SA-11
   Sochi4: SA-11
+  Blue GPS Jammer Kutaisi: GPS Jamming Site (Blue, Unescorted)

@@ -11,12 +11,12 @@
     "AV-8B Harrier II Night Attack",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "Gazelle AH.1",
     "Phantom FG.1",
     "Phantom FGR.2",
     "Phantom F.3",
-    "Tornado GR4"
+    "Tornado GR4",
+    "CH-47D"
   ],
   "awacs": [
     "E-3A"
@@ -48,7 +48,8 @@
   ],
   "preset_groups": [
     "Hawk",
-    "Rapier"
+    "Rapier",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "P265 Dumbarton Castle",

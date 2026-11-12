@@ -1,0 +1,245 @@
+"""Pending transfers inside Intelligence, filtered by faction."""
+
+from __future__ import annotations
+
+from PySide6.QtCore import (
+    QConcatenateTablesProxyModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    QSortFilterProxyModel,
+    QSize,
+    Qt,
+)
+from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListView,
+    QPushButton,
+    QMessageBox,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QStyle,
+    QVBoxLayout,
+    QWidget,
+)
+
+from game.theater import Player
+from qt_ui.models import TransferModel
+from qt_ui.widgets.cards import CARD_BG, CARD_BORDER
+from qt_ui.widgets.controls import style_button
+from .groundmovements import GroundMovementEntry, GroundMovementsModel
+
+
+class TransferRow(QStyledItemDelegate):
+    def sizeHint(
+        self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
+    ) -> QSize:
+        movement = isinstance(
+            index.data(TransferModel.TransferRole), GroundMovementEntry
+        )
+        return QSize(400, 86 if movement else 62)
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
+        painter.save()
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        painter.fillRect(option.rect, QColor("#2B506D" if selected else CARD_BG))
+        rect = option.rect.adjusted(14, 8, -14, -8)
+        transfer = index.data(TransferModel.TransferRole)
+        if transfer is None:
+            painter.restore()
+            return
+        font = QFont(option.font)
+        font.setPixelSize(13)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#F2F7FA"))
+        title = painter.fontMetrics().elidedText(
+            str(index.data()), Qt.TextElideMode.ElideRight, rect.width()
+        )
+        painter.drawText(
+            rect.adjusted(0, 0, 0, 20 - rect.height()),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            title,
+        )
+        font.setPixelSize(11)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QColor("#B7C6D2"))
+        description = "\n".join(
+            painter.fontMetrics().elidedText(
+                line, Qt.TextElideMode.ElideRight, rect.width()
+            )
+            for line in transfer.description.splitlines()
+        )
+        painter.drawText(
+            rect.adjusted(0, 24, 0, 0),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            description,
+        )
+        painter.setPen(QColor(CARD_BORDER))
+        painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
+        painter.restore()
+
+
+class TransferFilter(QSortFilterProxyModel):
+    player = Player.BLUE
+
+    def filterAcceptsRow(
+        self, row: int, parent: QModelIndex | QPersistentModelIndex
+    ) -> bool:
+        model = self.sourceModel()
+        index = model.index(row, 0, parent)
+        transfer = index.data(TransferModel.TransferRole)
+        if transfer is None:
+            return False
+        text = str(index.data()) + " " + transfer.description
+        return (
+            transfer.player == self.player
+            and self.filterRegularExpression().match(text).hasMatch()
+        )
+
+
+class TransfersPane(QWidget):
+    def __init__(self, model: TransferModel) -> None:
+        super().__init__()
+        self.model = model
+        self.movements = GroundMovementsModel(model, self)
+        self.combined = QConcatenateTablesProxyModel(self)
+        self.combined.addSourceModel(model)
+        self.combined.addSourceModel(self.movements)
+        self.proxy = TransferFilter(self)
+        self.proxy.setSourceModel(self.combined)
+        self.proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        bar = QHBoxLayout()
+        self.count = QLabel()
+        bar.addWidget(self.count)
+        bar.addStretch()
+        search = QLineEdit()
+        search.setPlaceholderText("Filter transfers…")
+        search.setClearButtonEnabled(True)
+        search.textChanged.connect(self.proxy.setFilterFixedString)
+        bar.addWidget(search)
+        layout.addLayout(bar)
+        self.view = QListView()
+        self.view.setModel(self.proxy)
+        self.view.setItemDelegate(TransferRow(self.view))
+        self.view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.view.setStyleSheet(
+            f"QListView {{ background: {CARD_BG}; color: #D3DFE8; border: 1px solid {CARD_BORDER}; }}"
+            "QListView::item { padding: 10px; border-bottom: 1px solid #33414F; }"
+            "QListView::item:selected { background: #2B506D; color: #F2F7FA; }"
+        )
+        layout.addWidget(self.view, 1)
+        self.empty = QLabel("No pending transfers for this faction.")
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.empty)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        # Logistics: send a convoy or cargo ship's munitions by air, or undo it.
+        self.air = style_button(QPushButton("Send by air…"))
+        self.air.clicked.connect(self.send_by_air)
+        buttons.addWidget(self.air)
+        self.cancel = style_button(QPushButton("Cancel selected transfer"), "danger")
+        self.cancel.clicked.connect(self.cancel_selected)
+        buttons.addWidget(self.cancel)
+        layout.addLayout(buttons)
+        self.view.selectionModel().selectionChanged.connect(self.refresh)
+        for signal in (
+            self.proxy.modelReset,
+            self.proxy.rowsInserted,
+            self.proxy.rowsRemoved,
+            self.proxy.layoutChanged,
+        ):
+            signal.connect(self.refresh)
+        self.refresh()
+
+    def show_side(self, player: Player) -> None:
+        self.proxy.player = player
+        self.proxy.invalidateFilter()
+        self.refresh()
+
+    def refresh(self) -> None:
+        count = self.proxy.rowCount()
+        self.count.setText(f"{count} pending transfer{'s' if count != 1 else ''}")
+        self.empty.setVisible(count == 0)
+        index = self.view.currentIndex()
+        transfer = index.data(TransferModel.TransferRole) if index.isValid() else None
+        self.cancel.setEnabled(transfer is not None and transfer.player.is_blue)
+        movement = isinstance(transfer, GroundMovementEntry)
+        air = "" if movement else self._air_state(transfer)
+        game = self.model.game_model.game
+        self.air.setVisible(game is not None and game.settings.logistics_enabled)
+        self.air.setText("Undo air delivery" if air == "undo" else "Send by air…")
+        self.air.setEnabled(bool(air))
+        self.cancel.setText(
+            "Stop selected movement" if movement else "Cancel selected transfer"
+        )
+        self.cancel.setToolTip(
+            "Stop at the current position; units remain deployed and are not returned to base."
+            if movement
+            else ""
+        )
+
+    def cancel_selected(self) -> None:
+        index = self.view.currentIndex()
+        transfer = index.data(TransferModel.TransferRole) if index.isValid() else None
+        if transfer is not None and transfer.player.is_blue:
+            if isinstance(transfer, GroundMovementEntry):
+                try:
+                    model = self.model.game_model
+                    model.ground_movement_commands.stop(
+                        model.get(), transfer.order_id, transfer.player
+                    )
+                except (ValueError, PermissionError) as exc:
+                    QMessageBox.warning(self, "Cannot stop movement", str(exc))
+                self.movements.refresh()
+            else:
+                self.model.cancel_transfer_at_index(
+                    self.combined.mapToSource(self.proxy.mapToSource(index))
+                )
+        self.refresh()
+
+    def _air_state(self, transfer: object) -> str:
+        """'send', 'undo' or '' for a transfer (logistics supply runs only)."""
+        from game.transfers import TransferOrder
+        from game.warehouse.airswitch import can_undo, switchable
+
+        game = self.model.game_model.game
+        if game is None or not isinstance(transfer, TransferOrder):
+            return ""
+        if not transfer.player.is_blue:
+            return ""
+        if switchable(game, transfer):
+            return "send"
+        if can_undo(game, transfer):
+            return "undo"
+        return ""
+
+    def send_by_air(self) -> None:
+        from qt_ui.windows.QSendByAirDialog import QSendByAirDialog, undo_air_delivery
+
+        index = self.view.currentIndex()
+        transfer = index.data(TransferModel.TransferRole) if index.isValid() else None
+        state = self._air_state(transfer)
+        game = self.model.game_model.game
+        if not state or game is None:
+            return
+        self.model.beginResetModel()
+        try:
+            if state == "send":
+                QSendByAirDialog(game, transfer, self).exec()
+            else:
+                undo_air_delivery(game, transfer, self)
+        finally:
+            self.model.endResetModel()
+        self.refresh()

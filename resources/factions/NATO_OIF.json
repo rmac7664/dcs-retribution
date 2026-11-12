@@ -14,7 +14,6 @@
     "B-52H Stratofortress",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "F-117A Nighthawk",
     "F-14A Tomcat (AI)",
     "F-14A Tomcat (Block 135-GR Late)",
@@ -40,7 +39,8 @@
     "Tornado GR4",
     "UH-1H Iroquois",
     "UH-60A",
-    "UH-60L"
+    "UH-60L",
+    "RQ-1A Predator"
   ],
   "awacs": [
     "E-2C Hawkeye",
@@ -83,7 +83,8 @@
     "Hawk",
     "Rapier",
     "Roland",
-    "Patriot"
+    "Patriot",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "FFG Oliver Hazard Perry",

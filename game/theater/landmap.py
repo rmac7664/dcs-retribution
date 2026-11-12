@@ -46,8 +46,9 @@ class Landmap:
 def load_landmap(filename: Path) -> Optional[Landmap]:
     try:
         with open(filename, "rb") as f:
-            landmap = pickle.load(f)
-        # Unpickling skips __post_init__, so the spatial indexes are built here.
+            landmap: Landmap = pickle.load(f)
+        # Prepared spatial indexes are not pickled, and unpickling a dataclass
+        # does not call __post_init__. Restore them once per map load.
         for zones in (
             landmap.inclusion_zones,
             landmap.exclusion_zones,

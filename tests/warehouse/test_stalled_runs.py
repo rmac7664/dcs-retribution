@@ -22,6 +22,13 @@ from game.warehouse.supply import (
 AIM_120C = "weapons.missiles.AIM_120C"
 
 
+class MagicEvents:
+    """Stands in for GameUpdateEvents: every update call does nothing."""
+
+    def __getattr__(self, _name: str) -> Any:
+        return lambda *_a, **_k: None
+
+
 def world() -> Any:
     settings = Settings()
     settings.logistics_enabled = True
@@ -107,6 +114,6 @@ def test_runs_meant_for_the_air_take_the_road_if_no_aircraft_can(
     pending.cargo_ships = SimpleNamespace(add=lambda t, _s: sent.append("ship"))  # type: ignore[assignment]
     pending.network_for = lambda _cp: FakeNetwork(link)  # type: ignore[method-assign,assignment,return-value]
 
-    pending.arrange_transport(order, None)  # type: ignore[arg-type]
+    pending.arrange_transport(order, None, MagicEvents())  # type: ignore[arg-type]
 
     assert sent == ([expected] if expected else [])

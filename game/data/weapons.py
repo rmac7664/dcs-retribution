@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import inspect
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import unique, Enum
 from functools import cached_property, lru_cache
@@ -16,9 +17,28 @@ from dcs.weapon_settings import WeaponSettings, has_settings, create_settings
 
 from game.dcs.aircrafttype import AircraftType
 from game.factions.faction import Faction
+from game.utils import Distance, nautical_miles
 
 PydcsWeapon = Any
 PydcsWeaponAssignment = tuple[int, PydcsWeapon]
+
+# Display names cover both stock stores and mod-specific rack combinations.
+# Short designations are needed where a rack omits the descriptive suffix.
+_TRAINING_OR_NON_COMBAT = re.compile(
+    r"\b(training|practice|captive|inert|dummy|smoke|smokewinder|"
+    r"illumination|illum|ACMI|TCTS|CATM|TGM|Trg|BDU|LGTR|LUU|SAB|travel\s+pod)\b",
+    re.IGNORECASE,
+)
+# SM (smoke), IL (illumination) and TP (target practice) are used by DCS
+# rocket pods, including multi-pod racks. Scope these to rockets: TP also
+# describes the live Mk-84 AIR's parachute, and SM appears in missile names.
+_ROCKET_STORE = re.compile(
+    r"\b(rkts?|rockets?|hydra|FFAR|SNEB|LAU[- ](?:3|61|68|131))\b",
+    re.IGNORECASE,
+)
+_NON_COMBAT_ROCKET_ROLE = re.compile(r"\b(SM|IL|TP|WP)\b|\bWht\s+Phos\b", re.IGNORECASE)
+# The A-10's Mk 1 practice round is labelled "Mk 1 HE" in pydcs.
+_HYDRA_MK1_PRACTICE = re.compile(r"\bHydra\s+70\s+Mk\s*1\b", re.IGNORECASE)
 
 
 def weapons_migrator(name: str) -> str:
@@ -47,7 +67,14 @@ def clsid_migrator(clsid: str) -> str:
         "{SUPERHORNET_PYLON_09_IB_FT_1X_FPU-8A_HV}": "{SUPERHORNET_PYLON_09_IB_FT_1X_FPU-12A_HV}",
         "{SUPERHORNET_PYLON_03_MB_FT_1X_FPU-8A_HV}": "{SUPERHORNET_PYLON_03_MB_FT_1X_FPU-12A_HV}",
         "{SUPERHORNET_PYLON_09_MB_FT_1X_FPU-8A_HV}": "{SUPERHORNET_PYLON_09_MB_FT_1X_FPU-12A_HV}",
-        "{SUPERHORNET_PYLON_02_MB_JS_2X_BRU_AGM-154C}": "{SUPERHORNET_PYLON_02_MB_JS_2X_BRU55_AGM-154A}",
+        # Centerline (station 6) tank was omitted from the FPU-8A->FPU-12A rename above,
+        # so CAP/AntiShip loadouts silently lost their fuselage tank on CJS 2.4.5.
+        "{SUPERHORNET_PYLON_06_FT_1X_FPU-8A}": "{SUPERHORNET_PYLON_06_FT_1X_FPU-12A}",
+        "{SUPERHORNET_PYLON_06_FT_1X_FPU-8A_HV}": "{SUPERHORNET_PYLON_06_FT_1X_FPU-12A_HV}",
+        # CJS 2.4.5 renamed the JSOW BRU->BRU55 clsids; we deliberately DON'T remap them.
+        # The pydcs_data fallback passes the installed mod's own clsid straight to the .miz,
+        # so a loadout works on whichever CJS version is installed. The old 02_MB remap sent
+        # JSOW-C to a BRU55/AGM-154A clsid absent from mod 2.4.4, silently emptying that pylon.
     }
     while clsid in migration_map:
         clsid = migration_map[clsid]
@@ -90,11 +117,41 @@ class Weapon:
                 "name": "Clean",
                 "weight": 0,
             }
-        return weapon_ids[self.clsid]
+        try:
+            return weapon_ids[self.clsid]
+        except KeyError:
+            # CLSID present in a loadout/save but absent from the weapon DB — typically a
+            # mod weapon our bundled pydcs_extensions don't mirror (e.g. a CJS Super
+            # Hornet pylon variant the mod exposes but our copy lacks). Don't abort the
+            # whole mission generation: pass the CLSID through verbatim so it lands in the
+            # .miz (DCS has the mod and will load it). Weight is unknown → planning as 0.
+            logging.warning(
+                "Weapon CLSID %r not in the weapon DB (unmirrored mod weapon); passing "
+                "it through to the mission with placeholder metadata.",
+                self.clsid,
+            )
+            return {"clsid": self.clsid, "name": self.clsid, "weight": 0}
 
     @property
     def name(self) -> str:
         return self.pydcs_data["name"]
+
+    @property
+    def is_training_or_non_combat(self) -> bool:
+        """Whether this store should be hidden by the loadout UI filter.
+
+        Do not classify by weapon group: captive and live missiles can share one.
+        Defensive flare/chaff dispensers, tanks and combat support pods stay visible.
+        """
+        text = f"{self.name} {self.clsid}".replace("_", " ")
+        return (
+            _TRAINING_OR_NON_COMBAT.search(text) is not None
+            or _HYDRA_MK1_PRACTICE.search(self.name) is not None
+            or (
+                _ROCKET_STORE.search(self.name) is not None
+                and _NON_COMBAT_ROCKET_ROLE.search(self.name) is not None
+            )
+        )
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         # Update any existing models with new data on load.
@@ -145,6 +202,11 @@ class Weapon:
         while fallback is not None:
             yield from fallback.weapons
             fallback = fallback.fallback
+
+    @property
+    def launch_range(self) -> Optional[Distance]:
+        """The maximum stand-off launch range of this weapon, if known."""
+        return self.weapon_group.launch_range
 
     def has_settings(self) -> bool:
         try:
@@ -200,7 +262,57 @@ class Weapon:
                     raise ValueError(
                         f"Error processing target overrides for {self.name}, targets: {targets}: {e}"
                     )
+            return dict(getattr(self.weapon_group, "target_overrides_fallback", {}))
         return {}
+
+    def settings_for_target(
+        self, stored: Optional[Dict[str, Any]], targets: tuple[Any, ...]
+    ) -> Optional[Dict[str, Any]]:
+        """The pylon settings to fly against these target unit ids.
+
+        A target-matched value replaces only a setting left at its default, so a
+        hand-set seeker head survives. The result is the full table, because DCS
+        reads an absent key as not fitted.
+        """
+        matched = self.get_target_overrides(targets)
+        if not matched:
+            return stored
+        settings = self.create_settings(stored)
+        if settings is None:
+            return stored
+        defaults = self._default_settings()
+        for key, value in matched.items():
+            current = (stored or {}).get(key, defaults.get(key))
+            if current == defaults.get(key):
+                settings.set_value(key, value)
+        return {**(stored or {}), **settings.to_dict()}
+
+    def strip_target_settings(
+        self,
+        saved: Dict[str, Any],
+        targets: tuple[Any, ...],
+        stored: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Undo `settings_for_target` for a value the player left as matched.
+
+        Stored at its default, it keeps following the target if the target changes.
+        """
+        matched = self.get_target_overrides(targets)
+        defaults = self._default_settings()
+        result = dict(saved)
+        for key, value in matched.items():
+            if (
+                key in result
+                and result[key] == value
+                and key in defaults
+                and (stored or {}).get(key, defaults[key]) == defaults[key]
+            ):
+                result[key] = defaults[key]
+        return result
+
+    def _default_settings(self) -> Dict[str, Any]:
+        settings = self.create_settings()
+        return settings.to_dict() if settings is not None else {}
 
 
 @unique
@@ -235,11 +347,19 @@ class WeaponGroup:
     #: The name of the fallback weapon group.
     fallback_name: Optional[str] = field(compare=False)
 
+    #: The maximum stand-off launch range of the weapon, if known. Populated from the
+    #: optional ``range`` key (in nautical miles) in the weapon resource file and used
+    #: by the mission planner to place the ingress point at a realistic launch distance.
+    launch_range: Optional[Distance] = field(default=None, compare=False)
+
     #: The specific weapons that belong to this weapon group.
     weapons: list[Weapon] = field(init=False, default_factory=list)
 
     #: Target-based overrides for weapon settings
     target_overrides: list[Dict[str, Any]] = field(init=False, default_factory=list)
+
+    #: Settings for a target that no override rule names
+    target_overrides_fallback: Dict[str, Any] = field(init=False, default_factory=dict)
 
     _by_name: ClassVar[dict[str, WeaponGroup]] = {}
     _loaded: ClassVar[bool] = False
@@ -294,10 +414,17 @@ class WeaponGroup:
             fallback_name = data.get("fallback")
             if fallback_name:
                 links.append((name, fallback_name))
-            group = WeaponGroup(name, weapon_type, year, fallback_name)
+            range_nm = data.get("range")
+            launch_range = nautical_miles(range_nm) if range_nm is not None else None
+            group = WeaponGroup(name, weapon_type, year, fallback_name, launch_range)
 
             target_overrides = data.get("target_overrides", {})
             object.__setattr__(group, "target_overrides", target_overrides)
+            object.__setattr__(
+                group,
+                "target_overrides_fallback",
+                data.get("target_overrides_fallback", {}),
+            )
 
             for clsid in data["clsids"]:
                 weapon = Weapon(clsid, group)

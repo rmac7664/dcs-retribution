@@ -1,69 +1,51 @@
-from typing import Dict, List
+"""The Mission Plugins settings page.
 
-from PySide6.QtCore import Qt, QLocale
+There used to be two pages: one with a checkbox per plugin, and another with every
+plugin's options laid out one box after another. Which meant that turning CTLD on and
+then setting it up was two clicks apart in a list, and that the options page was a wall
+of boxes for plugins you had not enabled.
+
+One page now: a row per plugin -- switch, name, and a gear where there is something to
+set -- with its description underneath. The options open in their own dialog, so the
+page stays a list you can read down.
+"""
+
+from html import escape
+from math import ceil, floor
+from typing import Dict, List, Optional
+
+from PySide6.QtCore import QLocale, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
+    QDialog,
+    QFrame,
+    QDoubleSpinBox,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
-    QDoubleSpinBox,
-    QSpinBox,
 )
 
 from game.plugins import LuaPlugin, LuaPluginManager
 from game.settings import Settings
 from game.settings.ISettingsContainer import SettingsContainer
+from qt_ui.widgets.gearbutton import gear_button
 
-
-class PluginsBox(QGroupBox):
-    def __init__(self) -> None:
-        super().__init__("Plugins")
-
-        layout = QGridLayout()
-        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.setLayout(layout)
-
-        self.plugin_map: Dict[str, QCheckBox] = {}
-
-        for row, plugin in enumerate(LuaPluginManager.plugins()):
-            if not plugin.show_in_ui:
-                continue
-
-            layout.addWidget(QLabel(plugin.name), row, 0)
-
-            checkbox = QCheckBox()
-            checkbox.setChecked(plugin.get_value)
-            checkbox.toggled.connect(plugin.set_value)
-            layout.addWidget(checkbox, row, 1)
-            self.plugin_map[plugin.identifier] = checkbox
-
-    def update_from_settings(self, settings: Settings):
-        for identifier, enabled in settings.plugins.items():
-            if identifier in self.plugin_map:
-                self.plugin_map[identifier].setChecked(enabled)
-
-
-class PluginsPage(QWidget):
-    def __init__(self, sc: SettingsContainer) -> None:
-        super().__init__()
-
-        self.sc = sc
-
-        layout = QVBoxLayout()
-        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.setLayout(layout)
-
-        self.plugins_box = PluginsBox()
-        layout.addWidget(self.plugins_box)
-
-    def update_from_settings(self):
-        self.plugins_box.update_from_settings(self.sc.settings)
+#: The column the names line up in, so the switches read as one rail.
+SWITCH_WIDTH = 28
 
 
 class PluginOptionsBox(QGroupBox):
-    def __init__(self, plugin: LuaPlugin) -> None:
+    """One plugin's options. Shown in its own dialog now, not on a page of its own."""
+
+    def __init__(self, plugin: LuaPlugin, with_description: bool = True) -> None:
         super().__init__(plugin.name)
 
         layout = QGridLayout()
@@ -71,9 +53,12 @@ class PluginOptionsBox(QGroupBox):
         self.setLayout(layout)
 
         self.widgets: Dict[str, QWidget] = {}
+        self.options = {option.identifier: option for option in plugin.options}
+        #: Kept so a search can point at the option it sent you here for.
+        self.labels: Dict[str, QLabel] = {}
 
         row = 0
-        if plugin.description:
+        if with_description and plugin.description:
             description = QLabel(plugin.description)
             description.setWordWrap(True)
             font = description.font()
@@ -85,62 +70,315 @@ class PluginOptionsBox(QGroupBox):
             layout.addWidget(description, row, 0, 1, 2)
             row += 1
 
+        root_layout = layout
+        root_row = row
+        sections: dict[str, tuple[QGridLayout, int]] = {}
         for option in plugin.options:
+            if option.section:
+                if option.section not in sections:
+                    box = QGroupBox(option.section)
+                    section_layout = QGridLayout(box)
+                    root_layout.addWidget(box, root_row, 0, 1, 2)
+                    root_row += 1
+                    sections[option.section] = (section_layout, 0)
+                layout, row = sections[option.section]
+            else:
+                layout, row = root_layout, root_row
+            # Rich text wraps long help; escape plugin text rather than treating
+            # sensor comparisons or other markup as HTML.
+            tooltip = (
+                f"<qt>{escape(option.description)}</qt>" if option.description else ""
+            )
             label = QLabel(option.name)
+            label.setToolTip(tooltip)
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             layout.addWidget(label, row, 0)
+            self.labels[option.identifier] = label
 
             val = option.get_value
-            if type(val) == bool:
+            if option.choices:
+                combo = QComboBox()
+                for name, value in option.choices:
+                    combo.addItem(name, value)
+                # Saved values remain typed IDs, not translated labels/indices.
+                combo.setCurrentIndex(combo.findData(val))
+                combo.currentIndexChanged.connect(
+                    lambda index, control=combo, opt=option: (
+                        opt.set_value(control.itemData(index)) if index >= 0 else None
+                    )
+                )
+                layout.addWidget(combo, row, 1)
+                self.widgets[option.identifier] = combo
+            elif isinstance(val, bool):
                 checkbox = QCheckBox()
                 checkbox.setChecked(val)
                 checkbox.toggled.connect(option.set_value)
                 layout.addWidget(checkbox, row, 1)
                 self.widgets[option.identifier] = checkbox
-            elif type(val) == float or type(val) == int:
-                if type(val) == float:
+            elif isinstance(val, (float, int)):
+                spinbox: QWidget
+                if option.display_unit == "ft":
+                    spinbox = QDoubleSpinBox()
+                    spinbox.setDecimals(0)
+                    spinbox.setSingleStep(100)
+                    spinbox.setSuffix(" ft")
+                    spinbox.setLocale(QLocale.Language.English)
+                    spinbox.setRange(
+                        ceil(option.min / 0.3048), floor(option.max / 0.3048)
+                    )
+                    spinbox.setValue(val / 0.3048)
+                    spinbox.valueChanged.connect(
+                        lambda feet, opt=option: opt.set_value(feet * 0.3048)
+                    )
+                elif isinstance(val, float):
                     spinbox = QDoubleSpinBox()
                     spinbox.setSingleStep(0.01)
                     spinbox.setLocale(QLocale.Language.English)
                 else:
                     spinbox = QSpinBox()
-                spinbox.setMinimum(option.min)
-                spinbox.setMaximum(option.max)
-                spinbox.setValue(val)
-                spinbox.valueChanged.connect(option.set_value)
+                if option.display_unit != "ft":
+                    spinbox.setMinimum(option.min)
+                    spinbox.setMaximum(option.max)
+                    spinbox.setValue(val)
+                    spinbox.valueChanged.connect(option.set_value)
                 layout.addWidget(spinbox, row, 1)
                 self.widgets[option.identifier] = spinbox
+            elif isinstance(val, str):
+                # A text option used to draw its label and no control at all, so a
+                # plugin that wanted a word from the player silently could not ask.
+                field = QLineEdit(val)
+                field.setPlaceholderText("(empty)")
+                field.textChanged.connect(option.set_value)
+                layout.addWidget(field, row, 1)
+                self.widgets[option.identifier] = field
+
+            widget = self.widgets.get(option.identifier)
+            if widget is not None:
+                widget.setToolTip(tooltip)
 
             row += 1
+            if option.section:
+                sections[option.section] = (layout, row)
+            else:
+                root_row = row
+
+        for option in plugin.options:
+            if option.enabled_by:
+                controller = self.widgets.get(option.enabled_by)
+                if isinstance(controller, QCheckBox):
+                    for control in (
+                        self.widgets[option.identifier],
+                        self.labels[option.identifier],
+                    ):
+                        control.setEnabled(controller.isChecked())
+                        controller.toggled.connect(control.setEnabled)
+            if option.forced_true_when_off:
+                controller = self.widgets.get(option.forced_true_when_off)
+                if isinstance(controller, QCheckBox):
+                    controller.toggled.connect(self._update_forced_options)
+        self._update_forced_options()
+
+    def _update_forced_options(self) -> None:
+        for identifier, option in self.options.items():
+            if not option.forced_true_when_off:
+                continue
+            controller = self.widgets.get(option.forced_true_when_off)
+            widget = self.widgets.get(identifier)
+            if isinstance(controller, QCheckBox) and isinstance(widget, QCheckBox):
+                forced = not controller.isChecked()
+                if forced:
+                    widget.setChecked(True)
+                    option.set_value(True)
+                widget.setEnabled(not forced)
+                self.labels[identifier].setEnabled(not forced)
 
     def update_from_settings(self, settings: Settings) -> None:
         for identifier in self.widgets:
             value = settings.plugin_option(identifier)
             w = self.widgets[identifier]
-            if isinstance(w, QCheckBox):
+            if isinstance(w, QComboBox):
+                blocked = w.blockSignals(True)
+                w.setCurrentIndex(w.findData(value))
+                w.blockSignals(blocked)
+            elif isinstance(w, QCheckBox):
                 w.setChecked(value)
-            elif isinstance(w, QDoubleSpinBox) or isinstance(w, QSpinBox):
-                w.setValue(value)
+            elif isinstance(w, (QDoubleSpinBox, QSpinBox)):
+                # Refreshing must not write a rounded display value into a save.
+                blocked = w.blockSignals(True)
+                w.setValue(
+                    value / 0.3048
+                    if self.options[identifier].display_unit == "ft"
+                    else value
+                )
+                w.blockSignals(blocked)
+            elif isinstance(w, QLineEdit):
+                w.setText("" if value is None else str(value))
+        self._update_forced_options()
 
 
-class PluginOptionsPage(QWidget):
+class PluginOptionsDialog(QDialog):
+    """What the gear opens: this plugin's settings, and a way out."""
+
+    def __init__(self, plugin: LuaPlugin, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"{plugin.name} options")
+        self.setMinimumWidth(560)
+        self.resize(560, 700)
+
+        column = QVBoxLayout()
+        self.setLayout(column)
+        # Splash Damage has sixty-five of them, so the box scrolls rather than
+        # growing a dialog taller than the screen.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # The description is already on the row this was opened from.
+        self.box = PluginOptionsBox(plugin, with_description=False)
+        scroll.setWidget(self.box)
+        self.scroll = scroll
+        column.addWidget(scroll, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        buttons.addWidget(close)
+        column.addLayout(buttons)
+
+    def flash(self, option: str) -> None:
+        """Point at one option, for a search that came here to find it.
+
+        Sixty-five rows behind a gear is no better than a page of forty: being shown
+        the dialog is not being shown the setting.
+        """
+        label = self.box.labels.get(option)
+        if label is None:
+            return
+        self.scroll.ensureWidgetVisible(label, 0, 80)
+        was = label.styleSheet()
+        label.setStyleSheet("background: #E0A86B; color: #14202B;")
+        QTimer.singleShot(1600, lambda: label.setStyleSheet(was))
+
+
+class PluginRow(QWidget):
+    """A switch, the plugin's name, a gear if it has anything to set, then why."""
+
+    changed = Signal()
+
+    def __init__(self, plugin: LuaPlugin) -> None:
+        super().__init__()
+        self.plugin = plugin
+        self.settings = plugin.settings
+
+        column = QVBoxLayout()
+        column.setContentsMargins(0, 4, 0, 10)
+        column.setSpacing(2)
+        self.setLayout(column)
+
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(6)
+        column.addLayout(head)
+
+        self.checkbox = QCheckBox()
+        self.checkbox.setFixedWidth(SWITCH_WIDTH)
+        self.checkbox.setChecked(plugin.get_value)
+        self.checkbox.toggled.connect(self.set_enabled)
+        head.addWidget(self.checkbox)
+
+        name = QLabel(plugin.name)
+        font = name.font()
+        font.setBold(True)
+        name.setFont(font)
+        head.addWidget(name)
+
+        if plugin.options:
+            # The gears, the same icon the main toolbar opens settings with -- the
+            # plug belongs to the plugin list, not to its options.
+            self.gear = gear_button(f"{plugin.name} options")
+            self.gear.clicked.connect(self.open_options)
+            if plugin.identifier == "groundmovement":
+                self.gear.setEnabled(plugin.enabled)
+            head.addWidget(self.gear)
+        head.addStretch()
+
+        if plugin.description:
+            description = QLabel(plugin.description)
+            description.setWordWrap(True)
+            font = description.font()
+            font.setItalic(True)
+            description.setFont(font)
+            description.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            # Indented to the name, so the switches keep their own column.
+            description.setContentsMargins(SWITCH_WIDTH + 6, 0, 0, 0)
+            column.addWidget(description)
+
+        self.dialog: Optional[PluginOptionsDialog] = None
+
+    def set_enabled(self, value: bool) -> None:
+        if self.plugin.identifier == "groundmovement":
+            from qt_ui.windows.settings.groundmovement import change_movement
+
+            if not change_movement(self, self.settings, value):
+                blocked = self.checkbox.blockSignals(True)
+                self.checkbox.setChecked(
+                    bool(self.settings.plugin_option_or("groundmovement", False))
+                )
+                self.checkbox.blockSignals(blocked)
+                return
+            self.gear.setEnabled(value)
+        else:
+            self.settings.set_plugin_option(self.plugin.identifier, value)
+        self.changed.emit()
+
+    def open_options(self, flash: Optional[str] = None) -> None:
+        self.dialog = PluginOptionsDialog(self.plugin, self)
+        if flash is not None:
+            # Before exec, which does not return until the dialog is closed.
+            QTimer.singleShot(0, lambda: self.dialog and self.dialog.flash(flash))
+        self.dialog.exec()
+
+
+class PluginsPage(QWidget):
+    """Every plugin, one row each."""
+
+    changed = Signal()
+
     def __init__(self, sc: SettingsContainer) -> None:
         super().__init__()
-
         self.sc = sc
+        LuaPluginManager.load_settings(sc.settings)
 
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.setLayout(layout)
 
-        self.pobs: List[PluginOptionsBox] = []
-
+        self.rows: List[PluginRow] = []
         for plugin in LuaPluginManager.plugins():
-            if plugin.options:
-                pob = PluginOptionsBox(plugin)
-                layout.addWidget(pob)
-                self.pobs.append(pob)
+            if not plugin.show_in_ui:
+                continue
+            row = PluginRow(plugin)
+            row.changed.connect(self.changed)
+            layout.addWidget(row)
+            self.rows.append(row)
 
-    def update_from_settings(self):
-        for pob in self.pobs:
-            pob.update_from_settings(self.sc.settings)
+    def open_options_for(self, identifier: str, option: Optional[str] = None) -> None:
+        """Open one plugin's options, for a search that landed on one of them."""
+        for row in self.rows:
+            if row.plugin.identifier == identifier and row.plugin.options:
+                row.open_options(option)
+                return
+
+    def update_from_settings(self) -> None:
+        LuaPluginManager.load_settings(self.sc.settings)
+        enabled = self.sc.settings.plugins
+        for row in self.rows:
+            row.settings = self.sc.settings
+            if row.plugin.identifier in enabled:
+                blocked = row.checkbox.blockSignals(True)
+                row.checkbox.setChecked(enabled[row.plugin.identifier])
+                row.checkbox.blockSignals(blocked)
+            if row.plugin.identifier == "groundmovement":
+                row.gear.setEnabled(row.plugin.enabled)

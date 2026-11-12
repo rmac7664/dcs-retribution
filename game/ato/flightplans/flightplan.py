@@ -45,6 +45,19 @@ class Layout(ABC):
     def delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
         return False
 
+    def can_delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        """Whether this waypoint can go without rebuilding the plan around it.
+
+        Beside delete_waypoint rather than inside it because the button has to know
+        before the player presses it, and asking by trying would delete the waypoint to
+        find out.
+        """
+        return False
+
+    def dropped_waypoints(self) -> list[FlightWaypoint]:
+        """Waypoints the layout still holds but that are no longer part of the route."""
+        return []
+
     def iter_waypoints(self) -> Iterator[FlightWaypoint]:
         """Iterates over all waypoints in the flight plan, in order."""
         raise NotImplementedError
@@ -58,6 +71,20 @@ class FlightPlan(ABC, Generic[LayoutT]):
         self.flight = flight
         self.layout = layout
         self.tot_offset = self.default_tot_offset()
+        self.label_formation_waypoints()
+
+    def label_formation_waypoints(self) -> None:
+        """Name the join and the split for the size of the PACKAGE, if it has them.
+
+        A package with one flight in it has nobody to meet and nobody to part from,
+        however many aircraft that flight has: joining and splitting is what flights do
+        with each other. The moment a second flight is in the package they are a join
+        and a split again, for every flight in it.
+        """
+        from .formation import FormationLayout
+
+        if isinstance(self.layout, FormationLayout):
+            self.layout.label_formation_waypoints(len(self.flight.package.flights) < 2)
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         if "tot_offset" not in state:
@@ -75,7 +102,51 @@ class FlightPlan(ABC, Generic[LayoutT]):
 
     def iter_waypoints(self) -> Iterator[FlightWaypoint]:
         """Iterates over all waypoints in the flight plan, in order."""
-        yield from self.layout.iter_waypoints()
+        dropped = self.layout.dropped_waypoints()
+        for waypoint in self.layout.iter_waypoints():
+            # Bullseye is a coalition reference, not a leg to fly after landing.
+            # Filter here so existing saves, cockpit exports and kneeboards agree.
+            if waypoint.waypoint_type == FlightWaypointType.BULLSEYE:
+                continue
+            if not any(waypoint is gone for gone in dropped):
+                yield waypoint
+
+    def can_delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        """Whether this waypoint can go without rebuilding the plan around it.
+
+        The join and the split can, but only while this flight IS the package: there is
+        nothing to meet, they read as nav points, and putting them back is a matter of
+        a second flight joining the package. With somebody to meet they are structure,
+        and taking one out is the degrade-to-custom path, with its warning.
+        """
+        from .formation import FormationLayout
+
+        if waypoint is getattr(self.layout, "refuel", None):
+            return True
+        if (
+            isinstance(self.layout, FormationLayout)
+            and len(self.flight.package.flights) < 2
+            and self.layout.is_droppable(waypoint)
+        ):
+            return True
+        return self.layout.can_delete_waypoint(waypoint)
+
+    def delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        """Take a waypoint out of the route. Says whether it could be done here."""
+        from .formation import FormationLayout
+
+        if waypoint is getattr(self.layout, "refuel", None):
+            from .refueledit import remove_refuel_waypoint
+
+            return remove_refuel_waypoint(self.flight)
+
+        if (
+            isinstance(self.layout, FormationLayout)
+            and len(self.flight.package.flights) < 2
+            and self.layout.drop(waypoint)
+        ):
+            return True
+        return self.layout.delete_waypoint(waypoint)
 
     def edges(
         self, until: FlightWaypoint | None = None
@@ -119,14 +190,25 @@ class FlightPlan(ABC, Generic[LayoutT]):
     def combat_speed_waypoints(self) -> set[FlightWaypoint]:
         return set()
 
+    def fuel_burn_distance_between_points(
+        self, a: FlightWaypoint, b: FlightWaypoint
+    ) -> Distance:
+        """Ground track flown between a and b, for fuel purposes.
+
+        The straight leg for ordinary waypoints. A plan that spends *time*
+        between two points -- a racetrack orbiting between its ends for the
+        patrol duration -- overrides this with the distance actually flown, so
+        the fuel model charges the laps and not one crossing of the track.
+        """
+        return meters(a.position.distance_to_point(b.position))
+
     def fuel_consumption_between_points(
         self, a: FlightWaypoint, b: FlightWaypoint
     ) -> float | None:
         ppm = self.fuel_rate_to_between_points(a, b)
         if ppm is None:
             return None
-        distance = meters(a.position.distance_to_point(b.position))
-        return distance.nautical_miles * ppm
+        return self.fuel_burn_distance_between_points(a, b).nautical_miles * ppm
 
     def fuel_rate_to_between_points(
         self, a: FlightWaypoint, b: FlightWaypoint

@@ -9,9 +9,10 @@ from typing import Any, List, Optional, TYPE_CHECKING
 from dcs import Point
 from dcs.planes import C_101CC, C_101EB, Su_33, FA_18C_hornet, C_130J_30
 
+from game.ato.savedpoints import SavedPoint, points_of, SavedDrawing, drawings_of
 from game.dcs.aircrafttype import AircraftType
 from game.theater import ControlPoint, MissionTarget
-from pydcs_extensions.hercules.hercules import Hercules
+from game.utils import max_optional_distance
 from .flightmembers import FlightMembers
 from .flightroster import FlightRoster
 from .flightstate import FlightState, Navigating, Uninitialized
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     from .flightwaypoint import FlightWaypoint
     from .package import Package
     from .starttype import StartType
+    from game.utils import Distance
 
 F18_TGP_PYLON: int = 4
 
@@ -66,6 +68,17 @@ class Flight(
         callsign_tcn: Optional[str] = None,
         claim_inv: bool = True,
     ) -> None:
+        if flight_type.is_afac:
+            from game.ato.afac import enabled
+
+            if not enabled(squadron.settings) or not squadron.aircraft.capable_of(
+                flight_type
+            ):
+                raise ValueError(
+                    "AFAC requires an eligible aircraft and enabled Realistic CAS AFAC missions"
+                )
+            if roster is not None and roster.player_count:
+                raise ValueError("AFAC missions currently support AI pilots only")
         self.id = uuid.uuid4()
         self.package = package
         self.coalition = squadron.coalition
@@ -82,6 +95,25 @@ class Flight(
         self.start_type = start_type
         self.custom_name = custom_name
         self.group_id: int = 0
+
+        # When True, weapons that don't need a locked target (decoys, unguided) are
+        # released at the ingress point regardless of range instead of the AI closing
+        # to weapon range, so a stand-off decoy/harassment run can bait SAMs from
+        # outside their reach. Player/planner toggled; honored by SEAD ingress.
+        self.release_at_ingress = False
+        self.refuel_before_push = False
+        self.tanking_minutes: int | None = None
+
+        # True for the stand-in flights that represent aircraft parked on the ramp.
+        # They are given a squadron and a pilot so the debriefing code can account for
+        # the airframe, but nobody is sitting in one: bombing the ramp costs aircraft,
+        # not aircrew. A plain default, so an older save reads False.
+        self.parked_reserve = False
+
+        # When set on an AIR_ASSAULT helicopter flight, the helos land at the
+        # objective and do NOT return home: at turn end they redeploy to the base
+        # if it was captured, otherwise they are lost. Player/planner toggled.
+        self.remain_at_destination = False
 
         self.frequency = frequency
         if self.unit_type.dcs_unit_type.tacan:
@@ -129,7 +161,7 @@ class Flight(
         # altitude offset for planes
         offset_factor = self.coalition.game.settings.max_plane_altitude_offset
         offset_factor = random.randint(0, offset_factor)
-        self.plane_altitude_offset = 1000 * offset_factor * random.choice([-1, 1])
+        self.plane_altitude_offset: int = 1000 * offset_factor * random.choice([-1, 1])
 
     @property
     def available_callsigns(self) -> List[str]:
@@ -170,6 +202,10 @@ class Flight(
         state["state"] = Uninitialized(self, state["squadron"].settings)
         if "use_same_loadout_for_all_members" not in state:
             state["use_same_loadout_for_all_members"] = True
+        state.setdefault("release_at_ingress", False)
+        state.setdefault("refuel_before_push", False)
+        state.setdefault("tanking_minutes", None)
+        state.setdefault("remain_at_destination", False)
         self.__dict__.update(state)
         if isinstance(self.roster, FlightRoster):
             self.roster = FlightMembers.from_roster(self, self.roster)
@@ -212,6 +248,15 @@ class Flight(
         return self.roster.player_count
 
     @property
+    def saved_points(self) -> list[SavedPoint]:
+        """Campaign GPS points, shared across aircraft and exported off-route."""
+        return points_of(self)
+
+    @property
+    def saved_drawings(self) -> list[SavedDrawing]:
+        return drawings_of(self)
+
+    @property
     def unit_type(self) -> AircraftType:
         return self.squadron.aircraft
 
@@ -224,10 +269,8 @@ class Flight(
         return self.unit_type.helicopter
 
     @property
-    def is_hercules(self) -> bool:
-        if self.unit_type == AircraftType.named("C-130J-30"):
-            return True
-        return self.unit_type == AircraftType.named("C-130J-30 Super Hercules")
+    def is_c130j(self) -> bool:
+        return self.unit_type == AircraftType.named("C-130J-30")
 
     @property
     def points(self) -> List[FlightWaypoint]:
@@ -242,6 +285,16 @@ class Flight(
 
     def position(self) -> Point:
         return self.state.estimate_position()
+
+    def label_formation_waypoints(self) -> None:
+        """Name this flight's join and split for the size of its package.
+
+        A plan that has not been built needs nothing: it will read the package when it
+        is built.
+        """
+        existing = self._flight_plan_builder.existing_flight_plan
+        if existing is not None:
+            existing.label_formation_waypoints()
 
     def resize(self, new_size: int) -> None:
         self.squadron.claim_inventory(new_size - self.count)
@@ -258,6 +311,8 @@ class Flight(
         yield from self.roster.members
 
     def set_flight_type(self, var: FlightType) -> None:
+        if var.is_afac and self.client_count:
+            raise ValueError("AFAC missions currently support AI pilots only")
         self.flight_type = var
 
         # Update _flight_plan_builder so that the builder class remains relevant
@@ -281,12 +336,18 @@ class Flight(
                 self.fuel = Su_33.fuel_max * 0.8
         elif unit_type in {C_101EB, C_101CC}:
             self.fuel = unit_type.fuel_max * 0.5
-        elif unit_type in {Hercules, C_130J_30}:
+        elif unit_type is C_130J_30:
             self.fuel = unit_type.fuel_max * 0.75
 
     def any_member_has_weapon_of_type(self, weapon_type: WeaponType) -> bool:
         return any(
             m.loadout.has_weapon_of_type(weapon_type) for m in self.iter_members()
+        )
+
+    def max_standoff_range(self) -> Optional[Distance]:
+        """The longest stand-off launch range across the flight's members, if any."""
+        return max_optional_distance(
+            m.loadout.max_standoff_range() for m in self.iter_members()
         )
 
     def __repr__(self) -> str:
@@ -321,9 +382,6 @@ class Flight(
     ) -> None:
         self.state.on_game_tick(events, time, duration)
 
-    def should_halt_sim(self) -> bool:
-        return self.state.should_halt_sim()
-
     @property
     def alive(self) -> bool:
         return self.state.alive
@@ -355,9 +413,19 @@ class Flight(
     def recreate_flight_plan(self, dump_debug_info: bool = False) -> None:
         self._flight_plan_builder.regenerate(dump_debug_info)
 
+    def refresh_flight_plan(self, dump_debug_info: bool = False) -> None:
+        """Rebuild the flight plan from current world state.
+
+        Unlike :meth:`recreate_flight_plan`, manual timing is preserved.
+        Mission generation uses this for motorpool-target packages, whose
+        ephemeral groups are rendered only at mission generation time, after
+        the plan was first built against empty groups.
+        """
+        self._flight_plan_builder.regenerate(dump_debug_info)
+
     @staticmethod
     def clone_flight(flight: Flight) -> Flight:
-        return Flight(
+        clone = Flight(
             flight.package,
             flight.squadron,
             flight.count,
@@ -365,3 +433,6 @@ class Flight(
             flight.start_type,
             flight.divert,
         )
+        clone.refuel_before_push = flight.refuel_before_push
+        clone.tanking_minutes = flight.tanking_minutes
+        return clone

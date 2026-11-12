@@ -3,7 +3,11 @@
   "name": "Insurgents (Hard)",
   "authors": "Khopa",
   "description": "<p>Insurgents faction.</p>",
-  "aircrafts": [],
+  "aircrafts": [
+    "WingLoong-I",
+    "Mi-8MTV2 Hip",
+    "UH-1H Iroquois"
+  ],
   "frontline_units": [
     "DIM' KAMIKAZE",
     "DIM' TOYOTA BLUE",
@@ -51,7 +55,9 @@
     "ZU-23 on Ural-375 Insurgent",
     "ZSU-23-4 Shilka"
   ],
-  "preset_groups": [],
+  "preset_groups": [
+    "GPS Jamming Site (Red)"
+  ],
   "naval_units": [],
   "missiles": [
     "SSM SS-1C Scud-B"

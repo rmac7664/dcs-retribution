@@ -20,6 +20,7 @@ description:
  Intentions Isolate key urban centers, disrupt NATO reinforcement efforts, and establish de facto control over territory to demand international recognition. Expect extensive use of asymmetric tactics, including IEDs, ambushes, and civilian shields.</p>
 miz: Northern Guardian.miz
 performance: 2
+advanced_iads: true
 recommended_start_date: 2027-07-17
 recommended_player_money: 500
 recommended_enemy_money: 500
@@ -27,7 +28,9 @@ recommended_player_income_multiplier: 0.7
 recommended_enemy_income_multiplier: 1
 version: "10.7"
 settings:
-  hercules: true
+  plugins:
+    skynetiads: true
+    gpsjamming: true
   squadron_start_full: true
   russianmilitaryassetspack: true
   usamilitaryassetspack: true
@@ -35,26 +38,37 @@ settings:
 squadrons:
   #Fassberg
   11:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - MQ-9 Reaper
+      size: 2
+      pilots: 6
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - A-10C Thunderbolt II (Suite 7)
       size: 6
+      pilots: 10
     - primary: DEAD
       secondary: any
       aircraft:
         - 522nd FS
       size: 8
+      pilots: 12
     - primary: Strike
       secondary: air-to-air
       aircraft:
         - 335th FS
       size: 4
+      pilots: 8
     - primary: Transport
       secondary: any
       aircraft:
-        - C-130J-30 Super Hercules
+        - C-130J-30
       size: 2
+      pilots: 6
   #H FRG 04
   56:
     - primary: CAS
@@ -62,11 +76,13 @@ squadrons:
       aircraft:
         - RNLAF Redskins 301 Sqn
       size: 4
+      pilots: 8
     - primary: Air Assault
       secondary: any
       aircraft:
         - CH-47F Block I
       size: 2
+      pilots: 6
   #H FRG 12
   64:
     - primary: CAS
@@ -74,6 +90,7 @@ squadrons:
       aircraft:  
         - Ka-50 Hokum III
       size: 4
+      pilots: 8
    #H FRG 17
   95: 
     - primary: Armed Recon
@@ -81,6 +98,7 @@ squadrons:
       aircraft:  
         - Mi-24P Hind-F
       size: 6
+      pilots: 10
    #H GDR 21
   152:
     - primary: Transport
@@ -88,6 +106,7 @@ squadrons:
       aircraft:  
         - Mi-8MTV2 Hip
       size: 4 
+      pilots: 8
   #H GDR 31
   229:
     - primary: CAS
@@ -95,6 +114,7 @@ squadrons:
       aircraft:  
         - Mi-24P Hind-F
       size: 4 
+      pilots: 8
   #H GDR 30
   146:
     - primary: Air Assault
@@ -102,11 +122,13 @@ squadrons:
       aircraft:  
         - Mi-8MTV2 Hip
       size: 2 
+      pilots: 6
     - primary: Armed Recon
       secondary: air-to-ground
       aircraft:  
         - Mi-24P Hind-F
       size: 2 
+      pilots: 6
   #H GDR 13
   91:
     - primary: CAS
@@ -114,6 +136,7 @@ squadrons:
       aircraft:  
         - Mi-24P Hind-F
       size: 4 
+      pilots: 8
   #H GDR 09
   75:
     - primary: Armed Recon
@@ -121,79 +144,101 @@ squadrons:
       aircraft:  
         - Mi-8MTV2 Hip
       size: 4 
+      pilots: 8
   #Peenemunde
   25:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - WingLoong-I
+      size: 2
+      pilots: 6
     - primary: BARCAP
       secondary: air-to-air
       aircraft:  
         - MiG-29S Fulcrum-C
       size: 4 
+      pilots: 8
     - primary: BAI
       secondary: air-to-ground
       aircraft:  
         - Su-25T Frogfoot
       size: 4 
+      pilots: 8
     - primary: BAI
       secondary: any
       aircraft:  
         - L-39ZA Albatros
       size: 6
+      pilots: 10
   FOB Schwerin: 
     - primary: Armed Recon
       secondary: air-to-ground
       aircraft:  
         - German Army
       size: 4
+      pilots: 8
     - primary: Armed Recon
       secondary: air-to-ground
       aircraft:  
         - A Company, 1-211th ARB
       size: 2
+      pilots: 6
   FOB Fehmarn:
     - primary: BAI
       secondary: air-to-ground
       aircraft:  
         - C Company, 2-159th ARB
       size: 4
+      pilots: 8
     - primary: Transport
       secondary: any
       aircraft:  
         - CH-47F Block I
       size: 2
+      pilots: 6
   FOB Schwaan: 
     - primary: Armed Recon
       secondary: air-to-ground
       aircraft:  
         - Ka-50 Hokum III
       size: 6
+      pilots: 10
   Roadbase Usadel:
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - 36th FS
       size: 1
+      pilots: 5
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - A-10C Thunderbolt II (Suite 7)
       size: 1
+      pilots: 5
   NLD-UK corridor: 
     - primary: AEW&C
       aircraft:
         - E-3A
       size: 1
+      pilots: 5
     - primary: Refueling
       aircraft:
         - KC-135 Stratotanker 
       size: 1
+      pilots: 5
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
         - F-15C Eagle
       size: 4
+      pilots: 8
 
 
   
       
 
- 
+ground_forces:
+  "Blue GPS Jammer Fassberg": GPS Jamming Site (Blue, Unescorted)

@@ -7,12 +7,12 @@
     "he_IL"
   ],
   "aircrafts": [
+    "F-15IA",
     "AH-1W SuperCobra",
     "AH-64D Apache Longbow",
     "AH-64D Apache Longbow (AI)",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "F-15C Eagle",
     "F-15D Baz",
     "F-15E Strike Eagle (AI)",
@@ -24,7 +24,8 @@
     "F-4E Phantom II",
     "F-4E-45MC Phantom II",
     "UH-1H Iroquois",
-    "UH-60L"
+    "UH-60L",
+    "RQ-1A Predator"
   ],
   "awacs": [
     "E-2C Hawkeye"
@@ -54,7 +55,8 @@
   ],
   "preset_groups": [
     "Hawk",
-    "Patriot"
+    "Patriot",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "DDG Arleigh Burke IIa"

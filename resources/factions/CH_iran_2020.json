@@ -26,7 +26,8 @@
     "Su-22M4 Fitter-K",
     "Su-24MK Fencer-D",
     "Su-25 Frogfoot",
-    "Su-25T Frogfoot"
+    "Su-25T Frogfoot",
+    "WingLoong-I"
   ],
   "awacs": [
     "A-50"
@@ -73,7 +74,8 @@
     "Rapier",
     "SA-17",
     "KS-19/SON-9",
-    "Silkworm"
+    "Silkworm",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "Corvette 1124.4 Grish",

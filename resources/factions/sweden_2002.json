@@ -13,7 +13,8 @@
     "[CH] JAS 39C Gripen",
     "[CH] HKP15B",
     "UH-1H Iroquois",
-    "C-130J-30"
+    "C-130J-30",
+    "SK-60"
   ],
   "awacs": [
     "E-3A"
@@ -40,7 +41,8 @@
     "MANPADS Stinger"
   ],
   "preset_groups": [
-    "Hawk"
+    "Hawk",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "FFG Oliver Hazard Perry"

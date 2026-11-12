@@ -10,7 +10,6 @@
     "AH-64A Apache",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "F-16CM Fighting Falcon (Block 50)",
     "F-16D Fighting Falcon (Block 52+)",
     "F-16D Fighting Falcon (Block 52)",
@@ -18,7 +17,8 @@
     "F-4E-45MC Phantom II",
     "Mirage 2000-5",
     "Mirage 2000C",
-    "UH-1H Iroquois"
+    "UH-1H Iroquois",
+    "OH-58D(R) Kiowa Warrior"
   ],
   "awacs": [
     "E-3A"
@@ -52,7 +52,8 @@
     "Hawk",
     "Patriot",
     "SA-10/S-300PS",
-    "SA-20/S-300PMU-1"
+    "SA-20/S-300PMU-1",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "FAC La Combattante IIa"

@@ -1,9 +1,16 @@
 import { ControlPoint } from "../../api/_liberationApi";
 import backend from "../../api/backend";
 import {
+  selectHighlightEmitters,
+  selectHoveredEmitter,
+  setHoveredEmitter,
+} from "../../api/mapSlice";
+import { useAppDispatch, useAppSelector } from "../../app/hooks";
+import {
   useClearControlPointDestinationMutation,
   useSetControlPointDestinationMutation,
 } from "../../api/liberationApi";
+import { RANGE_CHECK_INTERVAL_MS } from "../map/dragging";
 import { makeLocationMarkerEventHandlers } from "./EventHandlers";
 import {
   controlPointLines,
@@ -15,7 +22,7 @@ import { MovementPath, MovementPathHandle } from "./MovementPath";
 import { StaticControlPoint } from "./StaticControlPoint";
 import SupplyRing from "./SupplyRing";
 import { LatLng, Marker as LMarker, LatLngLiteral } from "leaflet";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOMServer from "react-dom/server";
 import { Marker, Tooltip } from "react-leaflet";
 
@@ -74,6 +81,32 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
   // cause this component to redraw.
   const markerRef = useRef<LMarker | null>(null);
   const pathRef = useRef<MovementPathHandle | null>(null);
+  const dispatch = useAppDispatch();
+  // Raised above other icons while this emitter (or its ring) is hovered.
+  const raised = useAppSelector(
+    (state) =>
+      selectHighlightEmitters(state) &&
+      selectHoveredEmitter(state) === props.controlPoint.id
+  );
+
+  // iconForControlPoint() returns a new Leaflet Icon on every call, and it was
+  // called inline, so every render passed react-leaflet a new reference and it
+  // answered with marker.setIcon(). setIcon replaces the marker's DOM element,
+  // which Leaflet's drag handler is bound to, so any re-render during a drag
+  // ended it. The symbol only changes with the sidc, so that is the key.
+  const icon = useMemo(
+    () => iconForControlPoint(props.controlPoint),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.controlPoint.sidc]
+  );
+
+  // True between dragstart and dragend. Nothing that redraws the marker may run
+  // while the mouse button is held down.
+  const dragging = useRef(false);
+
+  // When the range check was last asked for, so a drag does not fire one per
+  // mouse position.
+  const lastAsked = useRef(0);
 
   const [hasDestination, setHasDestination] = useState<boolean>(
     props.controlPoint.destination != null,
@@ -99,6 +132,12 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
   const [cancelTravel] = useClearControlPointDestinationMutation();
 
   useEffect(() => {
+    // The drag handler owns the tooltip while the drag lasts, because it shows
+    // the live distance. This would replace it with the name on every map
+    // update.
+    if (dragging.current) {
+      return;
+    }
     markerRef.current?.setTooltipContent(
       props.controlPoint.destination
         ? destinationTooltipText(
@@ -110,8 +149,11 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
             <LocationTooltipText
               name={props.controlPoint.name}
               lines={controlPointLines(props.controlPoint)}
-            />,
-          ),
+              units={props.controlPoint.units}
+              tacan={props.controlPoint.tacan}
+              atcFrequency={props.controlPoint.atc_frequency}
+            />
+          )
     );
   });
 
@@ -123,13 +165,13 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
     <>
       <Marker
         position={position}
-        icon={iconForControlPoint(props.controlPoint)}
+        icon={icon}
         draggable={!isLoading}
         autoPan
         // We might draw other markers on top of the CP. The tooltips from the
         // other markers are helpful so we want to keep them, but make sure the CP
         // is always the clickable thing.
-        zIndexOffset={controlPointZIndex(props.controlPoint)}
+        zIndexOffset={raised ? 10000 : controlPointZIndex(props.controlPoint)}
         opacity={props.controlPoint.destination ? 0.5 : 1}
         ref={(ref) => {
           if (ref != null) {
@@ -137,6 +179,15 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
           }
         }}
         eventHandlers={{
+          // Hovering the carrier highlights its escorts' rings (and vice versa).
+          mouseover: () =>
+            dispatch(
+              setHoveredEmitter({
+                id: props.controlPoint.id,
+                source: "emitter",
+              })
+            ),
+          mouseout: () => dispatch(setHoveredEmitter(null)),
           click: () => {
             if (!hasDestination) {
               locationClickHandlers.click();
@@ -151,8 +202,21 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
               locationClickHandlers.contextmenu();
             }
           },
+          dragstart: () => {
+            dragging.current = true;
+          },
           drag: (event) => {
             const destination = event.target.getLatLng();
+            // The path follows every pixel; the range check does not. Leaflet
+            // fires this several times a frame, and one HTTP request per mouse
+            // position is wasteful for an answer that only changes when the
+            // marker crosses its range ring.
+            pathRef.current?.setDestination(destination);
+            const now = Date.now();
+            if (now - lastAsked.current < RANGE_CHECK_INTERVAL_MS) {
+              return;
+            }
+            lastAsked.current = now;
             backend
               .get(
                 `/control-points/${props.controlPoint.id}/destination-in-range?lat=${destination.lat}&lng=${destination.lng}`,
@@ -166,9 +230,9 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
                   ),
                 );
               });
-            pathRef.current?.setDestination(destination);
           },
           dragend: async (event) => {
+            dragging.current = false;
             const currentPosition = new LatLng(position.lat, position.lng);
             const destination = event.target.getLatLng();
             setDestination(destination);

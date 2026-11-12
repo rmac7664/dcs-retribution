@@ -136,6 +136,47 @@ local unitPayloads = {
 			["tasks"] = {
 			},
 		},
+		[6] = {
+			["displayName"] = "Retribution DEAD",
+			["name"] = "Retribution DEAD",
+			["pylons"] = {
+				[1] = {
+					["CLSID"] = "LAU-105_2*AIM-9P5",
+					["num"] = 11,
+				},
+				[2] = {
+					["CLSID"] = "ALQ_184",
+					["num"] = 1,
+				},
+				[3] = {
+					["CLSID"] = "LAU_117_AGM_65G",
+					["num"] = 9,
+				},
+				[4] = {
+					["CLSID"] = "LAU_117_AGM_65G",
+					["num"] = 3,
+				},
+			},
+			["tasks"] = {
+				[1] = 31,
+			},
+		},
+		[7] = {
+			["name"] = "Retribution AFAC Area",
+			["pylons"] = {
+				{["num"] = 3, ["CLSID"] = "{2AF2EC3F-9065-4de5-93E1-1739C9A71EF7}"},
+				{["num"] = 9, ["CLSID"] = "{2AF2EC3F-9065-4de5-93E1-1739C9A71EF7}"},
+			},
+			["tasks"] = {[1] = 16},
+		},
+		[8] = {
+			["name"] = "Retribution AFAC Frontline",
+			["pylons"] = {
+				{["num"] = 3, ["CLSID"] = "{2AF2EC3F-9065-4de5-93E1-1739C9A71EF7}"},
+				{["num"] = 9, ["CLSID"] = "{2AF2EC3F-9065-4de5-93E1-1739C9A71EF7}"},
+			},
+			["tasks"] = {[1] = 16},
+		},
 	},
 	["unitType"] = "A-10A",
 }

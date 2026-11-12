@@ -1,4 +1,10 @@
 import { ControlPoint } from "../../api/_liberationApi";
+import {
+  selectHighlightEmitters,
+  selectHoveredEmitter,
+  setHoveredEmitter,
+} from "../../api/mapSlice";
+import { useAppDispatch, useAppSelector } from "../../app/hooks";
 import { makeLocationMarkerEventHandlers } from "./EventHandlers";
 import {
   controlPointLines,
@@ -14,25 +20,43 @@ interface StaticControlPointProps {
 }
 
 export const StaticControlPoint = (props: StaticControlPointProps) => {
+  const dispatch = useAppDispatch();
+  // Raised above other icons while this emitter (or its ring) is hovered.
+  const raised = useAppSelector(
+    (state) =>
+      selectHighlightEmitters(state) &&
+      selectHoveredEmitter(state) === props.controlPoint.id
+  );
   return (
     <>
-      <SupplyRing controlPoint={props.controlPoint} />
-      <Marker
-        position={props.controlPoint.position}
-        icon={iconForControlPoint(props.controlPoint)}
-        // We might draw other markers on top of the CP. The tooltips from the
-        // other markers are helpful so we want to keep them, but make sure the CP
-        // is always the clickable thing.
-        zIndexOffset={controlPointZIndex(props.controlPoint)}
-        eventHandlers={makeLocationMarkerEventHandlers(props.controlPoint)}
-      >
-        <Tooltip>
-          <LocationTooltipText
-            name={props.controlPoint.name}
-            lines={controlPointLines(props.controlPoint)}
-          />
-        </Tooltip>
-      </Marker>
+    <SupplyRing controlPoint={props.controlPoint} />
+    <Marker
+      position={props.controlPoint.position}
+      icon={iconForControlPoint(props.controlPoint)}
+      // We might draw other markers on top of the CP. The tooltips from the
+      // other markers are helpful so we want to keep them, but make sure the CP
+      // is always the clickable thing.
+      zIndexOffset={raised ? 10000 : controlPointZIndex(props.controlPoint)}
+      eventHandlers={{
+        ...makeLocationMarkerEventHandlers(props.controlPoint),
+        // Hovering the carrier highlights its escorts' rings (and vice versa).
+        mouseover: () =>
+          dispatch(
+            setHoveredEmitter({ id: props.controlPoint.id, source: "emitter" })
+          ),
+        mouseout: () => dispatch(setHoveredEmitter(null)),
+      }}
+    >
+      <Tooltip>
+        <LocationTooltipText
+          name={props.controlPoint.name}
+          lines={controlPointLines(props.controlPoint)}
+          units={props.controlPoint.units}
+          tacan={props.controlPoint.tacan}
+          atcFrequency={props.controlPoint.atc_frequency}
+        />
+      </Tooltip>
+    </Marker>
     </>
   );
 };

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Generic, Iterable, Mapping, Optional, TypeVar, Union
+from typing import Any, Callable, Generic, Iterable, Mapping, Optional, TypeVar, Union
 
 from .optiondescription import OptionDescription, SETTING_DESCRIPTION_KEY
 
@@ -25,6 +25,8 @@ def choices_option(
     choices: Union[Iterable[str], Mapping[str, ValueT]],
     detail: Optional[str] = None,
     tooltip: Optional[str] = None,
+    visible_when: Optional[Callable[[Any], bool]] = None,
+    enabled_when: Optional[Callable[[Any], bool]] = None,
     **kwargs: Any,
 ) -> ValueT:
     if not isinstance(choices, Mapping):
@@ -39,6 +41,8 @@ def choices_option(
                 tooltip,
                 causes_expensive_game_update=False,
                 choices=dict(choices),
+                visible_when=visible_when,
+                enabled_when=enabled_when,
             )
         },
         default=default,

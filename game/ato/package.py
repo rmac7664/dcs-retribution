@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
-from typing import Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from game.db import Database
-from game.utils import Speed
+from game.utils import Distance, Speed, max_optional_distance
 from .closestairfields import ObjectiveDistanceCache
 from .flight import Flight
 from .flightplans.formation import FormationFlightPlan
@@ -18,7 +20,15 @@ from ..radio.RadioFrequencyContainer import RadioFrequencyContainer
 from ..radio.radios import RadioFrequency
 
 if TYPE_CHECKING:
+    from dcs.mapping import Point
+
     from game.theater import ControlPoint, MissionTarget
+
+
+#: The packages whose escort window is being worked out at this moment, by identity.
+#: Not a field on the package: it is about a call in flight, and a field would be
+#: written into the save as though it were part of the campaign.
+_ESCORT_WINDOWS_BEING_WORKED_OUT: set[int] = set()
 
 
 class Package(RadioFrequencyContainer):
@@ -31,16 +41,21 @@ class Package(RadioFrequencyContainer):
         auto_asap: bool = False,
         custom_name: str | None = None,
         frequency: RadioFrequency | None = None,
+        auto_coordinated: bool = False,
     ) -> None:
         self.target = target
         self._db = db
         self.frequency = frequency
         self.custom_name = custom_name
+        self.single_route_for_all_flights: bool | None = None
 
         # True if the package ToT should be reset to ASAP whenever the player makes a
         # change. This is really a UI property rather than a game property, but we want
         # it to persist in the save.
         self.auto_asap = auto_asap
+        self.auto_coordinated = auto_coordinated
+        if auto_coordinated:
+            self.auto_asap = False
         self.flights: list[Flight] = []
 
         # Desired TOT as an offset from mission start. Obviously datetime.min is bogus,
@@ -50,9 +65,36 @@ class Package(RadioFrequencyContainer):
         self.time_over_target: datetime = datetime.min
         self.waypoints: PackageWaypoints | None = None
 
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.__dict__.setdefault("auto_coordinated", False)
+        # Existing manually edited routes must not be silently replaced on load.
+        self.__dict__.setdefault("single_route_for_all_flights", False)
+
     @property
     def has_players(self) -> bool:
         return any(flight.client_count for flight in self.flights)
+
+    def max_standoff_range(self) -> Optional[Distance]:
+        """The longest stand-off launch range among the package's flights, if any.
+
+        Used by the mission planner to place the ingress point at a realistic launch
+        distance for stand-off/cruise-missile-armed flights. Flights without any
+        ranged stand-off weapon (e.g. escorts) contribute nothing.
+        """
+        return max_optional_distance(f.max_standoff_range() for f in self.flights)
+
+    def waypoints_need_regeneration(self) -> bool:
+        """Whether the package waypoints must be rebuilt.
+
+        True if they have never been built, or if the package's stand-off launch range
+        has changed since they were (e.g. a flight's payload was swapped after the
+        ingress point was first computed), which would leave the ingress point at a
+        stale distance from the target.
+        """
+        if self.waypoints is None:
+            return True
+        return self.waypoints.standoff_range != self.max_standoff_range()
 
     def formation_speed(self, is_helo: bool) -> Optional[Speed]:
         """The speed of the package when in formation.
@@ -74,10 +116,42 @@ class Package(RadioFrequencyContainer):
             return None
         return min(speeds)
 
+    @contextmanager
+    def _working_out_the_escort_window(self) -> Iterator[bool]:
+        """False when this package is already in the middle of working it out.
+
+        The window is asked of every flight, and a flight answers with a time that can
+        be derived from the window itself -- an escort takes its own from the flight it
+        protects, and a patrol being protected takes its own from the window. Asked in
+        that order the question has no answer, and what it used to do about that was
+        recurse until the stack ran out, which killed the request it was answering: the
+        map draws itself from one of those, so an escort on a patrol emptied it.
+
+        Nobody is a better answer than nothing at all. A flight that finds the window
+        being worked out already falls back to its own timing, which is what it would
+        have used if the package had no escorts.
+        """
+        key = id(self)
+        if key in _ESCORT_WINDOWS_BEING_WORKED_OUT:
+            yield False
+            return
+        _ESCORT_WINDOWS_BEING_WORKED_OUT.add(key)
+        try:
+            yield True
+        finally:
+            _ESCORT_WINDOWS_BEING_WORKED_OUT.discard(key)
+
     # TODO: Should depend on the type of escort.
     # SEAD might be able to leave before CAP.
     @property
     def escort_start_time(self) -> datetime | None:
+        with self._working_out_the_escort_window() as ours:
+            if not ours:
+                return None
+            return self._escort_start_time
+
+    @property
+    def _escort_start_time(self) -> datetime | None:
         times = []
         for flight in self.flights:
             waypoint = flight.flight_plan.request_escort_at()
@@ -97,6 +171,13 @@ class Package(RadioFrequencyContainer):
 
     @property
     def escort_end_time(self) -> datetime | None:
+        with self._working_out_the_escort_window() as ours:
+            if not ours:
+                return None
+            return self._escort_end_time
+
+    @property
+    def _escort_end_time(self) -> datetime | None:
         times = []
         for flight in self.flights:
             waypoint = flight.flight_plan.dismiss_escort_at()
@@ -133,6 +214,7 @@ class Package(RadioFrequencyContainer):
         """Adds a flight to the package."""
         self.flights.append(flight)
         self._db.add(flight.id, flight)
+        self.label_formation_waypoints()
 
     def remove_flight(self, flight: Flight) -> None:
         """Removes a flight from the package."""
@@ -147,6 +229,18 @@ class Package(RadioFrequencyContainer):
                 flight.cargo.transport = None
         if not self.flights:
             self.waypoints = None
+        self.label_formation_waypoints()
+
+    def label_formation_waypoints(self) -> None:
+        """Name every flight's join and split for the size of the package.
+
+        A package of one has nobody to meet and nobody to part from, so those two
+        points read as nav points; a second flight makes them a join and a split
+        again, for every flight in the package. Done here rather than per flight
+        because adding one flight changes what every other flight's route says.
+        """
+        for flight in self.flights:
+            flight.label_formation_waypoints()
 
     @property
     def primary_flight(self) -> Optional[Flight]:
@@ -186,6 +280,8 @@ class Package(RadioFrequencyContainer):
             FlightType.TRANSPORT,
             FlightType.AIR_ASSAULT,
             FlightType.ARMED_RECON,
+            FlightType.AFAC_AREA,
+            FlightType.AFAC_FRONTLINE,
             FlightType.SEAD,
             FlightType.SEAD_SWEEP,
             FlightType.TARCAP,
@@ -219,6 +315,39 @@ class Package(RadioFrequencyContainer):
             return "OCA Strike"
         return str(task)
 
+    @property
+    def refuel_point(self) -> Optional["Point"]:
+        """Where a flight in this package meets its tanker, or None if nowhere.
+
+        An offensive package gets one from its own geometry, behind the split point.
+        A defensive one -- a BARCAP over a friendly base -- has no package geometry at
+        all, because there is no ingress to solve for, so the point is put halfway
+        between the field the package flies from and what it is defending. Both ends
+        are friendly ground by construction, which is the only property the refuelling
+        point has to have.
+
+        An OFFENSIVE package that has simply not solved its geometry yet gets None
+        rather than the fallback: halfway to an enemy target is not a place to send a
+        tanker.
+        """
+        if self.waypoints is not None:
+            return self.waypoints.refuel
+        if not self.flights:
+            return None
+        if not self.target.is_friendly(self.flights[0].coalition.player):
+            return None
+        try:
+            origin = self.departure_closest_to_target()
+        except RuntimeError:
+            # It only knows about airfields, so a package flying off a carrier has no
+            # answer for it. The flight's own departure always does.
+            origin = self.flights[0].departure
+        target = self.target.position
+        return origin.position.point_from_heading(
+            origin.position.heading_between_point(target),
+            origin.position.distance_to_point(target) / 2,
+        )
+
     def departure_closest_to_target(self) -> ControlPoint:
         # We'll always have a package, but if this is being planned via the UI
         # it could be the first flight in the package.
@@ -240,6 +369,8 @@ class Package(RadioFrequencyContainer):
     @staticmethod
     def clone_package(package: Package) -> Package:
         clone = Package(package.target, package._db, package.auto_asap)
+        clone.auto_coordinated = package.auto_coordinated
+        clone.single_route_for_all_flights = package.single_route_for_all_flights
         clone.time_over_target = deepcopy(package.time_over_target)
         for f in package.flights:
             cf = Flight.clone_flight(f)

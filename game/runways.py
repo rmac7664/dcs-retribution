@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Iterator, Optional, TYPE_CHECKING
 
 from dcs.terrain.terrain import Airport, RunwayApproach
+from dcs.mapping import Point
 
 from game.atcdata import AtcData
 from game.dcs.beacons import BeaconType, Beacons
@@ -20,6 +22,58 @@ if TYPE_CHECKING:
     from game.theater import ConflictTheater
 
 
+def runway_centerline(
+    theater: ConflictTheater, airport: Airport, runway_name: str
+) -> Optional[tuple[Point, float]]:
+    """Return a point on the selected runway axis and its precise grid course.
+
+    A localizer at either end identifies the same runway centerline. Project the
+    airport reference onto it so configured leg distances remain measured from
+    the field, without carrying the reference point's lateral offset. Keep the
+    nominal heading as a fallback when no surveyed DCS localizer is available.
+    """
+    for strip in airport.runways:
+        approaches = (strip.main, strip.opposite)
+        approach = next((r for r in approaches if r.name == runway_name), None)
+        if approach is None:
+            continue
+        for end in (approach, *[r for r in approaches if r is not approach]):
+            for aid in end.beacons:
+                beacon = RunwayData._get_beacon(aid.id, theater)
+                if beacon is None or beacon.beacon_type not in (
+                    BeaconType.BEACON_TYPE_ILS_LOCALIZER,
+                    BeaconType.BEACON_TYPE_PRMG_LOCALIZER,
+                ):
+                    continue
+                x, z, direction = (
+                    beacon.position_x,
+                    beacon.position_z,
+                    beacon.direction,
+                )
+                if x is None or z is None or direction is None:
+                    continue
+                if not all(math.isfinite(v) for v in (x, z, direction)):
+                    continue
+                course = min(
+                    (direction % 360, (direction + 180) % 360),
+                    key=lambda h: abs((h - approach.heading + 180) % 360 - 180),
+                )
+                if abs((course - approach.heading + 180) % 360 - 180) > 30:
+                    continue
+                origin = Point(x, z, theater.terrain)
+                if origin.distance_to_point(airport.position) > 10000:
+                    continue
+                north, east = math.cos(math.radians(course)), math.sin(
+                    math.radians(course)
+                )
+                along = (airport.position.x - x) * north + (
+                    airport.position.y - z
+                ) * east
+                center = Point(x + along * north, z + along * east, theater.terrain)
+                return center, course
+    return None
+
+
 @dataclass(frozen=True)
 class RunwayData:
     airfield_name: str
@@ -30,6 +84,7 @@ class RunwayData:
     tacan_callsign: Optional[str] = None
     ils: Optional[RadioFrequency] = None
     icls: Optional[int] = None
+    link4: Optional[RadioFrequency] = None
 
     @classmethod
     def for_pydcs_runway_runway(
@@ -111,7 +166,12 @@ class RunwayAssigner:
         self.conditions = conditions
 
     def angle_off_headwind(self, runway: RunwayData) -> Heading:
-        wind = Heading.from_degrees(self.conditions.weather.wind.at_0m.direction)
+        surface_wind = self.conditions.weather.wind.at_0m
+        if surface_wind.speed <= 0:
+            # A calm vector can retain any direction, especially when surface
+            # wind is disabled. Treat every runway as tied instead of using it.
+            return Heading.from_degrees(0)
+        wind = Heading.from_degrees(surface_wind.direction)
         ideal_heading = wind.opposite
         return runway.runway_heading.angle_between(ideal_heading)
 
@@ -120,10 +180,9 @@ class RunwayAssigner:
     ) -> RunwayData:
         """Returns the preferred runway for the given airport.
 
-        Right now we're only selecting runways based on whether or not
-        they have
-        ILS, but we could also choose based on wind conditions, or which
-        direction flight plans should follow.
+        Prefer the best headwind even in light wind. An instrument approach must
+        not select a tailwind runway over its reciprocal. At zero speed, ignore
+        the stored direction; prefer ILS and then data order to break ties.
         """
         runways = list(RunwayData.for_pydcs_airport(theater, airport))
 

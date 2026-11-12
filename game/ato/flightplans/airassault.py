@@ -33,6 +33,9 @@ class AirAssaultLayout(FormationAttackLayout):
     drop_off: FlightWaypoint | None = None
     # This is an implementation detail used by CTLD. The aircraft will not go to this
     # waypoint. It is used by CTLD as the destination for unloaded troops.
+    # When True (a "remain at destination" helo assault) the route ends at the
+    # objective with no return leg -- the helos land there and stay.
+    remain: bool = False
 
     def iter_waypoints(self) -> Iterator[FlightWaypoint]:
         yield self.departure
@@ -44,10 +47,11 @@ class AirAssaultLayout(FormationAttackLayout):
         if self.drop_off is not None:
             yield self.drop_off
         yield self.targets[0]
-        yield from self.nav_from
-        yield self.arrival
-        if self.divert is not None:
-            yield self.divert
+        if not self.remain:
+            yield from self.nav_from
+            yield self.arrival
+            if self.divert is not None:
+                yield self.divert
         yield self.bullseye
         yield from self.custom_waypoints
 
@@ -95,9 +99,9 @@ class AirAssaultFlightPlan(FormationAttackFlightPlan, UiZoneDisplay):
 
 class Builder(FormationAttackBuilder[AirAssaultFlightPlan, AirAssaultLayout]):
     def layout(self) -> AirAssaultLayout:
-        if not self.flight.is_helo and not self.flight.is_hercules:
+        if not self.flight.is_helo and not self.flight.is_c130j:
             raise PlanningError(
-                "Air assault is only usable by helicopters and Anubis' C-130 mod"
+                "Air assault is only usable by helicopters and the C-130J-30"
             )
         assert self.package.waypoints is not None
 
@@ -106,7 +110,7 @@ class Builder(FormationAttackBuilder[AirAssaultFlightPlan, AirAssaultLayout]):
         altitude = builder.get_cruise_altitude
         altitude_is_agl = self.flight.is_helo
 
-        if self.flight.is_hercules or self.flight.departure.cptype in [
+        if self.flight.is_c130j or self.flight.departure.cptype in [
             ControlPointType.AIRCRAFT_CARRIER_GROUP,
             ControlPointType.LHA_GROUP,
             ControlPointType.OFF_MAP,
@@ -125,22 +129,18 @@ class Builder(FormationAttackBuilder[AirAssaultFlightPlan, AirAssaultLayout]):
             pickup.alt = altitude
             pickup_position = pickup.position
 
-        ingress = (
-            builder.ingress(
-                FlightWaypointType.INGRESS_AIR_ASSAULT,
-                self.package.waypoints.ingress,
-                self.package.target,
-            )
-            if not self.flight.is_hercules
-            else builder.ingress(
-                FlightWaypointType.INGRESS_AIR_ASSAULT,
-                self.package.waypoints.initial,
-                self.package.target,
-            )
+        # Ingress waypoint; for helos WaypointBuilder.ingress re-anchors this to
+        # 5 NM from the target, so join below uses ingress.position to stay
+        # coincident with it -- otherwise the route overshoots to the package IP
+        # and back (the zig-zag).
+        ingress = builder.ingress(
+            FlightWaypointType.INGRESS_AIR_ASSAULT,
+            self.package.waypoints.ingress,
+            self.package.target,
         )
 
         assault_area = builder.assault_area(self.package.target)
-        if self.flight.is_hercules:
+        if self.flight.is_c130j:
             assault_area.only_for_player = False
             assault_area.alt = feet(1000)
 
@@ -175,21 +175,25 @@ class Builder(FormationAttackBuilder[AirAssaultFlightPlan, AirAssaultLayout]):
                 ingress.position,
                 altitude,
                 altitude_is_agl,
+                prune_threatened_detours=self.flight.is_helo,
             ),
             ingress=ingress,
             drop_off=dz,
+            remain=getattr(self.flight, "remain_at_destination", False)
+            and self.flight.is_helo,
             targets=[assault_area],
             nav_from=builder.nav_path(
                 drop_off_zone.position,
                 self.flight.arrival.position,
                 altitude,
                 altitude_is_agl,
+                prune_threatened_detours=self.flight.is_helo,
             ),
             arrival=builder.land(self.flight.arrival),
             divert=builder.divert(self.flight.divert),
             bullseye=builder.bullseye(),
             hold=None,
-            join=builder.join(self.package.waypoints.ingress),
+            join=builder.join(ingress.position),
             split=builder.split(self.flight.arrival.position),
             refuel=None,
             custom_waypoints=list(),

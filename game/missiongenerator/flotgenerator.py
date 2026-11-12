@@ -26,6 +26,8 @@ from dcs.task import (
 )
 from dcs.triggers import Event, TriggerOnce
 from dcs.unit import Skill, Vehicle
+
+from game.dcs.skills import ground_skill
 from dcs.unitgroup import VehicleGroup
 
 from game.callsigns import callsign_for_support_unit
@@ -38,7 +40,13 @@ from game.ground_forces.ai_ground_planner import (
     DISTANCE_FROM_FRONTLINE,
 )
 from game.ground_forces.combat_stance import CombatStance
+from game.ground_forces.manpads import (
+    DEFAULT_VEHICLES_PER_MANPAD_TEAM,
+    additional_manpad_teams,
+    select_manpad_hosts,
+)
 from game.naming import namegen
+from game.plugins import LuaPluginManager
 from game.radio.radios import RadioRegistry
 from game.theater.controlpoint import ControlPoint, Player
 from game.unitmap import UnitMap
@@ -47,10 +55,12 @@ from .aircraft.aircraftpainter import AircraftPainterJtac
 from .frontlineconflictdescription import FrontLineConflictDescription
 from .groundforcepainter import GroundForcePainter
 from .missiondata import JtacInfo, MissionData, FrontlineUnitGroupsInfo
+from .realisticcascampaign import suppress_legacy_jtac
 from ..ato import FlightType
 
 if TYPE_CHECKING:
     from game import Game
+    from game.factions.faction import Faction
 
 SPREAD_DISTANCE_FACTOR = 0.1, 0.3
 SPREAD_DISTANCE_SIZE_FACTOR = 0.1
@@ -141,8 +151,15 @@ class FlotGenerator:
             self.conflict.blue_cp,
         )
 
+        self.gen_manpad_teams(player_groups, Player.BLUE)
+        self.gen_manpad_teams(enemy_groups, Player.RED)
+
         # Add JTAC
-        if self.game.blue.faction.has_jtac:
+        if (
+            self.game.settings.use_jtac
+            and self.game.blue.faction.has_jtac
+            and not suppress_legacy_jtac(LuaPluginManager.plugins())
+        ):
             freq = self.radio_registry.alloc_uhf()
             # If the option fc3LaserCode is enabled, force all JTAC
             # laser codes to 1113 to allow lasing for Su-25 Frogfoots and A-10A Warthogs.
@@ -200,6 +217,8 @@ class FlotGenerator:
                 )
             )
 
+        # Keep the existing frontline metadata even when only the JTAC is omitted.
+        if self.game.blue.faction.has_jtac:
             for vehicle_group, combat_group in player_groups:
                 self.mission_data.player_frontline_groups.append(
                     FrontlineUnitGroupsInfo(
@@ -221,6 +240,9 @@ class FlotGenerator:
         side: Country,
         forward_heading: Heading,
     ) -> None:
+        if not self.game.settings.perf_infantry:
+            return
+
         infantry_position = self.conflict.find_ground_position(
             group.points[0].position.random_point_within(250, 50),
             500,
@@ -229,72 +251,158 @@ class FlotGenerator:
         )
 
         faction = self.game.faction_for(is_player)
-
-        # Disable infantry unit gen if disabled
-        if not self.game.settings.perf_infantry:
-            if self.game.settings.manpads:
-                # 50% of armored units protected by manpad
-                if random.choice([True, False]):
-                    manpads = list(faction.infantry_with_class(UnitClass.MANPAD))
-                    if manpads:
-                        u = random.choices(
-                            manpads, weights=[m.spawn_weight for m in manpads]
-                        )[0]
-                        vg = self.mission.vehicle_group(
-                            side,
-                            namegen.next_infantry_name(side, u),
-                            u.dcs_unit_type,
-                            position=infantry_position,
-                            group_size=1,
-                            heading=forward_heading.degrees,
-                            move_formation=PointAction.OffRoad,
-                        )
-                        vehicle = vg.units[0]
-                        GroundForcePainter(faction, vehicle).apply_livery()
-                        vg.hidden_on_mfd = True
+        infantry_choices = sorted(
+            (
+                u
+                for u in faction.infantry_with_class(UnitClass.INFANTRY)
+                if u.spawn_weight > 0
+            ),
+            key=lambda u: u.variant_id,
+        )
+        if not infantry_choices:
             return
-
-        possible_infantry_units = set(faction.infantry_with_class(UnitClass.INFANTRY))
-        if self.game.settings.manpads:
-            possible_infantry_units |= set(
-                faction.infantry_with_class(UnitClass.MANPAD)
-            )
-        if not possible_infantry_units:
-            return
-
-        infantry_choices = list(possible_infantry_units)
         units = random.choices(
             infantry_choices,
             weights=[u.spawn_weight for u in infantry_choices],
             k=INFANTRY_GROUP_SIZE,
         )
+        for index, unit in enumerate(units):
+            position = (
+                infantry_position
+                if index == 0
+                else infantry_position.random_point_within(55, 5)
+            )
+            self._generate_support_soldier(
+                unit, position, side, faction, is_player, forward_heading
+            )
+
+    def _generate_support_soldier(
+        self,
+        unit: GroundUnitType,
+        position: Point,
+        side: Country,
+        faction: Faction,
+        is_player: Player,
+        heading: Heading,
+    ) -> VehicleGroup:
+        name = namegen.next_infantry_name(side, unit)
         vg = self.mission.vehicle_group(
             side,
-            namegen.next_infantry_name(side, units[0]),
-            units[0].dcs_unit_type,
-            position=infantry_position,
+            name,
+            unit.dcs_unit_type,
+            position=position,
             group_size=1,
-            heading=forward_heading.degrees,
+            heading=heading.degrees,
             move_formation=PointAction.OffRoad,
         )
-        vehicle = vg.units[0]
-        GroundForcePainter(faction, vehicle).apply_livery()
+        self.mission_data.frontline_visibility_groups.add(str(vg.name))
+        GroundForcePainter(faction, vg.units[0]).apply_livery()
         vg.hidden_on_mfd = True
+        vg.points[0].tasks.append(OptAlarmState(2))
+        skill = (
+            self.game.settings.player_skill
+            if is_player.is_blue
+            else self.game.settings.enemy_vehicle_skill
+        )
+        vg.set_skill(ground_skill(Skill(skill)))
+        return vg
 
-        for unit in units[1:]:
-            position = infantry_position.random_point_within(55, 5)
-            vg = self.mission.vehicle_group(
-                side,
-                namegen.next_infantry_name(side, unit),
-                unit.dcs_unit_type,
-                position=position,
-                group_size=1,
-                heading=forward_heading.degrees,
-                move_formation=PointAction.OffRoad,
+    def _manpad_position(self, host: VehicleGroup, occupied: list[Point]) -> Point:
+        """Keep support near its host and avoid stacking teams where terrain permits."""
+        origin = host.points[0].position
+        best = origin
+        best_gap = min(
+            (origin.distance_to_point(p) for p in occupied), default=math.inf
+        )
+        for _ in range(32):
+            candidate = origin.random_point_within(150, 30)
+            if not self.conflict.theater.is_on_land(candidate):
+                continue
+            gap = min(
+                (candidate.distance_to_point(p) for p in occupied), default=math.inf
             )
-            vehicle = vg.units[0]
-            GroundForcePainter(faction, vehicle).apply_livery()
-            vg.hidden_on_mfd = True
+            if gap >= 100:
+                return candidate
+            if gap > best_gap:
+                best, best_gap = candidate, gap
+        # Do not snap to a remote patch of land just to meet a spacing target.
+        return best
+
+    def gen_manpad_teams(
+        self, groups: list[tuple[VehicleGroup, CombatGroup]], is_player: Player
+    ) -> None:
+        if not self.game.settings.manpads:
+            return
+        count = additional_manpad_teams(
+            [group for _, group in groups],
+            getattr(
+                self.game.settings,
+                "frontline_manpad_vehicles_per_team",
+                DEFAULT_VEHICLES_PER_MANPAD_TEAM,
+            ),
+        )
+        if not count:
+            return
+        faction = self.game.faction_for(is_player)
+        manpads = sorted(
+            (
+                u
+                for u in faction.infantry_with_class(UnitClass.MANPAD)
+                if u.spawn_weight > 0
+            ),
+            key=lambda u: u.variant_id,
+        )
+        if not manpads:
+            return
+        riflemen = sorted(
+            (
+                u
+                for u in faction.infantry_with_class(UnitClass.INFANTRY)
+                if u.is_rifleman and u.spawn_weight > 0
+            ),
+            key=lambda u: u.variant_id,
+        )
+        side = self.mission.country(faction.country.name)
+        assert self.conflict.heading is not None
+        heading = (
+            self.conflict.heading.right
+            if is_player.is_blue
+            else self.conflict.heading.left
+        )
+        occupied = [
+            unit.position
+            for vehicle, group in groups
+            if group.unit_type.unit_class is UnitClass.MANPAD
+            for unit in vehicle.units
+        ]
+        for host in select_manpad_hosts(groups, count, occupied):
+            position = self._manpad_position(host, occupied)
+            occupied.append(position)
+            units = [
+                random.choices(manpads, weights=[u.spawn_weight for u in manpads])[0]
+            ]
+            if riflemen:
+                units.append(
+                    random.choices(
+                        riflemen, weights=[u.spawn_weight for u in riflemen]
+                    )[0]
+                )
+            for index, unit_type in enumerate(units):
+                soldier_position = position
+                if index:
+                    for _ in range(8):
+                        candidate = position.random_point_within(10, 5)
+                        if self.conflict.theater.is_on_land(candidate):
+                            soldier_position = candidate
+                            break
+                self._generate_support_soldier(
+                    unit_type,
+                    soldier_position,
+                    side,
+                    faction,
+                    is_player,
+                    heading,
+                )
 
     def _earliest_tot_on_flot(self, player: Player) -> timedelta:
         tots = [
@@ -328,7 +436,11 @@ class FlotGenerator:
         )
         rp = dcs_group.add_waypoint(reform_point)
         hold = ControlledTask(Hold())
-        hold.stop_after_duration(hold_duration.seconds)
+        # total_seconds(), not seconds: timedelta normalises a negative delta to a
+        # negative day plus a positive remainder, so a CAS package whose TOT lands
+        # before the mission start turned a -60s hold into .seconds == 86340 -- very
+        # nearly 24 hours, i.e. a group that never moves for the whole mission.
+        hold.stop_after_duration(max(0, int(hold_duration.total_seconds())))
         rp.add_task(hold)
 
     def _plan_artillery_action(
@@ -414,7 +526,11 @@ class FlotGenerator:
         Returns True if tasking was added, returns False if the stance was not a combat stance.
         """
         duration = timedelta()
-        if stance in [CombatStance.DEFENSIVE, CombatStance.AGGRESSIVE]:
+        if stance == CombatStance.AGGRESSIVE:
+            # Hold at the reform point until the enemy's first CAS package is due, so
+            # an assault steps off with air support overhead. Only an attacker waits:
+            # a DEFENSIVE group holding here spent that window unable to shoot back,
+            # because Hold is a running task the AI will not abandon for a pushed one.
             duration = self._earliest_tot_on_flot(to_cp.coalition.player.opponent)
         self._set_reform_waypoint(dcs_group, forward_heading, duration)
         if stance == CombatStance.AGGRESSIVE:
@@ -504,7 +620,11 @@ class FlotGenerator:
         Returns True if tasking was added, returns False if the stance was not a combat stance.
         """
         duration = timedelta()
-        if stance in [CombatStance.DEFENSIVE, CombatStance.AGGRESSIVE]:
+        if stance == CombatStance.AGGRESSIVE:
+            # Hold at the reform point until the enemy's first CAS package is due, so
+            # an assault steps off with air support overhead. Only an attacker waits:
+            # a DEFENSIVE group holding here spent that window unable to shoot back,
+            # because Hold is a running task the AI will not abandon for a pushed one.
             duration = self._earliest_tot_on_flot(to_cp.coalition.player.opponent)
         self._set_reform_waypoint(dcs_group, forward_heading, duration)
         if stance in [
@@ -749,19 +869,40 @@ class FlotGenerator:
     ) -> Point:
         assert self.conflict.heading is not None
         assert self.conflict.size is not None
+        theater = self.conflict.theater
+        # Pick a lateral position along the front. This point lies on the front
+        # line itself (between the clipped left/right bounds), so it is valid land.
         shifted = self.conflict.position.point_from_heading(
             self.conflict.heading.degrees,
             random.randint(0, self.conflict.size),
         )
-        desired_point = shifted.point_from_heading(
-            spawn_heading.degrees, distance_from_frontline
-        )
-        return FrontLineConflictDescription.find_ground_position(
-            desired_point,
-            self.conflict.size,
-            self.conflict.heading,
-            self.conflict.theater,
-        )
+        if not theater.is_on_land(shifted):
+            # Degenerate front (e.g. air-only campaign with an arbitrary route).
+            # Fall back to the lateral search rather than risk an off-map spawn.
+            desired_point = shifted.point_from_heading(
+                spawn_heading.degrees, distance_from_frontline
+            )
+            return FrontLineConflictDescription.find_ground_position(
+                desired_point,
+                self.conflict.size,
+                self.conflict.heading,
+                theater,
+            )
+        # Step back from the front toward the requested depth, keeping the lateral
+        # position fixed. The old code snapped the off-map point *along* the front
+        # via find_ground_position, which collapsed every group whose depth ran
+        # past the playable zone onto the same valid patch and stacked the units on
+        # top of each other. Stepping perpendicular preserves the lateral spread.
+        step = 250
+        valid_point = shifted
+        distance = step
+        while distance <= distance_from_frontline:
+            candidate = shifted.point_from_heading(spawn_heading.degrees, distance)
+            if not theater.is_on_land(candidate):
+                break
+            valid_point = candidate
+            distance += step
+        return valid_point
 
     def _generate_groups(
         self, groups: list[CombatGroup], is_player: Player
@@ -798,11 +939,12 @@ class FlotGenerator:
                 group.size,
                 final_position,
                 heading=spawn_heading.opposite,
+                role=group.role,
             )
             if is_player == Player.BLUE:
-                g.set_skill(Skill(self.game.settings.player_skill))
+                g.set_skill(ground_skill(Skill(self.game.settings.player_skill)))
             else:
-                g.set_skill(Skill(self.game.settings.enemy_vehicle_skill))
+                g.set_skill(ground_skill(Skill(self.game.settings.enemy_vehicle_skill)))
             positioned_groups.append((g, group))
 
             if group.role in [CombatGroupRole.APC, CombatGroupRole.IFV]:
@@ -823,25 +965,30 @@ class FlotGenerator:
         count: int,
         at: Point,
         heading: Heading,
+        role: CombatGroupRole,
     ) -> VehicleGroup:
         cp = self.conflict.front_line.control_point_friendly_to(player)
         faction = self.game.faction_for(player)
 
+        name = namegen.next_unit_name(side, unit_type)
         group = self.mission.vehicle_group(
             side,
-            namegen.next_unit_name(side, unit_type),
+            name,
             unit_type.dcs_unit_type,
             position=at,
             group_size=count,
             heading=heading.degrees,
         )
-        group.hidden_on_mfd = True
-        if self.game.settings.perf_red_alert_state:
-            group.points[0].tasks.append(OptAlarmState(2))
-        else:
-            group.points[0].tasks.append(OptAlarmState(1))
+        group.hidden_on_mfd = not self.game.settings.mfd_front
+        # Front-line units always come up RED, regardless of the perf toggle. A GREEN
+        # ground unit does not search for targets and keeps its weapons stowed, so the
+        # toggle -- offered as a performance option, and about SAM sites -- silently
+        # disarmed the entire ground war: the FLOT would sit and watch the enemy drive
+        # past. Same reasoning as the EWR exemption in tgogenerator.set_alarm_state.
+        group.points[0].tasks.append(OptAlarmState(2))
 
         self.unit_map.add_front_line_units(group, cp, unit_type)
+        self.mission_data.frontline_visibility_groups.add(str(group.name))
 
         for c in range(count):
             vehicle: Vehicle = group.units[c]

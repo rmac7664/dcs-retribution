@@ -1,13 +1,14 @@
 ---
 name: Syria - Task Force Thunder
 theater: Syria
-authors: Sith1144
+authors: Sith1144, modified by juanjux
 description: <p>A campaign based on the campaign from Combat Mission Shock Force. US forces attempt to bisect the country by advancing towards Homs from Iraq in the east and an amphibious landing near Tartus in the west. Recommended starting budge 3000-4000M for REDFOR, 2000-5000M for BLUFOR. Cannot be inverted. NOTE; the marine landing in the west does NOT have a workshop and cannot produce new units, nor does the first enemy airfield in the area. How many resources you pour into it is up to you.</p>
 recommended_player_faction: USA 2005
 recommended_enemy_faction: Syria 2011
 recommended_start_date: 2009-06-19
 miz: Task Force Thunder.miz
 performance: 3
+advanced_iads: true
 version: "9.1"
 squadrons:
  # Airspawn from Iraq
@@ -30,6 +31,13 @@ squadrons:
       - KC-135 Stratotanker MPRS
  #H3 airbase
     53:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "MQ-9 Reaper"
+      size: 2
+      pilots: 6
     - primary: SEAD
       secondary: any
       aircraft: 
@@ -108,6 +116,13 @@ squadrons:
       - Su-17M4 Fitter-K
 # Tiyas - secondary base for good fighters (mig-25) and trainers (L-39)
     39:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "WingLoong-I"
+      size: 2
+      pilots: 6
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
@@ -161,3 +176,11 @@ squadrons:
     - primary: CAS
       aircraft:
       - SA 342M Gazelle
+settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: true
+
+ground_forces:
+  "Ground-143": GPS Jamming Site (Red, Unescorted)
+  "Blue GPS Jammer H4": GPS Jamming Site (Blue, Unescorted)

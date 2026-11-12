@@ -1,0 +1,340 @@
+"""Real campaign plugin manager/generator/pydcs wiring, without running DCS."""
+
+import ast
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace as NS
+import tempfile
+import unittest
+from unittest.mock import patch
+import zipfile
+
+from dcs import Mission
+from dcs.action import DoScriptFile
+from game.missiongenerator.luagenerator import LuaGenerator
+from game.missiongenerator.realisticcascampaign import (
+    inject_campaign,
+    prepare_campaign,
+    suppress_legacy_jtac,
+    validate_compatibility,
+    RealisticCASConfigurationError,
+)
+from game.plugins.luaplugin import LuaPlugin
+from lupa.lua51 import LuaRuntime
+
+import test_registry_export
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class CampaignIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        test_registry_export.RegistryTests.setUp(self)
+        self.m.start_time = datetime(2026, 5, 17, 5)
+        self.game = NS(
+            theater=NS(
+                timezone=timezone(timedelta(hours=3)),
+                reference_position=NS(lat=35.4, lng=44.4),
+            )
+        )
+        self.g = LuaGenerator(self.game, self.m, self.data, NS(theater_objects={}))
+        self.p = LuaPlugin.from_json(
+            "realisticcas", ROOT / "resources/plugins/realisticcas/plugin.json"
+        )
+        assert self.p is not None
+        self.p.set_value(True)
+
+    def test_disabled_inert_and_option_default_off(self):
+        self.p.set_value(False)
+        self.assertIsNone(prepare_campaign(object(), [self.p]))
+        inject_campaign(object(), None)
+        self.assertFalse(suppress_legacy_jtac([self.p]))
+        definition = json.loads(
+            (ROOT / "resources/plugins/realisticcas/plugin.json").read_text()
+        )
+        self.assertIs(definition["defaultValue"], False)
+
+    def test_contact_report_options_are_exported_and_validated(self):
+        options = {o.identifier: o for o in self.p.options}
+        config = prepare_campaign(self.g, [self.p])
+        self.assertIs(config["contactReports"], True)
+        self.assertEqual(config["contactReportSeconds"], 15)
+        self.assertEqual(
+            options["realisticcas.contactReportSeconds"].enabled_by,
+            "realisticcas.contactReports",
+        )
+        options["realisticcas.contactReports"].set_value(False)
+        options["realisticcas.contactReportSeconds"].set_value(45)
+        config = prepare_campaign(self.g, [self.p])
+        self.assertIs(config["contactReports"], False)
+        self.assertEqual(config["contactReportSeconds"], 45)
+        for value in (0, 301, False, 1.5):
+            options["realisticcas.contactReportSeconds"].set_value(value)
+            with self.assertRaisesRegex(ValueError, "report duration"):
+                prepare_campaign(self.g, [self.p])
+        options["realisticcas.contactReportSeconds"].set_value(15)
+        options["realisticcas.contactReports"].set_value("yes")
+        with self.assertRaisesRegex(ValueError, "reports must be boolean"):
+            prepare_campaign(self.g, [self.p])
+
+    def test_final_registry_environment_options_and_original_mission_unchanged(self):
+        before = self.g.mission.weather.dict()
+        units_before = [u.dict() for u in self.air.units]
+        config = prepare_campaign(self.g, [self.p])
+        self.assertEqual(config["ttl"], 600)
+        self.assertIs(config["probabilisticDetection"], True)
+        self.assertEqual(config["environment"]["defaultCover"], "grassland")
+        # Actual existing suntime-based campaign calculator, not a fake sunrise.
+        sunrise = config["environment"]["solarDays"][0]["sunrise"]
+        self.assertTrue(4 * 3600 < sunrise < 6 * 3600)
+        self.assertEqual(config["registry"]["groups"][0]["name"], "GROUND")
+        self.assertEqual(before, self.m.weather.dict())
+        self.assertEqual(units_before, [u.dict() for u in self.air.units])
+        self.assertEqual(len(self.m.triggerrules.triggers), 0)
+        self.assertTrue(suppress_legacy_jtac([self.p]))
+
+    def test_incompatible_plugins_and_legacy_jtac_rejected_before_injection(self):
+        for name in ("ctld", "MooseAutolase"):
+            with self.assertRaisesRegex(ValueError, name):
+                prepare_campaign(self.g, [self.p, NS(identifier=name, enabled=True)])
+            self.assertEqual(len(self.m.triggerrules.triggers), 0)
+        self.data.jtacs.append(NS())
+        with self.assertRaisesRegex(ValueError, "legacy JTAC"):
+            prepare_campaign(self.g, [self.p])
+
+    def test_ctld_logistics_allowed_with_autolase_off_regardless_of_human_slots(self):
+        ctld = LuaPlugin.from_json("ctld", ROOT / "resources/plugins/ctld/plugin.json")
+        assert ctld is not None
+        ctld.set_value(True)
+        options = {o.identifier: o for o in ctld.options}
+        with self.assertRaisesRegex(
+            RealisticCASConfigurationError, "JTAC autolase targets"
+        ):
+            validate_compatibility([self.p, ctld])
+        options["ctld.autolase"].set_value(False)
+        # Smoke is subordinate to autolase; logistics and human seats are not JTAC AI.
+        for smoke in (False, True):
+            options["ctld.jtacsmoke"].set_value(smoke)
+            for slots in (0, 3):
+                self.game.settings = NS(jtac_count=slots, use_jtac=False)
+                validate_compatibility([self.p, ctld])
+                self.assertIsNotNone(prepare_campaign(self.g, [self.p, ctld]))
+        options["ctld.autolase"].set_value(True)
+        ctld.set_value(False)
+        validate_compatibility([self.p, ctld])
+
+    def test_ctld_autolase_off_blocks_dynamic_and_timer_entry_points(self):
+        source = (ROOT / "resources/plugins/ctld/CTLD.lua").read_text()
+        lua = LuaRuntime()
+        lua.compile(source)  # The shipped script, not just the extracted function.
+        start = source.index("function ctld.JTACAutoLase(")
+        end = source.index("function ctld.JTACAutoLaseStop(", start)
+        lua.execute("""
+            calls=0
+            ctld={
+              p=tostring,
+              logDebug=function()
+                calls=calls+1
+                error('reached native autolase body')
+              end
+            }
+        """)
+        lua.execute(source[start:end])
+        lua.execute("""
+            dcsRetribution={plugins={ctld={autolase=false}}}
+            -- Initial JTACs, dropped troops, crates and the timer use this entry.
+            for _,name in ipairs({'initial','troops','crate','timer'}) do
+              assert(pcall(ctld.JTACAutoLase,name,1688))
+            end
+            assert(calls==0)
+            dcsRetribution.plugins.ctld.autolase=true
+            assert(not pcall(ctld.JTACAutoLase,'enabled',1688) and calls==1)
+            -- Standalone CTLD, without campaign options, retains its behaviour.
+            dcsRetribution=nil
+            assert(not pcall(ctld.JTACAutoLase,'standalone',1688) and calls==2)
+        """)
+
+    def test_actual_pydcs_sinai_and_falklands_names(self):
+        from dcs.terrain import Sinai, Falklands
+
+        for terrain, cover in ((Sinai(), "desert"), (Falklands(), "grassland")):
+            with self.subTest(terrain=terrain.name):
+                self.g.mission = Mission(terrain)
+                self.g.mission.start_time = self.m.start_time
+                config = prepare_campaign(self.g, [self.p])
+                self.assertEqual(config["environment"]["defaultCover"], cover)
+                self.assertEqual(config["observerBudget"], 64)
+                self.assertEqual(config["losBudget"], 64)
+
+    def test_compatibility_preflight_is_actionable_and_disabled_is_inert(self):
+        ctld = NS(identifier="ctld", enabled=True)
+        with self.assertRaisesRegex(RealisticCASConfigurationError, "ctld"):
+            validate_compatibility([self.p, ctld])
+        self.p.set_value(False)
+        validate_compatibility([self.p, ctld])
+        # Take Off must check before fallback planning or beginning the simulation.
+        tree = ast.parse((ROOT / "qt_ui/widgets/QTopPanel.py").read_text())
+        launch = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "launch_mission"
+        )
+        text = ast.unparse(launch)
+        self.assertLess(
+            text.index("validate_compatibility("),
+            text.index("run_opfor_fallback_if_needed("),
+        )
+        self.assertIn("except RealisticCASConfigurationError", text)
+        self.assertIn("Incompatible mission plugins", text)
+
+    def test_option_source_is_same_plugin_as_injection_not_game_settings(self):
+        for option in self.p.options:
+            if option.identifier == "realisticcas.terrainProfile":
+                option.set_value(1)
+            if option.identifier == "realisticcas.contactSeconds":
+                option.set_value(123)
+            if option.identifier == "realisticcas.probabilisticDetection":
+                option.set_value(False)
+        config = prepare_campaign(self.g, [self.p])
+        self.assertEqual(config["environment"]["defaultCover"], "desert")
+        self.assertEqual(config["ttl"], 123)
+        self.assertIs(config["probabilisticDetection"], False)
+        self.assertEqual(config["acquisitionSeconds"], 0)
+        self.assertNotIn(
+            "realisticcas.acquisitionSeconds", [o.identifier for o in self.p.options]
+        )
+
+    def test_missing_source_rejected_before_any_resource_or_trigger(self):
+        config = prepare_campaign(self.g, [self.p])
+        with patch(
+            "game.missiongenerator.realisticcascampaign.Path.is_file",
+            return_value=False,
+        ):
+            with self.assertRaises(FileNotFoundError):
+                inject_campaign(self.g, config)
+        self.assertEqual(len(self.m.triggerrules.triggers), 0)
+
+    def test_retired_search_time_is_ignored_even_from_an_old_option_definition(self):
+        old = NS(identifier="realisticcas.acquisitionSeconds", get_value=99)
+        plugin = NS(
+            identifier="realisticcas", enabled=True, options=[*self.p.options, old]
+        )
+        config = prepare_campaign(self.g, [plugin])
+        self.assertEqual(config["acquisitionSeconds"], 0)
+        self.assertEqual(old.get_value, 99)
+        self.assertEqual(self.g.plugin_scripts, [])
+
+    def test_probability_defaults_match_manifest_python_and_lua(self):
+        from game.missiongenerator.realisticcasluadata import PROBABILITY_DEFAULTS
+
+        from test_sensors import CORE, SOURCES
+
+        defaults = {
+            o.identifier.removeprefix("realisticcas."): o.get_value
+            for o in self.p.options
+        }
+        rt = LuaRuntime()
+        rt.execute(CORE)
+        for source in SOURCES:
+            rt.execute(source)
+        lua_defaults = dict(rt.eval("RealisticCAS.Sensors.probabilityConfig()"))
+        self.assertEqual(lua_defaults, PROBABILITY_DEFAULTS)
+        for name, value in PROBABILITY_DEFAULTS.items():
+            self.assertEqual(defaults[name], value)
+        self.assertEqual(
+            prepare_campaign(self.g, [self.p])["probability"], lua_defaults
+        )
+
+    def test_changed_probability_options_reach_export_and_bad_pairs_fail(self):
+        options = {
+            o.identifier.removeprefix("realisticcas."): o for o in self.p.options
+        }
+        options["retrySeconds"].set_value(17)
+        options["radarFarPercent"].set_value(70)
+        options["radarNearPercent"].set_value(99)
+        options["visualMaxAGL"].set_value(2100)
+        config = prepare_campaign(self.g, [self.p])
+        self.assertEqual(config["probability"]["retrySeconds"], 17)
+        self.assertEqual(config["probability"]["radarFarPercent"], 70)
+        self.assertEqual(config["probability"]["radarNearPercent"], 99)
+        self.assertEqual(config["probability"]["visualMaxAGL"], 2100)
+        from game.missiongenerator.realisticcasluadata import render_startup
+
+        rt = LuaRuntime()
+        rt.execute("RealisticCAS={startMission=function(c) captured=c;return {} end}")
+        rt.execute(render_startup(config))
+        self.assertEqual(dict(rt.globals().captured.probability), config["probability"])
+        options["radarFarPercent"].set_value(100)
+        with self.assertRaisesRegex(ValueError, "far chance"):
+            prepare_campaign(self.g, [self.p])
+
+    def test_generated_miz_contains_ordered_files_and_typed_startup(self):
+        config = prepare_campaign(self.g, [self.p])
+        inject_campaign(self.g, config)
+        triggers = self.m.triggerrules.triggers
+        from game.missiongenerator.realisticcasluadata import SCRIPT_ORDER
+
+        self.assertEqual(
+            [t.comment for t in triggers[:-1]],
+            [f"Load realisticcas-{n}" for n in SCRIPT_ORDER],
+        )
+        self.assertTrue(
+            all(isinstance(t.actions[0], DoScriptFile) for t in triggers[:-1])
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "integration.miz"
+            self.m.save(path)
+            parsed = Mission()
+            parsed.load_file(str(path))
+            rt = LuaRuntime()
+            with zipfile.ZipFile(path) as archive:
+                rt.compile(archive.read("mission").decode("utf-8"))
+                scripts = [name for name in archive.namelist() if name.endswith(".lua")]
+                self.assertEqual(
+                    len(scripts), len(test_registry_export.EXPORT.SCRIPT_ORDER)
+                )
+                for name in scripts:
+                    rt.compile(archive.read(name).decode("utf-8"))
+                # Validate generated trigger action strings too (Lua text inside strings).
+                rt.execute(archive.read("mission").decode("utf-8"))
+                for _, action in rt.globals().mission["trig"]["actions"].items():
+                    rt.compile(action)
+
+    def test_real_generate_hook_calls_prepare_before_other_lua_and_starts_last(self):
+        # Exercise the real generate() control flow, isolating unrelated plugins.
+        with patch(
+            "game.missiongenerator.luagenerator.LuaPluginManager.plugins",
+            return_value=[self.p],
+        ):
+            with patch.object(self.g, "generate_plugin_data"), patch.object(
+                self.g, "_seed_pilot_roster"
+            ), patch.object(self.g, "_seed_scenery_objectives"), patch.object(
+                self.g, "_seed_persistent_damage"
+            ), patch.object(
+                self.g, "_inject_aircraft_maintenance"
+            ):
+                self.g.generate()
+        self.assertEqual(
+            self.m.triggerrules.triggers[-1].comment,
+            "Realistic CAS: campaign registry and start",
+        )
+
+    def test_flot_jtac_guard_does_not_swallow_frontline_metadata(self):
+        # Structural regression for the legacy branch; creating a real FLOT needs
+        # the campaign fixtures in the subsequent full-campaign acceptance test.
+        tree = ast.parse((ROOT / "game/missiongenerator/flotgenerator.py").read_text())
+        guards = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.If) and "suppress_legacy_jtac" in ast.unparse(n.test)
+        ]
+        self.assertEqual(len(guards), 1)
+        text = ast.unparse(guards[0])
+        self.assertIn("mission_data.jtacs.append", text)
+        self.assertNotIn("mission_data.player_frontline_groups.append", text)
+        self.assertNotIn("mission_data.enemy_frontline_groups.append", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

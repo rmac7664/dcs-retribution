@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from game.config import REWARDS
@@ -8,6 +8,7 @@ from game.theater.player import Player
 
 if TYPE_CHECKING:
     from game import Game
+    from game.theater.theatergroundobject import TheaterGroundObject
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,12 @@ class BuildingIncome:
     category: str
     number: int
     income_per_building: float
+    #: How many buildings the site started with. A site pays for the ones still
+    #: standing, so the pair is what says whether it is whole or half bombed.
+    total: int = 0
+    ground_object: TheaterGroundObject | None = field(
+        default=None, compare=False, repr=False
+    )
 
     @property
     def income(self) -> float:
@@ -38,12 +45,15 @@ class Income:
             for tgo in cp.ground_objects:
                 if tgo.category not in REWARDS:
                     continue
+                statics = list(tgo.statics)
                 self.buildings.append(
                     BuildingIncome(
                         tgo.obj_name,
                         tgo.category,
-                        sum(1 for b in tgo.statics if b.alive),
+                        sum(1 for b in statics if b.alive),
                         REWARDS[tgo.category],
+                        len(statics),
+                        ground_object=tgo,
                     )
                 )
 

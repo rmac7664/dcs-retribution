@@ -1,0 +1,418 @@
+"""What a flight plan costs in fuel, erring high.
+
+Taxi, each leg at its climb, cruise or combat rate, the landing reserve, and a margin
+on top. An aircraft with no measured consumption falls back to a guess.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Optional
+
+from game.ato.flighttype import FlightType
+from game.ato.flightwaypoint import FlightWaypoint
+from game.ato.flightwaypointtype import FlightWaypointType
+from game.data.fueltanks import loadout_fuel
+from game.dcs.aircrafttype import AircraftType, FuelConsumption
+from game.utils import (
+    KG_TO_LBS,
+    Distance,
+    Mass,
+    kgs,
+    kph,
+    meters,
+    pairwise,
+    pounds,
+)
+
+if TYPE_CHECKING:
+    from game.ato.flight import Flight
+
+#: On top of taxi + route + reserve, so the estimate errs towards a diversion rather
+#: than towards a splash.
+MARGIN = 1.10
+
+#: The legs actually flown in combat. The plan's own combat_speed_waypoints also
+#: includes the join and the split, which are package-speed cruise.
+ATTACK_WAYPOINTS = frozenset(
+    {
+        FlightWaypointType.TARGET_POINT,
+        FlightWaypointType.TARGET_GROUP_LOC,
+        FlightWaypointType.TARGET_SHIP,
+    }
+)
+
+
+#: How near the ingress has to sit to the weapon's range to count as being at it.
+#: The solver picks a point out of a ring rather than off a radius, so it lands about
+#: there. Both ends matter: an ingress much FURTHER out than the weapon shoots from
+#: was not placed by the weapon, and that flight really does fly in.
+STANDOFF_BAND = (0.9, 1.1)
+
+
+def releases_at_ingress(flight: Flight) -> bool:
+    """Whether this flight shoots from the ingress point instead of flying on.
+
+    The package puts its ingress at the range its weapons are fired from and records
+    that range, so when the ingress really is out at it, the run in to the target is
+    the weapon's to fly and not the aeroplane's.
+
+    Having a stand-off range is not enough on its own: a weapon that cannot shoot
+    from further out than the doctrine would send the flight anyway leaves the ingress
+    where it was, and that flight does fly to its target.
+    """
+    package = getattr(flight, "package", None)
+    waypoints = getattr(package, "waypoints", None)
+    standoff = getattr(waypoints, "standoff_range", None)
+    # A real recorded range, not merely something in the attribute: this is asked of
+    # every flight, including the stand-ins tests build.
+    if package is None or waypoints is None or not isinstance(standoff, Distance):
+        return False
+    target = getattr(package, "target", None)
+    if target is None:
+        return False
+    reach = meters(waypoints.ingress.distance_to_point(target.position))
+    low, high = STANDOFF_BAND
+    return (
+        standoff.nautical_miles * low
+        <= reach.nautical_miles
+        <= standoff.nautical_miles * high
+    )
+
+
+def _route_actually_flown(
+    waypoints: list[FlightWaypoint], flight: Flight
+) -> list[FlightWaypoint]:
+    """The waypoints the aeroplane passes over, with a stand-off run taken out.
+
+    A strike with SLAM-ERs is given an ingress a hundred and fifty miles from the
+    target and target points on top of it, because that is what the mission needs to
+    say. Charging the aeroplane for flying out there and back was most of its fuel
+    bill -- and at the combat rate on the way in -- so a four hundred mile sortie read
+    as a thousand and every flight in the campaign was judged too short of fuel to
+    reach its own target.
+    """
+    if not releases_at_ingress(flight):
+        return waypoints
+    ingress = next(
+        (
+            index
+            for index, point in enumerate(waypoints)
+            if point.waypoint_type.name.startswith("INGRESS")
+        ),
+        None,
+    )
+    if ingress is None:
+        return waypoints
+    # Everything the flight was pointed at, wherever it sits: a strike has its target
+    # points straight after the ingress, an escort has an aiming point of its own in
+    # between. What is left is the route the aeroplane flies -- ingress, then the split
+    # for a package that has one and a nav point for a flight that does not.
+    kept = waypoints[: ingress + 1] + [
+        point
+        for point in waypoints[ingress + 1 :]
+        if point.waypoint_type not in ATTACK_WAYPOINTS
+    ]
+    return kept if len(kept) != len(waypoints) else waypoints
+
+
+#: Altitude the measured cruise figures correspond to. A jet's fuel per mile falls as
+#: it climbs, and a flat rate meant that raising a flight's cruise band changed nothing.
+REFERENCE_ALTITUDE_FT = 25000.0
+
+#: Bounds on that correction. A jet is not four times as thirsty on the deck as it is
+#: in the thirties, and above the tropopause the gain stops.
+MIN_ALTITUDE_FACTOR = 0.7
+MAX_ALTITUDE_FACTOR = 2.0
+
+
+def _density_ratio(altitude_ft: float) -> float:
+    """ISA density over sea-level density, flat above the tropopause."""
+    troposphere = min(max(altitude_ft, 0.0), 36089.0)
+    ratio = (1.0 - 6.87535e-6 * troposphere) ** 4.2559
+    if altitude_ft <= 36089.0:
+        return ratio
+    # Isothermal above it: density falls exponentially with a 20,806 ft scale height.
+    return ratio * math.exp(-(altitude_ft - 36089.0) / 20806.0)
+
+
+def altitude_factor(altitude_ft: float, helicopter: bool = False) -> float:
+    """How much a leg's fuel per mile changes with the height it is flown at.
+
+    Fuel per mile at constant Mach goes roughly with the square root of the density,
+    so a jet on the deck burns half again what it does in the twenties. A helicopter
+    does not cruise high enough for this to say anything, so it is left alone.
+    """
+    if helicopter:
+        return 1.0
+    here = math.sqrt(_density_ratio(altitude_ft))
+    reference = math.sqrt(_density_ratio(REFERENCE_ALTITUDE_FT))
+    return min(MAX_ALTITUDE_FACTOR, max(MIN_ALTITUDE_FACTOR, here / reference))
+
+
+@dataclass(frozen=True)
+class FuelEstimate:
+    """Pounds of fuel this flight plan asks for, and what the flight is carrying."""
+
+    #: Route or segment requirement, including reserve and margin.
+    required: Mass
+    #: Available at departure or after refuelling, including fitted drop tanks.
+    carried: Mass
+
+    @property
+    def enough(self) -> bool:
+        return self.carried >= self.required
+
+
+@dataclass(frozen=True)
+class Leg:
+    """One stretch of a route and what it should be charged at.
+
+    Both estimators build these and hand them to :func:`burn_for`, so a route
+    measured before a plan exists and the same route measured afterwards are
+    charged by the same rules. They were not, and the planning-time one came out
+    20-35% cheap -- which is the wrong direction, because that is a flight given no
+    tanker and no way home.
+    """
+
+    nautical_miles: float
+    altitude_ft: float
+    #: The run in to the target, at the combat rate.
+    attack: bool = False
+    #: Off the deck. The climb rate already covers the whole climb, so no altitude
+    #: correction is applied on top of it.
+    climb: bool = False
+
+
+def burn_for(
+    consumption: FuelConsumption, legs: Iterable[Leg], helicopter: bool
+) -> float:
+    """Pounds burnt over these legs."""
+    total = 0.0
+    for leg in legs:
+        if leg.climb:
+            total += leg.nautical_miles * consumption.climb
+            continue
+        rate = consumption.combat if leg.attack else consumption.cruise
+        total += (
+            leg.nautical_miles * rate * altitude_factor(leg.altitude_ft, helicopter)
+        )
+    return total
+
+
+def estimate_fuel(flight: Flight) -> Optional[FuelEstimate]:
+    """Whole-route requirement without refuelling, for tanker planning decisions."""
+    return _estimate_fuel_segments(flight, refuel=False)[0]
+
+
+def estimate_fuel_segments(flight: Flight) -> list[FuelEstimate]:
+    """Split at each REFUEL, assuming full internal and fitted external tanks.
+
+    Taxi is charged only before the first refuel. Every segment keeps the safe
+    reserve and margin, including arrival at a tanker. This does not confirm that
+    a tanker is available, or model tank jettison or partial transfers.
+    """
+    return _estimate_fuel_segments(flight, refuel=True)
+
+
+def _estimate_fuel_segments(flight: Flight, *, refuel: bool) -> list[FuelEstimate]:
+    consumption = flight.unit_type.fuel_consumption or assumed_consumption(
+        flight.unit_type
+    )
+    plan = flight.flight_plan
+
+    # Stop at the landing point: what follows it is the bullseye, hundreds of miles
+    # away, and the divert field.
+    waypoints = list(plan.waypoints)
+    landing = None
+    for index, waypoint in enumerate(waypoints):
+        if waypoint.waypoint_type is FlightWaypointType.LANDING_POINT:
+            landing = index
+    if landing is not None:
+        waypoints = waypoints[: landing + 1]
+    waypoints = _route_actually_flown(waypoints, flight)
+
+    # The rate is picked here rather than through the plan's own
+    # fuel_consumption_between_points, which returns None for an unmeasured airframe.
+    # Only the DISTANCE comes from the plan, which is what knows a racetrack flies its
+    # laps rather than one crossing.
+    legs: list[Leg] = []
+    segments: list[FuelEstimate] = []
+    carried = carried_fuel(flight)
+    taxi = consumption.taxi
+
+    def finish_segment() -> FuelEstimate:
+        burn = burn_for(consumption, legs, flight.unit_type.helicopter)
+        required = (taxi + burn + consumption.min_safe) * MARGIN
+        return FuelEstimate(required=pounds(required), carried=carried)
+
+    for a, b in pairwise(waypoints):
+        distance = plan.fuel_burn_distance_between_points(a, b).nautical_miles
+        if a.waypoint_type is FlightWaypointType.TAKEOFF:
+            legs.append(Leg(distance, a.alt.feet, climb=True))
+        # Combat rate for the attack itself. The plan also flags the join and the
+        # split, which are flown at the package's cruise speed rather than in
+        # combat -- charging those at the combat rate put a strike's egress leg,
+        # eighty miles of it, at over twice the right figure.
+        else:
+            legs.append(
+                Leg(
+                    distance,
+                    (a.alt.feet + b.alt.feet) / 2,
+                    attack=b.waypoint_type in ATTACK_WAYPOINTS,
+                )
+            )
+        if refuel and b.waypoint_type is FlightWaypointType.REFUEL:
+            segments.append(finish_segment())
+            legs = []
+            taxi = 0
+            external = loadout_fuel(flight.roster.members[0].loadout)
+            carried = kgs(flight.unit_type.dcs_unit_type.fuel_max + external.kgs)
+            if b is getattr(getattr(plan, "layout", None), "pre_push_refuel", None):
+                # The early AI stop ends at 90% of internal capacity. Do not
+                # credit a full refill of drop tanks that the task does not promise.
+                carried = kgs(0.9 * flight.unit_type.dcs_unit_type.fuel_max)
+
+    segments.append(finish_segment())
+    return segments
+
+
+def carried_fuel(flight: Flight) -> Mass:
+    """What the flight takes off with: internal plus the drop tanks.
+
+    Reading the internal figure alone called a tanked-up strike short of fuel it was
+    carrying on the pylons.
+    """
+    external = loadout_fuel(flight.roster.members[0].loadout)
+    return kgs(flight.fuel + external.kgs)
+
+
+#: How much of a route is charged at the climb rate when the legs are not known yet.
+#: The measured airframes are level by about here.
+CLIMB_DISTANCE_NM = 25.0
+
+
+def fuel_for_route(flight: Flight, legs: Iterable[Leg]) -> FuelEstimate:
+    """What these legs cost, for the moment before a plan exists.
+
+    estimate_fuel walks the legs of a built plan. A plan being BUILT has none to walk
+    -- which is exactly when the planner has to decide whether the flight will need a
+    tanker -- so the caller itemises what the package geometry implies. Same Leg,
+    same burn_for, same answer for the same route.
+    """
+    consumption = flight.unit_type.fuel_consumption or assumed_consumption(
+        flight.unit_type
+    )
+    burn = burn_for(consumption, legs, flight.unit_type.helicopter)
+    required = (consumption.taxi + burn + consumption.min_safe) * MARGIN
+    return FuelEstimate(required=pounds(required), carried=carried_fuel(flight))
+
+
+#: Floor on the nominal still-air range of each class, in case the fit below reads an
+#: airframe as shorter-legged than anything of its kind could be. With the measured
+#: fit these rarely bind; the old heavy floor of 4,000 nm did, and wrongly -- an E-3A
+#: measured 2,138 and a KC-135 3,171.
+NOMINAL_RANGE_NM = {
+    "helicopter": 250.0,
+    "heavy": 1500.0,
+    "propeller": 400.0,
+    "jet": 350.0,
+}
+
+#: Still-air range on internal fuel against how much of it there is, least squares in
+#: logs, per class.
+#:
+#: Measured rather than assumed: sixty-four airframes flown in DCS at 25,000 ft and
+#: 800 km/h -- 15,000 and 600 for what cannot hold that -- carrying the default
+#: loadout for their own task, and sampled every ten seconds for their fuel and
+#: position. The fit before this one was made over eight airframes that between them
+#: had only two distinct figures, and it was too steep in both directions: it gave a
+#: MiG-31 1,320 nm where it flies 787, a Su-24M 1,109 where it flies 363, and a
+#: Tu-160 the 5,000 nm ceiling where it flies 1,760, while an M-2000C that reaches
+#: 1,192 was given 493 and a Mirage F1 that reaches 1,033 was given 481.
+#:
+#: Over the same sixty-four the median miss falls from 37% to 25%, and the number out
+#: by more than half from nineteen to eleven. Top speed was tried as a second term --
+#: a faster airframe being a draggier one -- and added nothing (R2 0.56 either way).
+RANGE_FIT = {
+    "jet": (46.63, 0.317),
+    "heavy": (124.01, 0.246),
+    # No measurements of either: the pooled fit, with the floors above to catch it.
+    "propeller": (43.29, 0.326),
+    "helicopter": (43.29, 0.326),
+}
+
+#: Least squares runs through the middle of the measurements, which leaves half the
+#: airframes guessed as burning LESS than they do -- a flight told it has the fuel to
+#: get home and has not. A tanker it turns out not to need costs it a detour; the
+#: other way costs the aeroplane, so the fitted range is shifted down until most of
+#: the set is on the safe side.
+#:
+#: Over the sixty-four measured, this beats what the guess did before on every count:
+#: 48 on the safe side against 42, worst optimism 2.6x against 3.7x, and the mean
+#: pessimism barely moves, 1.34x against 1.28x. Going further -- 0.7 puts 55 on the
+#: safe side -- costs a mean 1.53x, which is a tanker planned for flights that do not
+#: need one, and that is the complaint this whole estimate exists to answer.
+RANGE_SAFETY_FACTOR = 0.8
+
+#: The fit is an extrapolation past the biggest thing measured, so it is bounded.
+MAX_NOMINAL_RANGE_NM = 5000.0
+
+#: The measured set runs climb 2.0-2.4x cruise and combat 1.2-2.2x. Both at their
+#: high end compound with the cruise above into an estimate that calls everything
+#: short.
+CLIMB_OVER_CRUISE = 2.4
+COMBAT_OVER_CRUISE = 1.8
+
+#: The measured set reserves 1000 lb on a Viper and 2000 on a Hornet, both near a
+#: sixth of internal.
+ASSUMED_TAXI_LB = 200
+RESERVE_SHARE = 0.17
+MINIMUM_RESERVE_LB = 400.0
+
+
+#: An aircraft that can only do these exists to stay up. Keyed on tasking, not size:
+#: the Super Hornet tanker is a fighter carrying its transferable fuel as "internal".
+SUPPORT_ONLY_TASKS = frozenset(
+    {
+        FlightType.AEWC,
+        FlightType.REFUELING,
+        FlightType.RECOVERY,
+        FlightType.TRANSPORT,
+    }
+)
+
+
+def _airframe_class(aircraft: AircraftType) -> str:
+    if aircraft.helicopter:
+        return "helicopter"
+    tasks = set(aircraft.iter_task_capabilities())
+    if tasks and tasks <= SUPPORT_ONLY_TASKS:
+        return "heavy"
+    if aircraft.max_speed < kph(600):
+        return "propeller"
+    return "jet"
+
+
+def nominal_range_nm(aircraft: AircraftType) -> float:
+    """How far an unmeasured airframe is assumed to reach on its internal fuel."""
+    internal = aircraft.dcs_unit_type.fuel_max * KG_TO_LBS
+    airframe = _airframe_class(aircraft)
+    coefficient, exponent = RANGE_FIT[airframe]
+    fitted = coefficient * internal**exponent * RANGE_SAFETY_FACTOR if internal else 0.0
+    return min(MAX_NOMINAL_RANGE_NM, max(NOMINAL_RANGE_NM[airframe], fitted))
+
+
+def assumed_consumption(aircraft: AircraftType) -> FuelConsumption:
+    """A profile for an airframe nobody has measured, from its fuel capacity."""
+    internal = aircraft.dcs_unit_type.fuel_max * KG_TO_LBS
+    cruise = internal / nominal_range_nm(aircraft)
+    return FuelConsumption(
+        taxi=ASSUMED_TAXI_LB,
+        climb=cruise * CLIMB_OVER_CRUISE,
+        cruise=cruise,
+        combat=cruise * COMBAT_OVER_CRUISE,
+        min_safe=int(max(MINIMUM_RESERVE_LB, internal * RESERVE_SHARE)),
+    )

@@ -3,6 +3,7 @@ from typing import Iterable, List, Optional
 
 from PySide6.QtCore import Signal, Qt, QModelIndex
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -15,6 +16,8 @@ from PySide6.QtWidgets import (
 )
 
 from game import Game
+from qt_ui.widgets.cards import carded, make_transparent
+from qt_ui.widgets.controls import mono, styled_input, wrapped_tooltip
 from game.ato.flight import Flight
 from game.ato.flightplans.custom import CustomFlightPlan
 from game.ato.flightplans.formationattack import FormationAttackFlightPlan
@@ -23,6 +26,8 @@ from game.ato.flightplans.waypointbuilder import WaypointBuilder
 from game.ato.flighttype import FlightType
 from game.ato.flightwaypoint import FlightWaypoint
 from game.ato.flightwaypointtype import FlightWaypointType
+from game.ato.fuelestimate import estimate_fuel_segments
+from qt_ui.windows.mission.flight.fuelsummary import FuelSummary
 from game.utils import feet
 from game.ato.loadouts import Loadout
 from game.ato.package import Package
@@ -30,9 +35,19 @@ from game.theater import Player
 from qt_ui.windows.mission.flight.waypoints.QFlightWaypointList import (
     QFlightWaypointList,
 )
+from qt_ui.windows.mission.flight.waypoints.QPreRefuelOptions import QPreRefuelOptions
 from qt_ui.windows.mission.flight.waypoints.QPredefinedWaypointSelectionWindow import (
     QPredefinedWaypointSelectionWindow,
 )
+
+
+def _footer_caption(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setStyleSheet(
+        "font-size: 11px; font-weight: bold; letter-spacing: 1px; color: #6B7A87;"
+        " background: transparent; border: none;"
+    )
+    return label
 
 
 class QFlightWaypointTab(QFrame):
@@ -47,6 +62,7 @@ class QFlightWaypointTab(QFrame):
     #   * Pickup / dropoff zones are ground-level helo landing zones.
     #   * Refuel / recovery-tanker points are tied to the tanker's orbit altitude.
     #   * Bullseye is a fixed map reference, not a flown waypoint.
+
     BULK_ALTITUDE_SKIP_TYPES = frozenset(
         {
             FlightWaypointType.TAKEOFF,
@@ -83,15 +99,46 @@ class QFlightWaypointTab(QFrame):
     def init_ui(self):
         layout = QGridLayout()
 
+        #: The last route length the list reported, so the footer can be redrawn when
+        #: only the fuel side of it has moved.
+        self._route_length_nm = 0.0
+
         self.flight_waypoint_list = QFlightWaypointList(self.package, self.flight)
         layout.addWidget(self.flight_waypoint_list, 0, 0)
 
+        # Under the table, not a last row: on_changed indexes the rows against
+        # flight_plan.waypoints.
+        self.route_length = QLabel()
+        self.route_length.setFont(mono(14))
+        self.route_length.setStyleSheet(
+            "color: #D3DFE8; background: transparent; border: none;"
+        )
+        self.fuel_summary = FuelSummary(show_bars=True)
+
+        footer = QHBoxLayout()
+        footer.setContentsMargins(14, 0, 14, 0)
+        footer.setSpacing(10)
+        footer.addWidget(_footer_caption("ROUTE"))
+        footer.addWidget(self.route_length)
+        footer.addSpacing(18)
+        footer.addWidget(self.fuel_summary, 1)
+        footer_holder = QWidget()
+        footer_holder.setMinimumHeight(48)
+        footer_holder.setStyleSheet(
+            "background: #1B2732; border: 1px solid #1D2731; border-radius: 3px;"
+        )
+        footer_holder.setLayout(footer)
+
+        self.flight_waypoint_list.route_length_changed.connect(self.show_route_length)
+        # It built itself in its constructor, before this was connected.
+        self.flight_waypoint_list.update_list()
+        layout.addWidget(footer_holder, 1, 0)
+
         rlayout = QVBoxLayout()
+        rlayout.setSpacing(18)
         layout.addLayout(rlayout, 0, 1)
 
-        rlayout.addWidget(QLabel("<strong>Altitude :</strong>"))
-        rlayout.addWidget(QLabel("<small>Set all en-route waypoints</small>"))
-        bulk_alt_layout = QHBoxLayout()
+        # --- altitude -------------------------------------------------------
         self.bulk_altitude = QSpinBox()
         self.bulk_altitude.setMinimum(0)
         self.bulk_altitude.setMaximum(40000)
@@ -99,58 +146,158 @@ class QFlightWaypointTab(QFrame):
         self.bulk_altitude.setValue(self._default_bulk_altitude())
         self.bulk_altitude.setSuffix(" ft")
         self.bulk_altitude.setToolTip(
-            "Apply this MSL altitude to every en-route waypoint. Takeoff, landing, "
-            "divert, target, landing-zone, tanker, and ground (AGL) waypoints are "
-            "left unchanged."
+            wrapped_tooltip(
+                "Apply this altitude to every en-route waypoint, keeping each point's MSL/AGL reference. Takeoff, landing, "
+                "divert, target, landing-zone, tanker, and ground (AGL) waypoints are "
+                "left unchanged."
+            )
         )
-        bulk_alt_layout.addWidget(self.bulk_altitude)
         self.apply_bulk_altitude = QPushButton("Apply to all")
+        self.apply_bulk_altitude.setFixedHeight(28)
         self.apply_bulk_altitude.clicked.connect(self.on_apply_bulk_altitude)
+        bulk_alt_layout = QHBoxLayout()
+        bulk_alt_layout.setContentsMargins(0, 0, 0, 0)
+        bulk_alt_layout.setSpacing(8)
+        bulk_alt_layout.addWidget(styled_input(self.bulk_altitude), 1)
         bulk_alt_layout.addWidget(self.apply_bulk_altitude)
-        rlayout.addLayout(bulk_alt_layout)
+        altitude_box = QWidget()
+        make_transparent(altitude_box)
+        altitude_box.setLayout(bulk_alt_layout)
+        rlayout.addLayout(
+            carded("En-route altitude", altitude_box, "leaves the fixed points alone")
+        )
+        self.pre_refuel_options = QPreRefuelOptions(self.flight, self.on_change)
+        rlayout.addLayout(carded("Pre-mission refuelling", self.pre_refuel_options))
 
-        rlayout.addWidget(QLabel("<strong>Generator :</strong>"))
-        rlayout.addWidget(QLabel("<small>AI compatible</small>"))
-
+        # --- regenerate -----------------------------------------------------
+        # Nine stacked "Recreate as X" buttons, one per task the target accepts, was a
+        # wall of near-identical controls for something you do once. One combo says
+        # what the list holds without spending nine rows on it.
         self.recreate_buttons.clear()
+        self.recreate_selector = QComboBox()
         for task in self.package.target.mission_types(for_player=Player.BLUE):
+            if task.is_afac:
+                from game.ato.afac import enabled
+
+                if not enabled(self.game.settings):
+                    continue
             if task == FlightType.AIR_ASSAULT and not self.game.settings.plugin_option(
                 "ctld"
             ):
                 # Only add Air Assault if ctld plugin is enabled
                 continue
+            self.recreate_selector.addItem(f"as {task}", task)
+        current = self.recreate_selector.findData(self.flight.flight_type)
+        if current >= 0:
+            self.recreate_selector.setCurrentIndex(current)
 
-            def make_closure(arg):
-                def closure():
-                    return self.confirm_recreate(arg)
+        self.recreate_button = QPushButton("Recreate")
+        self.recreate_button.setFixedHeight(28)
+        self.recreate_button.setToolTip(
+            "Throw this flight's route away and build the standard one for the "
+            "selected task."
+        )
+        self.recreate_button.clicked.connect(self.on_recreate_selected)
 
-                return closure
+        recreate_row = QHBoxLayout()
+        recreate_row.setContentsMargins(0, 0, 0, 0)
+        recreate_row.setSpacing(8)
+        recreate_row.addWidget(styled_input(self.recreate_selector), 1)
+        recreate_row.addWidget(self.recreate_button)
 
-            button = QPushButton(f"Recreate as {task}")
-            button.clicked.connect(make_closure(task))
-            rlayout.addWidget(button)
-            self.recreate_buttons.append(button)
-
-        self.add_nav_waypoint = QPushButton("Insert NAV point")
+        self.add_nav_waypoint = QPushButton("Insert NAV point after selected")
+        self.add_nav_waypoint.setFixedHeight(28)
         self.add_nav_waypoint.clicked.connect(self.on_add_nav)
-        rlayout.addWidget(self.add_nav_waypoint)
 
-        rlayout.addWidget(QLabel("<strong>Advanced : </strong>"))
-        rlayout.addWidget(QLabel("<small>Do not use for AI flights</small>"))
+        generator_layout = QVBoxLayout()
+        generator_layout.setContentsMargins(0, 0, 0, 0)
+        generator_layout.setSpacing(8)
+        generator_layout.addLayout(recreate_row)
+        generator_layout.addWidget(self.add_nav_waypoint)
+        generator_box = QWidget()
+        make_transparent(generator_box)
+        generator_box.setLayout(generator_layout)
+        rlayout.addLayout(carded("Regenerate", generator_box, "AI compatible"))
 
-        self.rtb_waypoint = QPushButton("Add RTB Waypoint")
-        self.rtb_waypoint.clicked.connect(self.on_rtb_waypoint)
-        rlayout.addWidget(self.rtb_waypoint)
-
-        self.delete_selected = QPushButton("Delete Selected")
-        self.delete_selected.clicked.connect(self.on_delete_waypoint)
-        rlayout.addWidget(self.delete_selected)
-
-        self.open_fast_waypoint_button = QPushButton("Add Waypoint")
+        # --- by hand --------------------------------------------------------
+        self.open_fast_waypoint_button = QPushButton("Add waypoint...")
+        self.open_fast_waypoint_button.setFixedHeight(28)
         self.open_fast_waypoint_button.clicked.connect(self.on_fast_waypoint)
-        rlayout.addWidget(self.open_fast_waypoint_button)
+
+        self.rtb_waypoint = QPushButton("Add RTB")
+        self.rtb_waypoint.setFixedHeight(28)
+        self.rtb_waypoint.clicked.connect(self.on_rtb_waypoint)
+
+        self.delete_selected = QPushButton("Delete selected")
+        self.delete_selected.setFixedHeight(28)
+        # The only destructive control on the tab, and the only red one.
+        self.delete_selected.setStyleSheet(
+            "QPushButton { background: #3B2523; color: #E8B7B3;"
+            " border: 1px solid #A8443F; border-radius: 3px; font-size: 12px; }"
+            "QPushButton:hover { background: #4A2B29; }"
+            "QPushButton:disabled { background: #241D1D; color: #6B5352;"
+            " border-color: #4A3230; }"
+        )
+        self.delete_selected.clicked.connect(self.on_delete_waypoint)
+
+        manual_top = QHBoxLayout()
+        manual_top.setContentsMargins(0, 0, 0, 0)
+        manual_top.setSpacing(8)
+        manual_top.addWidget(self.open_fast_waypoint_button, 1)
+        manual_top.addWidget(self.rtb_waypoint)
+
+        manual_layout = QVBoxLayout()
+        manual_layout.setContentsMargins(0, 0, 0, 0)
+        manual_layout.setSpacing(8)
+        manual_layout.addLayout(manual_top)
+        manual_box = QWidget()
+        make_transparent(manual_box)
+        manual_box.setLayout(manual_layout)
+
+        # A hand-added waypoint is what a player can fly and the AI cannot: we have
+        # already seen an edited route take DCS down with it. So ADDING is greyed out
+        # for any flight with an AI seat in it, and says why.
+        #
+        # Deleting is not, because whether it is safe is a property of the waypoint
+        # rather than of the crew: taking back a nav point you added yourself, or a
+        # refuelling stop, or the join of a flight that is the whole package, leaves a
+        # plan the AI can still fly. So the button sits OUTSIDE the greyed box -- a
+        # disabled parent disables its children whatever they say -- and turns itself
+        # on for a selection it can actually reach.
+        ai_seats = sum(
+            1 for member in self.flight.iter_members() if not member.is_player
+        )
+        if ai_seats:
+            crew = "seat" if ai_seats == 1 else "seats"
+            hint = f"adding disabled: {ai_seats} AI {crew} in this flight"
+        else:
+            hint = "all seats are players"
+        self.manual_box = manual_box
+        manual_box.setEnabled(not ai_seats)
+
+        editing = QVBoxLayout()
+        editing.setContentsMargins(0, 0, 0, 0)
+        editing.setSpacing(8)
+        editing.addWidget(manual_box)
+        editing.addWidget(self.delete_selected)
+        editing_box = QWidget()
+        make_transparent(editing_box)
+        editing_box.setLayout(editing)
+        rlayout.addLayout(carded("Manual editing", editing_box, hint, loud_hint=True))
+
+        self.flight_waypoint_list.selectionModel().selectionChanged.connect(
+            self.refresh_delete_button
+        )
+        self.flight_waypoint_list.delete_requested.connect(self.on_delete_requested)
+        self.refresh_delete_button()
+
         rlayout.addStretch()
         self.setLayout(layout)
+
+    def on_recreate_selected(self) -> None:
+        task = self.recreate_selector.currentData()
+        if task is not None:
+            self.confirm_recreate(task)
 
     def on_add_nav(self):
         selected = self.flight_waypoint_list.selectedIndexes()
@@ -179,29 +326,58 @@ class QFlightWaypointTab(QFrame):
             )
             self.on_change()
 
-    def on_delete_waypoint(self):
-        waypoints = []
+    def selected_waypoints(self) -> list[FlightWaypoint]:
+        """The waypoints under the selection, in list order, without the departure."""
+        waypoints: list[FlightWaypoint] = []
         selection = self.flight_waypoint_list.selectionModel()
         for selected_row in selection.selectedIndexes():
-            if selected_row.row() > 0:
-                waypoints.append(self.flight.flight_plan.waypoints[selected_row.row()])
-        for waypoint in waypoints:
+            if selected_row.row() <= 0:
+                continue
+            # Never by row index: a folded target group is one row standing for
+            # several, so the row and the waypoint list stopped lining up.
+            waypoint = self.flight_waypoint_list.waypoint_at_row(selected_row.row())
+            if waypoint is not None and waypoint not in waypoints:
+                waypoints.append(waypoint)
+        return waypoints
+
+    def refresh_delete_button(self, *_args: object) -> None:
+        """On for a selection this flight can actually give up.
+
+        Every selected waypoint has to be one, not just one of them: half a deletion is
+        worse than none, and a player who selected four things and got one deleted has
+        to work out which.
+        """
+        if self.delete_selected is None:
+            return
+        waypoints = self.selected_waypoints()
+        deletable = bool(waypoints) and all(
+            self.waypoint_is_deletable(waypoint) for waypoint in waypoints
+        )
+        self.delete_selected.setEnabled(deletable or self.manual_box.isEnabled())
+
+    def waypoint_is_deletable(self, waypoint: FlightWaypoint) -> bool:
+        """Whether this one can go without rebuilding the plan around it."""
+        return self.flight.flight_plan.can_delete_waypoint(waypoint)
+
+    def on_delete_requested(self) -> None:
+        """Delete pressed over the list. Under the button's rule, so the key can never
+        do what the button refuses to."""
+        if self.delete_selected is not None and self.delete_selected.isEnabled():
+            self.on_delete_waypoint()
+
+    def on_delete_waypoint(self):
+        for waypoint in self.selected_waypoints():
             self.delete_waypoint(waypoint)
         self.on_change()
+        self.refresh_delete_button()
 
     def delete_waypoint(self, waypoint: FlightWaypoint) -> None:
         # Need to degrade to a custom flight plan and remove the waypoint.
         # If the waypoint is a target waypoint and is not the last target
         # waypoint, we don't need to degrade.
         fp = self.flight.flight_plan
-        if isinstance(fp, FormationAttackFlightPlan):
-            is_target = waypoint in fp.target_area_waypoint.targets
-            count = len(fp.target_area_waypoint.targets)
-            if is_target and count > 1:
-                fp.target_area_waypoint.targets.remove(waypoint)
-                return
         model = self.flight_waypoint_list.model
-        if fp.layout.delete_waypoint(waypoint):
+        if fp.delete_waypoint(waypoint):
             model.removeRow(model.rowCount() - 1)
             return
 
@@ -256,6 +432,13 @@ class QFlightWaypointTab(QFrame):
             self.flight.degrade_to_custom_flight_plan()
 
     def confirm_recreate(self, task: FlightType) -> None:
+        if task.is_afac and self.flight.client_count:
+            QMessageBox.information(
+                self,
+                "AI pilots only",
+                "Replace player pilots before changing this flight to an AFAC mission.",
+            )
+            return
         result = QMessageBox.question(
             self,
             "Regenerate flight?",
@@ -288,11 +471,12 @@ class QFlightWaypointTab(QFrame):
             self.on_change()
 
     def _is_bulk_editable(self, waypoint: FlightWaypoint) -> bool:
-        # Skip pattern waypoints and any AGL/ground-referenced point (takeoff and
-        # landing are RADIO, alt 0) so the bulk set only moves the en-route legs.
-        if waypoint.waypoint_type in self.BULK_ALTITUDE_SKIP_TYPES:
-            return False
-        return waypoint.alt_type != "RADIO"
+        # By type only. Skipping every AGL point as well froze whole flight plans:
+        # a helicopter cruises AGL, so an Apache had nothing left to set, and a
+        # low-level A-10 most of a route. The points that must not move -- takeoff,
+        # landing, pattern, zones, targets -- are in the list above whatever they are
+        # referenced to. A waypoint keeps its own reference; only the number changes.
+        return waypoint.waypoint_type not in self.BULK_ALTITUDE_SKIP_TYPES
 
     def _default_bulk_altitude(self) -> int:
         # Seed the spinner with the highest en-route altitude already planned so the
@@ -305,14 +489,45 @@ class QFlightWaypointTab(QFrame):
         return max(altitudes, default=0)
 
     def on_apply_bulk_altitude(self) -> None:
+        from game.ato.waypointaltitude import validate_altitude_edit
+
         altitude = feet(self.bulk_altitude.value())
+        warnings: set[str] = set()
+        try:
+            for waypoint in self.flight.flight_plan.waypoints:
+                if self._is_bulk_editable(waypoint):
+                    warning = validate_altitude_edit(waypoint, altitude)
+                    if warning:
+                        warnings.add(warning)
+        except ValueError as error:
+            QMessageBox.warning(self, "Invalid waypoint altitude", str(error))
+            return
         changed = False
         for waypoint in self.flight.flight_plan.waypoints:
             if self._is_bulk_editable(waypoint):
-                waypoint.alt = altitude
+                waypoint.apply_altitude_edit(altitude)
                 changed = True
         if changed:
             self.on_change()
+            if warnings:
+                QMessageBox.warning(
+                    self, "Terrain elevation unavailable", "\n".join(sorted(warnings))
+                )
+
+    def refresh_fuel(self) -> None:
+        """Recompute the footer without the route having changed.
+
+        Carried fuel is half of the estimate and it is set on another tab, so
+        removing a drop tank used to leave this line showing the old total until
+        something moved a waypoint.
+        """
+        self.show_route_length(self._route_length_nm)
+
+    def show_route_length(self, nautical_miles: float) -> None:
+        self._route_length_nm = nautical_miles
+        self.route_length.setText(f"{nautical_miles:.0f} nm")
+
+        self.fuel_summary.show_estimates(estimate_fuel_segments(self.flight))
 
     def on_change(self):
         self.flight_waypoint_list.update_list()

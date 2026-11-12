@@ -1,7 +1,13 @@
 price: 10
+introduced: 2007
+# Conservative theatre-planning radius, not the generic 150 NM fighter fallback.
+max_range: 500
 variants:
   MQ-9 Reaper: null
 tasks:
+  DEAD: 10
   BAI: 10
   CAS: 10
   OCA/Aircraft: 10
+secondary_tasks:
+  - DEAD

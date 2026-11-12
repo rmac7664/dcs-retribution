@@ -52,6 +52,7 @@ from game.ground_forces.combat_stance import CombatStance
 from game.point_with_heading import PointWithHeading
 from game.runways import RunwayAssigner, RunwayData
 from game.scenery_group import SceneryGroup
+from game.settings.settings import DEFAULT_RUNWAY_REPAIR_TURNS
 from game.sidc import (
     Entity,
     LandInstallationEntity,
@@ -270,6 +271,23 @@ class GroundUnitAllocations:
     ordered: dict[GroundUnitType, int]
     transferring: dict[GroundUnitType, int]
 
+    #: Units this base has been ordered to send away but which have found no lift
+    #: yet. They are part of ``present``: still here, still deployable, still
+    #: counted in the ground war, and they leave only when a transport turns up.
+    pending_transfer: dict[GroundUnitType, int] = field(default_factory=dict)
+
+    #: Units that have left this base under a transport this turn. No longer part of
+    #: ``present`` -- they were debited when they departed.
+    transferring_out: dict[GroundUnitType, int] = field(default_factory=dict)
+
+    @property
+    def total_pending_transfer(self) -> int:
+        return sum(self.pending_transfer.values())
+
+    @property
+    def total_transferring_out(self) -> int:
+        return sum(self.transferring_out.values())
+
     @property
     def all(self) -> dict[GroundUnitType, int]:
         combined: dict[GroundUnitType, int] = defaultdict(int)
@@ -308,6 +326,10 @@ class GroundUnitAllocations:
         return sum(self.transferring.values())
 
 
+# Default retained for callers constructing a standalone RunwayStatus.
+RUNWAY_REPAIR_TURNS = DEFAULT_RUNWAY_REPAIR_TURNS
+
+
 @dataclass
 class RunwayStatus:
     damaged: bool = False
@@ -323,10 +345,13 @@ class RunwayStatus:
         self.repair_turns_remaining = None
         self.damaged = False
 
-    def begin_repair(self) -> None:
+    def begin_repair(self, turns: int = RUNWAY_REPAIR_TURNS) -> None:
         if self.repair_turns_remaining is not None:
             logging.error("Runway already under repair. Restarting.")
-        self.repair_turns_remaining = 4
+        if turns <= 0:
+            self.repair()
+        else:
+            self.repair_turns_remaining = turns
 
     def process_turn(self) -> None:
         if self.repair_turns_remaining is not None:
@@ -424,6 +449,7 @@ class ParkingType:
 
 
 class ControlPoint(MissionTarget, SidcDescribable, ABC):
+    extra_aircraft_mechanics: int = 0
     # Not sure what distance DCS uses, but assuming it's about 2NM since that's roughly
     # the distance of the circle on the map.
     CAPTURE_DISTANCE = meters(TRIGGER_RADIUS_CAPTURE)
@@ -457,6 +483,7 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
         self.ground_spawns: List[Tuple[PointWithHeading, Point]] = []
 
         self._coalition: Optional[Coalition] = None
+        self.last_capture_turn: int | None = None
         self.captured_invert = False
         self.front_lines: dict[ControlPoint, FrontLine] = {}
         # TODO: Should be Airbase specific.
@@ -578,6 +605,10 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
 
     @property
     def sidc_status(self) -> Status:
+        if self.is_fleet and self.status is ControlPointStatus.Functional:
+            for tgo in self.ground_objects:
+                if tgo.is_control_point:
+                    return tgo.sidc_status
         if self.status is ControlPointStatus.Functional:
             return Status.PRESENT
         if self.status is ControlPointStatus.Damaged:
@@ -799,6 +830,14 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
         """
         ...
 
+    @property
+    def sunk(self) -> bool:
+        """A carrier or LHA whose flight deck has gone down. Only a ship sinks."""
+        return False
+
+    def sink(self, events: GameUpdateEvents) -> None:
+        """What going down does to what was aboard. Only a ship sinks."""
+
     # TODO: Should be naval specific.
     def get_carrier_group_name(self) -> Optional[str]:
         """
@@ -842,6 +881,11 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
                         in [
                             UnitClass.AIRCRAFT_CARRIER,
                             UnitClass.HELICOPTER_CARRIER,
+                            # An LHA control point's ship is not always a helicopter
+                            # carrier: a landing dock like the Spanish L-52 flies two
+                            # helicopters and is class LandingShip. Leaving it out
+                            # returned None and crashed the base dialog.
+                            UnitClass.LANDING_SHIP,
                         ]
                         and issubclass(carrier_type, ShipType)
                     ):
@@ -893,7 +937,9 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
         return control_point.is_friendly(self.captured)
 
     def capture_equipment(self, game: Game) -> None:
-        total = self.base.total_armor_value
+        from game.resale import resale_value
+
+        total = resale_value(game.settings, self.base.total_armor_value)
         self.base.armor.clear()
         game.adjust_budget(
             total, player=Player.BLUE if self.captured.is_red else Player.RED
@@ -925,7 +971,9 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
                 destination = heapq.heappushpop(destinations, destination)
 
     def capture_aircraft(self, game: Game, airframe: AircraftType, count: int) -> None:
-        value = airframe.price * count
+        from game.resale import resale_value
+
+        value = resale_value(game.settings, airframe.price * count)
         game.adjust_budget(
             value, player=Player.BLUE if self.captured.is_red else Player.RED
         )
@@ -996,10 +1044,18 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
         return base_for_fewest_losses
 
     def _retreat_squadron(self, game: Game, squadron: Squadron) -> None:
+        from game.aircraftmaintenance import remove_damaged, repairs
+
+        if repairs(squadron):
+            remove_damaged(game, squadron, refund=False)
         destination = self.aircraft_retreat_destination(squadron)
         if destination is None:
             squadron.refund_orders()
-            self.capture_aircraft(game, squadron.aircraft, squadron.owned_aircraft)
+            count = squadron.owned_aircraft
+            squadron.owned_aircraft = 0
+            squadron.untasked_aircraft = 0
+            if count:
+                self.capture_aircraft(game, squadron.aircraft, count)
             return
 
         parking_type = ParkingType().from_squadron(squadron)
@@ -1030,8 +1086,17 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
     def release_parking_slots(self) -> None:
         pass
 
+    def is_capture_protected(self, turn: int) -> bool:
+        """Allow one full reinforcement turn after a change of ownership."""
+        # Older saves have no capture timestamp; do not invent one on load.
+        captured_turn = getattr(self, "last_capture_turn", None)
+        return captured_turn is not None and 0 <= turn - captured_turn <= 1
+
     # TODO: Should be Airbase specific.
     def capture(self, game: Game, events: GameUpdateEvents, for_player: Player) -> None:
+        from game.groundmovement.dispatch import rehome_before_capture
+
+        rehome_before_capture(game, self, events)
         new_coalition = game.coalition_for(for_player)
         game.warehouse_logistics.on_capture(game, self)
         self.ground_unit_orders.refund_all(self.coalition)
@@ -1040,6 +1105,10 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
         self.release_parking_slots()
         self.depopulate_uncapturable_tgos()
         self._coalition = new_coalition
+        self.last_capture_turn = game.turn
+        from game.missiongenerator.motorpoolpopulator import MotorpoolPopulator
+
+        MotorpoolPopulator(game)._rehome_motorpools(events)
         self.base.set_strength_to_minimum()
         self._clear_front_lines(events)
         self._create_missing_front_lines(game.laser_code_registry, events)
@@ -1064,7 +1133,20 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
     @abstractmethod
     def can_operate(self, aircraft: AircraftType) -> bool: ...
 
+    #: Whether "Ignore parking space at airbases" applies here. Only airbases: a
+    #: carrier's deck is the thing being modelled, not a shortage of concrete.
+    ignores_parking_limits = False
+
     def unclaimed_parking(self, parking_type: ParkingType) -> int:
+        if (
+            self.ignores_parking_limits
+            and self.coalition.game.settings.ignore_parking_limits
+        ):
+            # Everything that gates on parking -- buying, auto-procurement,
+            # relocating a squadron, starting full -- reads this one method, so the
+            # setting only has to answer here. Not literally unbounded: the number
+            # still has to survive being compared and subtracted from.
+            return 10_000
         return (
             self.total_aircraft_parking(parking_type)
             - self.allocated_aircraft(parking_type).total
@@ -1107,20 +1189,138 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
         if not self.runway_can_be_repaired:
             logging.error(f"Cannot repair runway at {self}")
             return
-        self.runway_status.begin_repair()
+        self.runway_status.begin_repair(
+            self.coalition.game.settings.runway_repair_turns
+        )
 
-    def process_turn(self, game: Game) -> None:
+    def process_ground_object_repairs(
+        self, game: Game, events: GameUpdateEvents
+    ) -> None:
+        destroyed_units = game.get_destroyed_units()
+        for ground_object in self.ground_objects:
+            for unit in ground_object.units:
+                turns_remaining = unit.repair_turns_remaining
+                if turns_remaining is None:
+                    continue
+                if unit.alive:
+                    unit.repair_turns_remaining = None
+                    unit.repair_cost_paid = None
+                    continue
+                if turns_remaining <= 1:
+                    unit.repair_turns_remaining = None
+                    unit.revive(events)
+                    for entry in list(destroyed_units):
+                        p = Point(
+                            float(entry["x"]),
+                            float(entry["z"]),
+                            game.theater.terrain,
+                        )
+                        if p.distance_to_point(unit.position) < 15:
+                            destroyed_units.remove(entry)
+                else:
+                    unit.repair_turns_remaining = turns_remaining - 1
+
+    @staticmethod
+    def _max_pending_repair_turns(ground_object: TheaterGroundObject) -> Optional[int]:
+        """Highest repair_turns_remaining among the object's still-dead units.
+
+        The object is only fully back in service once every pending unit has
+        finished, so the object-level estimate is the slowest of them. Returns
+        None when nothing is currently under repair.
+        """
+        turns: list[int] = [
+            unit.repair_turns_remaining
+            for unit in ground_object.units
+            if not unit.alive and unit.repair_turns_remaining is not None
+        ]
+        return max(turns) if turns else None
+
+    def report_repairs(
+        self,
+        game: Game,
+        runway_was_repairing: bool,
+        ground_objects_repairing: Iterable[TheaterGroundObject],
+    ) -> None:
+        """Surface this turn's repair progress in the info panel.
+
+        Finished repairs (completed this turn) are reported for both coalitions.
+        For the player's own bases we additionally report repairs that started or
+        continued this turn, with the number of turns remaining.
+
+        Args:
+            runway_was_repairing: Whether the runway was under repair before this
+                turn was processed.
+            ground_objects_repairing: Ground objects that had pending repairs
+                before this turn was processed.
+        """
+        # Local: game.squadrons reaches back into this module.
+        from ..squadrons.experience import turns_phrase
+
+        if self.captured.is_neutral:
+            return
+        is_player = self.captured.is_blue
+        who = "We have" if is_player else "OPFOR has"
+
+        runway_status = self.runway_status
+        if runway_was_repairing and runway_status is not None:
+            if (
+                runway_status.repair_turns_remaining is None
+                and not runway_status.damaged
+            ):
+                game.message(f"{who} finished repairing the runway at {self}")
+            elif is_player and runway_status.repair_turns_remaining is not None:
+                game.message(
+                    f"Runway repair at {self} in progress, "
+                    f"{runway_status.repair_turns_remaining} turns remaining"
+                )
+
+        for ground_object in ground_objects_repairing:
+            # A codename says nothing on its own: PYTHON and PRONGHORN are a factory
+            # and a SAM site, and which of the two came back matters.
+            what = f"{ground_object.obj_name} ({ground_object})"
+            if not ground_object.has_pending_repairs:
+                game.message(f"{who} finished repairs at {what}")
+                if is_player:
+                    from game.notifications import building_ready
+
+                    building_ready(game, ground_object)
+            elif is_player:
+                turns_remaining = ControlPoint._max_pending_repair_turns(ground_object)
+                if turns_remaining is not None:
+                    game.message(
+                        f"Repairs at {what} in progress, "
+                        f"{turns_phrase(turns_remaining)} remaining"
+                    )
+
+    def process_turn(self, game: Game, events: GameUpdateEvents) -> None:
         # We're running at the end of the turn, so the time right now is irrelevant, and
         # we don't know what time the next turn will start yet. It doesn't actually
         # matter though, because the first thing the start of turn action will do is
         # clear the ATO and replan the airlifts with the correct time.
-        self.ground_unit_orders.process(game, game.conditions.start_time)
+        self.ground_unit_orders.process(game, game.conditions.start_time, events)
 
         self.release_parking_slots()
 
+        # Snapshot repair state before processing so we can tell which repairs
+        # finished this turn (reported for both sides) from those still in
+        # progress (reported for the player only).
         runway_status = self.runway_status
+        runway_was_repairing = (
+            runway_status is not None
+            and runway_status.repair_turns_remaining is not None
+        )
+        ground_objects_repairing = [
+            ground_object
+            for ground_object in self.ground_objects
+            if self._max_pending_repair_turns(ground_object) is not None
+        ]
+
         if runway_status is not None:
             runway_status.process_turn()
+
+        self.process_ground_object_repairs(game, events)
+
+        self.report_repairs(game, runway_was_repairing, ground_objects_repairing)
 
         # Process movements for ships control points group
         if self.target_position is not None:
@@ -1180,16 +1380,25 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
                 on_order[unit_bought] = count
 
         transferring: dict[GroundUnitType, int] = defaultdict(int)
+        pending_transfer: dict[GroundUnitType, int] = defaultdict(int)
+        transferring_out: dict[GroundUnitType, int] = defaultdict(int)
         for transfer in transfers:
             # Supply runs carry cargo in trucks; the trucks aren't reinforcements.
             if transfer.destination == self and transfer.supplies is None:
                 for unit_type, count in transfer.units.items():
                     transferring[unit_type] += count
+            if transfer.origin == self:
+                # Still here until a lift exists; gone once one does.
+                bucket = transferring_out if transfer.departed else pending_transfer
+                for unit_type, count in transfer.units.items():
+                    bucket[unit_type] += count
 
         return GroundUnitAllocations(
             self.base.armor,
             on_order,
             transferring,
+            dict(pending_transfer),
+            dict(transferring_out),
         )
 
     @property
@@ -1281,7 +1490,9 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
     def status(self) -> ControlPointStatus: ...
 
 
-class Airfield(ControlPoint, CTLD):
+class Airfield(ControlPoint, CTLD, TacanContainer):
+    ignores_parking_limits = True
+
     def __init__(
         self,
         airport: Airport,
@@ -1487,9 +1698,111 @@ class NavalControlPoint(
                 return g
         raise RuntimeError(f"Found no carrier/LHA group for {self.name}")
 
+    def _has_usable_flight_deck(self) -> bool:
+        # Initial squadron assignment precedes ship generation. Once the fleet is
+        # populated, surviving escorts cannot substitute for its flight deck.
+        if not any(
+            isinstance(tgo, GenericCarrierGroundObject) for tgo in self.ground_objects
+        ):
+            return True
+        return self.runway_is_operational()
+
     @property
     def runway_is_destroyable(self) -> bool:
         return False
+
+    @property
+    def sunk(self) -> bool:
+        try:
+            return not self.runway_is_operational()
+        except RuntimeError:
+            # No carrier group to ask. Read whenever one of its ships dies, which is
+            # while a mission's results are committed: a raise would lose them all.
+            logging.exception(f"Could not tell whether {self} has sunk")
+            return False
+
+    def sink(self, events: GameUpdateEvents) -> None:
+        """The flight deck went down.
+
+        The aircraft no package had taken were aboard and went down with it. Those a
+        package had were in the air: they land at the nearest friendly base that can
+        take them, and the squadron moves there. The pilots are picked up either
+        way; a squadron used to be disbanded with its ship, every pilot with it.
+        """
+        game = self.coalition.game
+        for squadron in list(self.squadrons):
+            from game.aircraftmaintenance import remove_damaged, repairs
+
+            if repairs(squadron):
+                remove_damaged(game, squadron, refund=False)
+            aboard = max(0, min(squadron.untasked_aircraft, squadron.owned_aircraft))
+            squadron.owned_aircraft -= aboard
+            squadron.destroyed_aircraft += aboard
+            squadron.refund_orders()
+            airborne = squadron.owned_aircraft
+            landed_at = self._divert(squadron) if airborne else None
+            said = []
+            if aboard:
+                said.append(f"{aboard} went down with it")
+            if landed_at is not None and squadron.owned_aircraft:
+                said.append(
+                    f"{squadron.owned_aircraft} in the air landed at {landed_at}"
+                )
+            if ditched := airborne - squadron.owned_aircraft:
+                said.append(f"{ditched} in the air had nowhere to land and ditched")
+            if said:
+                game.message(
+                    f"{self.name} sunk",
+                    f"{squadron} ({squadron.aircraft}): {'; '.join(said)}. Its pilots"
+                    " survived.",
+                )
+        for squadron in self.coalition.air_wing.iter_squadrons():
+            if squadron.destination == self:
+                # Nowhere to land: it stays where it is.
+                squadron.destination = None
+        events.update_control_point(self)
+
+    def _divert(self, squadron: Squadron) -> Optional[ControlPoint]:
+        """Land the squadron's aircraft at the nearest friendly base in reach that can
+        take them, with room for all of them if one has it; what finds no room ditches.
+        """
+        parking_type = ParkingType().from_squadron(squadron)
+        reach = squadron.aircraft.max_mission_range * 2
+        bases = sorted(
+            (
+                cp
+                for cp in self.coalition.game.theater.controlpoints
+                if cp is not self
+                and cp.captured == self.captured
+                and not cp.sunk
+                and cp.runway_is_operational()
+                and cp.can_operate(squadron.aircraft)
+                and cp.distance_to(self) <= reach.meters
+            ),
+            key=lambda cp: cp.distance_to(self),
+        )
+        if not bases:
+            squadron.destroyed_aircraft += squadron.owned_aircraft
+            squadron.owned_aircraft = 0
+            return None
+        roomy = [
+            cp
+            for cp in bases
+            if cp.unclaimed_parking(parking_type) >= squadron.owned_aircraft
+        ]
+        base = (
+            roomy[0]
+            if roomy
+            else max(bases, key=lambda cp: cp.unclaimed_parking(parking_type))
+        )
+        overflow = squadron.owned_aircraft - max(
+            0, base.unclaimed_parking(parking_type)
+        )
+        if overflow > 0:
+            squadron.owned_aircraft -= overflow
+            squadron.destroyed_aircraft += overflow
+        squadron.relocate_to(base)
+        return base
 
     def runway_is_operational(self) -> bool:
         # Necessary because it's possible for the carrier itself to have sunk
@@ -1548,9 +1861,15 @@ class NavalControlPoint(
 
     @property
     def status(self) -> ControlPointStatus:
-        if not self.runway_is_operational():
+        # Reflect unit survival of the carrier group on the map symbol, the
+        # same way naval groups do: green when intact, yellow while anything
+        # survives (e.g. the carrier itself sunk but escorts remain), red only
+        # once the whole group is gone. This is purely cosmetic;
+        # runway_is_operational() still governs whether the carrier can launch.
+        main_tgo = self.find_main_tgo()
+        if main_tgo.is_dead:
             return ControlPointStatus.Destroyed
-        if self.find_main_tgo().dead_units:
+        if main_tgo.dead_units:
             return ControlPointStatus.Damaged
         return ControlPointStatus.Functional
 
@@ -1584,7 +1903,7 @@ class Carrier(NavalControlPoint):
         return True
 
     def can_operate(self, aircraft: AircraftType) -> bool:
-        return aircraft.carrier_capable
+        return aircraft.carrier_capable and self._has_usable_flight_deck()
 
     def total_aircraft_parking(self, parking_type: ParkingType) -> int:
         return 90
@@ -1596,7 +1915,7 @@ class Carrier(NavalControlPoint):
 
 class EssexCarrier(Carrier):
     def can_operate(self, aircraft: AircraftType) -> bool:
-        return aircraft.lha_capable
+        return aircraft.lha_capable and self._has_usable_flight_deck()
 
 
 class Lha(NavalControlPoint):
@@ -1619,7 +1938,7 @@ class Lha(NavalControlPoint):
         return True
 
     def can_operate(self, aircraft: AircraftType) -> bool:
-        return aircraft.lha_capable
+        return aircraft.lha_capable and self._has_usable_flight_deck()
 
     def total_aircraft_parking(self, parking_type: ParkingType) -> int:
         return 20

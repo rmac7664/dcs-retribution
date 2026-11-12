@@ -1,11 +1,13 @@
 import copy
-from typing import Union
+from collections.abc import Sequence
+from typing import Any, Union
 
 from dcs import Point
-from dcs.planes import B_17G, B_52H, Tu_22M3, B_1B, F_15ESE
+from dcs.planes import B_17G, B_52H, Tu_22M3, B_1B, F_15ESE, C_130J_30
 from dcs.point import MovingPoint
 from dcs.task import Bombing, Expend, OptFormation, WeaponType, CarpetBombing
 
+from game.theater.theatergroundobject import MotorpoolGroundObject
 from game.utils import mach, meters
 from .pydcswaypointbuilder import PydcsWaypointBuilder
 
@@ -14,6 +16,14 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
     _special_wpts_injected: bool = False
 
     def add_tasks(self, waypoint: MovingPoint) -> None:
+        if self.group.units[0].unit_type is C_130J_30 and any(
+            unit.pylons.get(3, {}).get("CLSID") == "{GBU-43}"
+            for unit in self.group.units
+        ):
+            self.add_moab_task(waypoint)
+            self.register_special_ingress_points()
+            return
+
         bomber = self.group.units[0].unit_type in [B_17G, Tu_22M3]
         bomber_guided = self.group.units[0].unit_type in [B_1B, B_52H]
         if bomber_guided or not bomber:
@@ -27,8 +37,38 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
         waypoint.tasks.append(OptFormation.finger_four_open())
         self.register_special_ingress_points()
 
+    def add_moab_task(self, waypoint: MovingPoint) -> None:
+        """Use one normal bombing pass without the generic jet-speed override."""
+        targets = self.waypoint.targets
+        if isinstance(self.package.target, MotorpoolGroundObject):
+            targets = self.package.target.strike_targets
+        if not targets:
+            return
+
+        center: Point = copy.copy(targets[0].position)
+        for target in targets[1:]:
+            center += target.position
+        center /= len(targets)
+        waypoint.tasks.append(
+            Bombing(
+                center,
+                weapon_type=WeaponType.Auto,
+                expend=Expend.All,
+                altitude=waypoint.alt,
+            )
+        )
+
     def add_bombing_tasks(self, waypoint: MovingPoint) -> None:
         targets = self.waypoint.targets
+        if isinstance(self.package.target, MotorpoolGroundObject):
+            # The motorpool is a live cache reconciled from the current reserve;
+            # re-derive the units at ingress so the tasks match what actually
+            # rendered. Mission spec: one bomb task per parked unit (an empty
+            # reserve adds nothing), not a single centroid task.
+            targets = self.package.target.strike_targets
+            if targets:
+                self.add_bombing_task_per_target(waypoint, targets, WeaponType.Bombs)
+            return
         if not targets:
             return
 
@@ -62,12 +102,39 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
     def add_strike_tasks(
         self, waypoint: MovingPoint, weapon_type: WeaponType = WeaponType.Auto
     ) -> None:
+        if not self.waypoint.targets:
+            # Nothing to strike (e.g. an objective whose units are all already
+            # destroyed). Skip -- as add_bombing_tasks does -- so we neither add
+            # an empty attack task nor divide by zero on the units/targets ratio.
+            return
+        self.add_bombing_task_per_target(waypoint, self.waypoint.targets, weapon_type)
+
+        # Register special waypoints
+        if not self._special_wpts_injected:
+            self.register_special_strike_points(self.waypoint.targets)
+            if self.flight.unit_type.dcs_unit_type == F_15ESE:
+                self.register_special_strike_points(self.flight.custom_targets, 2)
+            self._special_wpts_injected = True
+
+    def add_bombing_task_per_target(
+        self,
+        waypoint: MovingPoint,
+        targets: Sequence[Any],
+        weapon_type: WeaponType,
+    ) -> None:
+        """Add one Bombing task per target, sizing the expenditure per task.
+
+        The expend per target is scaled by the aircraft-to-target ratio so a
+        package does not dump its whole payload on the first task: with at
+        least one aircraft per target each aircraft expends everything per
+        target, and progressively less as targets outnumber aircraft.
+        """
         bomber = self.group.units[0].unit_type in [B_1B, B_52H]
-        ratio = len(self.group.units) / len(self.waypoint.targets)
-        for target in self.waypoint.targets:
+        ratio = len(self.group.units) / len(targets)
+        for target in targets:
             bombing = Bombing(target.position, weapon_type=weapon_type)
             # If there is only one target, drop all ordnance in one pass with group attack.
-            if len(self.waypoint.targets) == 1:
+            if len(targets) == 1:
                 bombing.params["expend"] = Expend.All.value
                 bombing.params["groupAttack"] = True
             elif ratio >= 1:
@@ -90,10 +157,3 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
             waypoint.tasks.append(bombing)
 
             waypoint.speed = mach(0.85, meters(waypoint.alt)).meters_per_second
-
-        # Register special waypoints
-        if not self._special_wpts_injected:
-            self.register_special_strike_points(self.waypoint.targets)
-            if self.flight.unit_type.dcs_unit_type == F_15ESE:
-                self.register_special_strike_points(self.flight.custom_targets, 2)
-            self._special_wpts_injected = True

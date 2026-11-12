@@ -7,6 +7,9 @@
     "en_US"
   ],
   "aircrafts": [
+    "F-15EX Eagle II",
+    "F-15EX Eagle II (CFTs)",
+    "F-15C EG Golden Eagle",
     "A-10C Thunderbolt II (Suite 3)",
     "A-10C Thunderbolt II (Suite 7)",
     "AH-64D Apache Longbow",
@@ -17,7 +20,6 @@
     "B-52H Stratofortress",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "C-17A",
     "CH-47D",
     "CH-47F Block I",
@@ -45,7 +47,9 @@
     "UH-60A",
     "UH-60L",
     "MH-60L DAP",
-    "[CH] B-21"
+    "[CH] B-21",
+    "MQ-9 Reaper",
+    "RQ-1A Predator"
   ],
   "awacs": [
     "E-2D Advanced Hawkeye",
@@ -92,11 +96,7 @@
     "[CH] M777 LTH M982 Excalibur",
     "[CH] M777 LTH M982 Excalibur (MTVR)",
     "[CH] M777 LTH M795 (MTVR)",
-    "[CH] M270A1 MLRS (GLSDB)",
-    "MLRS M142 HIMARS ATACMS CM [CH]",
-    "MLRS M142 HIMARS ATACMS HE [CH]",
-    "MLRS M142 HIMARS GMLRS CM [CH]",
-    "MLRS M142 HIMARS GMLRS HE [CH]"
+    "[CH] M270A1 MLRS (GLSDB)"
   ],
   "logistics_units": [
     "Truck M818 6x6",
@@ -127,7 +127,8 @@
     "MIM-104 Patriot (Mobile)",
     "MIM-104 Patriot (Stationary)",
     "NASAMS 3",
-    "THAAD"
+    "THAAD",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "FFG Oliver Hazard Perry",

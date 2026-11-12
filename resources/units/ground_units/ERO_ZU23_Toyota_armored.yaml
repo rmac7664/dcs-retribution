@@ -1,0 +1,6 @@
+ground_mobility:
+  mode: self_propelled
+class: AAA
+price: 6
+variants:
+  AAA ZU-23 Toyota armored technical: null

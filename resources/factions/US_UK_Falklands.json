@@ -11,7 +11,6 @@
     "AV-8B Harrier II Night Attack",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "SA 342L Gazelle",
     "SA 342M Gazelle",
     "Gazelle AH.1",
@@ -25,7 +24,9 @@
     "F-14B Tomcat",
     "F-14A Tomcat (Block 135-GR Late)",
     "UH-1H Iroquois",
-    "B-1B Lancer"
+    "B-1B Lancer",
+    "CH-47D",
+    "RQ-1A Predator"
   ],
   "awacs": [
     "E-2D Advanced Hawkeye"
@@ -57,7 +58,8 @@
   ],
   "preset_groups": [
     "Hawk",
-    "Rapier"
+    "Rapier",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "FFG Oliver Hazard Perry",

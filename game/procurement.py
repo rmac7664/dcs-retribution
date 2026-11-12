@@ -5,16 +5,26 @@ import random
 from dataclasses import dataclass
 from typing import Iterator, List, Optional, TYPE_CHECKING, Tuple
 
-from game.config import RUNWAY_REPAIR_COST
+from dcs import Point
+
+from game.config import IADS_REPAIR_COST, REWARDS, RUNWAY_REPAIR_COST
+from game.data.radar_db import LAUNCHER_TRACKER_PAIRS, TELARS, TRACK_RADARS
 from game.data.units import UnitClass
 from game.dcs.groundunittype import GroundUnitType
+from dcs.unittype import VehicleType
 from game.theater import ControlPoint, MissionTarget, ParkingType, Player
+from game.theater.theatergroundobject import (
+    BuildingGroundObject,
+    SamGroundObject,
+    TheaterGroundObject,
+)
 
 if TYPE_CHECKING:
     from game import Game
     from game.ato import FlightType
     from game.factions.faction import Faction
     from game.squadrons import Squadron
+    from game.theater.theatergroup import TheaterUnit
 
 
 @dataclass(frozen=True)
@@ -39,6 +49,8 @@ class ProcurementAi:
         manage_runways: bool,
         manage_front_line: bool,
         manage_aircraft: bool,
+        manage_ground_objects: bool,
+        manage_buildings: bool,
     ) -> None:
         self.game = game
         self.is_player = owner
@@ -47,7 +59,12 @@ class ProcurementAi:
         self.manage_runways = manage_runways
         self.manage_front_line = manage_front_line
         self.manage_aircraft = manage_aircraft
+        self.manage_ground_objects = manage_ground_objects
+        self.manage_buildings = manage_buildings
         self.threat_zones = self.game.threat_zone_for(self.is_player.opponent)
+        # Money spent per automated category during spend_budget, so the
+        # Finances dialog can show the player where their income actually went.
+        self.last_expenses: dict[str, float] = {}
 
     def calculate_ground_unit_budget_share(self) -> float:
         armor_investment = 0
@@ -96,16 +113,377 @@ class ProcurementAi:
         return ground_unit_share
 
     def spend_budget(self, budget: float) -> float:
+        # Record how much each automated step spends so the Finances dialog can
+        # show the player where their income actually goes (the auto-spend often
+        # consumes most of it before the player sees the balance).
+        self.last_expenses = {}
         if self.manage_runways:
+            before = budget
             budget = self.repair_runways(budget)
-        if self.manage_front_line:
+            self.last_expenses["runways"] = before - budget
+        if self.manage_buildings:
+            before = budget
+            budget = self.repair_buildings(budget)
+            self.last_expenses["buildings"] = before - budget
+        if self.manage_front_line or self.manage_ground_objects:
             armor_budget = budget * self.calculate_ground_unit_budget_share()
             budget -= armor_budget
-            budget += self.reinforce_front_line(armor_budget)
+            if self.manage_ground_objects:
+                before = armor_budget
+                armor_budget = self.repair_ground_objects(armor_budget)
+                self.last_expenses["ground_objects"] = before - armor_budget
+            if self.manage_front_line:
+                before = armor_budget
+                armor_budget = self.reinforce_front_line(armor_budget)
+                self.last_expenses["front_line"] = before - armor_budget
+            budget += armor_budget
 
         if self.manage_aircraft:
+            before = budget
             budget = self.purchase_aircraft(budget)
+            self.last_expenses["aircraft"] = before - budget
         return budget
+
+    def repair_ground_objects(self, budget: float) -> float:
+        repair_turns = self.game.settings.ground_object_repair_turns
+        if repair_turns < 0:
+            return budget
+
+        repair_budget = budget * self.game.settings.sam_repair_budget_fraction
+        if repair_budget <= 0:
+            return budget
+
+        repair_candidates: list[tuple[float, int, TheaterUnit]] = []
+        for control_point in self.owned_points:
+            for ground_object in control_point.ground_objects:
+                if not ground_object.is_friendly(self.is_player):
+                    continue
+                if not isinstance(ground_object, SamGroundObject):
+                    continue
+                priority = self.ground_object_repair_priority(ground_object)
+                if priority < self.game.settings.sam_repair_priority_threshold:
+                    continue
+                critical_types = self.critical_unit_types_for_sam(ground_object)
+                critical_dead_ids = {
+                    unit.id
+                    for unit in ground_object.units
+                    if unit.type in critical_types
+                    and not unit.alive
+                    and unit.repairable
+                }
+                for unit in ground_object.units:
+                    if unit.alive or not unit.repairable:
+                        continue
+                    if critical_dead_ids and unit.id not in critical_dead_ids:
+                        continue
+                    if unit.repair_turns_remaining is not None:
+                        continue
+                    if unit.unit_type is None:
+                        continue
+                    if unit.unit_type.price <= 0:
+                        continue
+                    repair_candidates.append((priority, unit.unit_type.price, unit))
+
+        repair_candidates.sort(key=lambda entry: (-entry[0], entry[1]))
+
+        repaired_objects: set[TheaterGroundObject] = set()
+        destroyed_units = self.game.get_destroyed_units()
+        for _, price, unit in repair_candidates:
+            if repair_budget < price:
+                continue
+            if repair_turns == 0:
+                from game.sim.gameupdateevents import GameUpdateEvents
+
+                unit.repair_turns_remaining = None
+                unit.revive(GameUpdateEvents())
+                for entry in list(destroyed_units):
+                    p = Point(
+                        float(entry["x"]),
+                        float(entry["z"]),
+                        self.game.theater.terrain,
+                    )
+                    if p.distance_to_point(unit.position) < 15:
+                        destroyed_units.remove(entry)
+            else:
+                unit.repair_turns_remaining = repair_turns
+                unit.repair_cost_paid = price
+            repair_budget -= price
+            repaired_objects.add(unit.ground_object)
+
+        for ground_object in repaired_objects:
+            if self.is_player.is_blue:
+                self.game.message(f"We have begun repairs at {ground_object.obj_name}")
+            else:
+                self.game.message(
+                    f"OPFOR has begun repairs at {ground_object.obj_name}"
+                )
+
+        return budget - (
+            budget * self.game.settings.sam_repair_budget_fraction - repair_budget
+        )
+
+    def ground_object_repair_priority(
+        self, ground_object: TheaterGroundObject
+    ) -> float:
+        threat_range = self.potential_threat_range(ground_object)
+        detection_range = self.potential_detection_range(ground_object)
+        range_score = max(threat_range, detection_range, 1.0) / 100000.0
+
+        cp_coverage, frontline_distance = self.covered_control_points(ground_object)
+        cp_score = min(cp_coverage / 4.0, 2.0)
+        if math.isfinite(frontline_distance):
+            frontline_score = 1.0 / (1.0 + (frontline_distance / 10000.0))
+        else:
+            frontline_score = 0.1
+
+        tgo_count, tgo_income = self.covered_ground_objects(ground_object)
+        tgo_score = min(tgo_count / 6.0, 2.0)
+        income_score = min(tgo_income / 20.0, 2.0)
+
+        settings = self.game.settings
+        return (
+            range_score * settings.sam_repair_weight_threat
+            + frontline_score * settings.sam_repair_weight_frontline
+            + cp_score * settings.sam_repair_weight_cp_coverage
+            + tgo_score * settings.sam_repair_weight_tgo_coverage
+            + income_score * settings.sam_repair_weight_tgo_income
+        )
+
+    @staticmethod
+    def critical_unit_types_for_sam(
+        ground_object: SamGroundObject,
+    ) -> set[type]:
+        types_in_site = {unit.type for unit in ground_object.units if unit.unit_type}
+        required_classes: set[UnitClass] = getattr(
+            ground_object, "required_unit_classes", set()
+        )
+        fallback_required_classes = {
+            UnitClass.SEARCH_RADAR,
+            UnitClass.SEARCH_TRACK_RADAR,
+            UnitClass.TRACK_RADAR,
+            UnitClass.LAUNCHER,
+            UnitClass.TELAR,
+        }
+        critical = set()
+        if required_classes:
+            for unit in ground_object.units:
+                if unit.unit_type and unit.unit_type.unit_class in required_classes:
+                    critical.add(unit.type)
+            for launcher, trackers in LAUNCHER_TRACKER_PAIRS.items():
+                if launcher not in types_in_site:
+                    continue
+                for tracker in trackers:
+                    if tracker not in types_in_site:
+                        continue
+                    if issubclass(tracker, VehicleType):
+                        tracker_class = next(
+                            GroundUnitType.for_dcs_type(tracker)
+                        ).unit_class
+                        if tracker_class in required_classes:
+                            critical.add(tracker)
+        else:
+            for unit in ground_object.units:
+                if (
+                    unit.unit_type
+                    and unit.unit_type.unit_class in fallback_required_classes
+                ):
+                    critical.add(unit.type)
+            critical.update(t for t in types_in_site if t in TRACK_RADARS)
+            critical.update(t for t in types_in_site if t in TELARS)
+            for launcher, trackers in LAUNCHER_TRACKER_PAIRS.items():
+                if launcher in types_in_site:
+                    critical.update(trackers)
+        return critical
+
+    def covered_control_points(
+        self, ground_object: TheaterGroundObject
+    ) -> tuple[int, float]:
+        threat_range = self.potential_threat_range(ground_object)
+        if threat_range <= 0:
+            return 0, math.inf
+
+        covered = 0
+        closest_frontline = math.inf
+        for control_point in self.owned_points:
+            distance = ground_object.position.distance_to_point(control_point.position)
+            if distance > threat_range:
+                continue
+            covered += 1
+            frontline_distance = self.distance_to_nearest_frontline_from_cp(
+                control_point
+            )
+            if frontline_distance < closest_frontline:
+                closest_frontline = frontline_distance
+
+        return covered, closest_frontline
+
+    def covered_ground_objects(
+        self, ground_object: TheaterGroundObject
+    ) -> tuple[int, float]:
+        threat_range = self.potential_threat_range(ground_object)
+        if threat_range <= 0:
+            return 0, 0.0
+
+        count = 0
+        income = 0.0
+        for tgo in self.game.theater.ground_objects:
+            if not tgo.is_friendly(self.is_player):
+                continue
+            distance = ground_object.position.distance_to_point(tgo.position)
+            if distance > threat_range:
+                continue
+            count += 1
+            income += REWARDS.get(tgo.category, 0)
+        return count, income
+
+    @staticmethod
+    def distance_to_nearest_frontline_from_cp(control_point: ControlPoint) -> float:
+        front_lines = control_point.front_lines.values()
+        if not front_lines:
+            return math.inf
+        return min(
+            control_point.position.distance_to_point(front_line.position)
+            for front_line in front_lines
+        )
+
+    @staticmethod
+    def potential_threat_range(ground_object: TheaterGroundObject) -> float:
+        ranges = [
+            getattr(unit.type, "threat_range", 0)
+            for unit in ground_object.units
+            if unit.is_anti_air
+        ]
+        return float(max(ranges, default=0))
+
+    @staticmethod
+    def potential_detection_range(ground_object: TheaterGroundObject) -> float:
+        ranges = [
+            getattr(unit.type, "detection_range", 0) for unit in ground_object.units
+        ]
+        return float(max(ranges, default=0))
+
+    def distance_to_nearest_frontline(
+        self, ground_object: TheaterGroundObject
+    ) -> float:
+        front_lines = ground_object.control_point.front_lines.values()
+        if not front_lines:
+            return math.inf
+        return min(
+            ground_object.position.distance_to_point(front_line.position)
+            for front_line in front_lines
+        )
+
+    def repair_buildings(self, budget: float) -> float:
+        if budget <= 0:
+            return budget
+        repair_turns = self.game.settings.building_repair_turns
+        if repair_turns < 0:
+            return budget
+        repair_budget = budget * (
+            self.game.settings.building_repair_budget_percent / 100.0
+        )
+        if repair_budget <= 0:
+            return budget
+
+        repair_candidates: list[tuple[float, float, TheaterUnit]] = []
+        for control_point in self.owned_points:
+            for ground_object in control_point.ground_objects:
+                if not ground_object.is_friendly(self.is_player):
+                    continue
+                if not isinstance(ground_object, BuildingGroundObject):
+                    continue
+                priority = self.building_repair_priority(ground_object)
+                cost = ground_object.repair_cost()
+                if cost <= 0:
+                    continue
+                for unit in ground_object.statics:
+                    if unit.alive:
+                        continue
+                    if unit.repair_turns_remaining is not None:
+                        continue
+                    repair_candidates.append((priority, cost, unit))
+
+        repair_candidates.sort(key=lambda entry: (-entry[0], entry[1]))
+
+        repaired_objects: set[TheaterGroundObject] = set()
+        destroyed_units = self.game.get_destroyed_units()
+        for _, price, unit in repair_candidates:
+            if repair_budget < price:
+                continue
+            if repair_turns == 0:
+                from game.sim.gameupdateevents import GameUpdateEvents
+
+                unit.repair_turns_remaining = None
+                unit.revive(GameUpdateEvents())
+                for entry in list(destroyed_units):
+                    p = Point(
+                        float(entry["x"]),
+                        float(entry["z"]),
+                        self.game.theater.terrain,
+                    )
+                    if p.distance_to_point(unit.position) < 15:
+                        destroyed_units.remove(entry)
+            else:
+                unit.repair_turns_remaining = repair_turns
+                unit.repair_cost_paid = price
+            repair_budget -= price
+            repaired_objects.add(unit.ground_object)
+
+        for ground_object in repaired_objects:
+            if self.is_player.is_blue:
+                self.game.message(f"We have begun repairs at {ground_object.obj_name}")
+            else:
+                self.game.message(
+                    f"OPFOR has begun repairs at {ground_object.obj_name}"
+                )
+
+        return budget - (
+            budget * (self.game.settings.building_repair_budget_percent / 100.0)
+            - repair_budget
+        )
+
+    def building_repair_priority(self, ground_object: BuildingGroundObject) -> float:
+        enemy_distance = self.distance_to_nearest_enemy_control_point(ground_object)
+        frontline_distance = self.distance_to_nearest_frontline(ground_object)
+        if math.isfinite(enemy_distance):
+            remote_score = min(enemy_distance / 20000.0, 2.0)
+        else:
+            remote_score = 2.0
+        if math.isfinite(frontline_distance):
+            ammo_frontline_score = 1.0 / (1.0 + (frontline_distance / 10000.0))
+        else:
+            ammo_frontline_score = 0.1
+
+        income = REWARDS.get(ground_object.category, 0.0)
+        income_score = min(income / 2.0, 2.0)
+        ammo_bonus = 1.0 if ground_object.is_ammo_depot else 0.0
+        factory_bonus = 1.0 if ground_object.is_factory else 0.0
+        # Scores here are income-shaped, and IADS infrastructure earns nothing, so
+        # without a bonus a side would rebuild every oil derrick before its own air
+        # defence network. Rank it with the ammo depots.
+        iads_bonus = 1.0 if ground_object.category in IADS_REPAIR_COST else 0.0
+
+        settings = self.game.settings
+        return (
+            remote_score * settings.building_repair_weight_remote
+            + income_score * settings.building_repair_weight_income
+            + ammo_frontline_score * settings.building_repair_weight_ammo_frontline
+            + ammo_bonus
+            + factory_bonus
+            + iads_bonus
+        )
+
+    def distance_to_nearest_enemy_control_point(
+        self, ground_object: TheaterGroundObject
+    ) -> float:
+        enemy_points = list(
+            self.game.theater.control_points_for(self.is_player.opponent)
+        )
+        if not enemy_points:
+            return math.inf
+        return min(
+            ground_object.position.distance_to_point(cp.position) for cp in enemy_points
+        )
 
     def repair_runways(self, budget: float) -> float:
         for control_point in self.owned_points:
@@ -124,22 +502,94 @@ class ProcurementAi:
                     )
         return budget
 
-    def affordable_ground_unit_of_class(
-        self, budget: float, unit_class: UnitClass
-    ) -> Optional[GroundUnitType]:
-        faction_units = set(self.faction.frontline_units) | set(
-            self.faction.artillery_units
+    def purchasable_ground_units(self) -> list[GroundUnitType]:
+        # Presets and static SAM sites are not purchasable frontline reinforcements.
+        units = set(self.faction.frontline_units) | set(self.faction.artillery_units)
+        return sorted(
+            (u for u in units if u.price >= 0),
+            key=lambda u: (u.unit_class.value, u.price, str(u)),
         )
-        of_class = {u for u in faction_units if u.unit_class is unit_class}
 
-        # faction has no access to needed unit type, take a random unit
-        if not of_class:
-            of_class = faction_units
+    @staticmethod
+    def ground_procurement_role(unit_class: UnitClass) -> UnitClass:
+        # The doctrines allocate an air-defense share under SHORAD. Factions may
+        # fill that role with gun-based AAA or MANPADS instead of missile vehicles.
+        if unit_class in (UnitClass.AAA, UnitClass.MANPAD):
+            return UnitClass.SHORAD
+        return unit_class
 
-        affordable_units = [u for u in of_class if u.price <= budget]
-        if not affordable_units:
+    def pick_ground_unit(self, units: list[GroundUnitType]) -> Optional[GroundUnitType]:
+        if not units:
             return None
-        return random.choice(affordable_units)
+        if self.game.settings.weighted_ground_procurement:
+            weights = [max(u.price, 1) for u in units]
+            return random.choices(units, weights=weights, k=1)[0]
+        return random.choice(units)
+
+    def balanced_ground_unit(
+        self, cp: ControlPoint, budget: float
+    ) -> Optional[GroundUnitType]:
+        units = self.purchasable_ground_units()
+        if not units:
+            return None
+        roles = dict.fromkeys(self.ground_procurement_role(u.unit_class) for u in units)
+        doctrine = self.faction.doctrine.ground_unit_procurement_ratios
+        targets = {
+            role: sum(
+                doctrine.for_unit_class(cls)
+                for cls in UnitClass
+                if self.ground_procurement_role(cls) is role
+            )
+            for role in roles
+        }
+        targets = {role: weight for role, weight in targets.items() if weight > 0}
+        if not targets:
+            # An unusual faction (for example, infantry only) still needs reinforcements.
+            targets = dict.fromkeys(roles, 1.0)
+        total_weight = sum(targets.values())
+        targets = {role: weight / total_weight for role, weight in targets.items()}
+
+        allocations = cp.allocated_ground_units(
+            self.game.coalition_for(self.is_player).transfers
+        )
+        costs = dict.fromkeys(targets, 0.0)
+        counts = dict.fromkeys(targets, 0)
+        for unit, count in allocations.all.items():
+            role = self.ground_procurement_role(unit.unit_class)
+            if role in targets:
+                costs[role] += unit.price * count
+                counts[role] += count
+        total_cost = sum(costs.values())
+        total_count = sum(counts.values())
+
+        scores: dict[GroundUnitType, float] = {}
+        for unit in units:
+            role = self.ground_procurement_role(unit.unit_class)
+            if role not in targets or unit.price > budget:
+                continue
+            # Compare the resulting composition, not just the deficit before buying.
+            # Relative squared error penalizes overshooting small support quotas.
+            denominator = total_cost + unit.price
+            distribution = costs if denominator else counts
+            increment = unit.price if denominator else 1
+            denominator = denominator or total_count + 1
+            scores[unit] = sum(
+                ((distribution[r] + (increment if r is role else 0)) / denominator - t)
+                ** 2
+                / t
+                for r, t in targets.items()
+            )
+        if not scores:
+            return None
+        best_score = min(scores.values())
+        best_by_role: dict[UnitClass, list[GroundUnitType]] = {}
+        for unit, score in scores.items():
+            if math.isclose(score, best_score, rel_tol=1e-9, abs_tol=1e-12):
+                role = self.ground_procurement_role(unit.unit_class)
+                best_by_role.setdefault(role, []).append(unit)
+        # Price weighting must not make artillery win ties against other roles.
+        role = random.choice(list(best_by_role))
+        return self.pick_ground_unit(best_by_role[role])
 
     def reinforce_front_line(self, budget: float) -> float:
         if not self.faction.frontline_units and not self.faction.artillery_units:
@@ -152,8 +602,7 @@ class ProcurementAi:
             if cp is None:
                 break
 
-            most_needed_type = self.most_needed_unit_class(cp)
-            unit = self.affordable_ground_unit_of_class(budget, most_needed_type)
+            unit = self.balanced_ground_unit(cp, budget)
             if unit is None:
                 # Can't afford any more units.
                 break
@@ -163,36 +612,15 @@ class ProcurementAi:
 
         return budget
 
-    def most_needed_unit_class(self, cp: ControlPoint) -> UnitClass:
-        worst_balanced: Optional[UnitClass] = None
-        worst_fulfillment = math.inf
-        for unit_class in UnitClass:
-            if not self.faction.has_access_to_unit_class(unit_class):
-                continue
-
-            current_ratio = self.cost_ratio_of_ground_unit(cp, unit_class)
-            desired_ratio = (
-                self.faction.doctrine.ground_unit_procurement_ratios.for_unit_class(
-                    unit_class
-                )
-            )
-            if not desired_ratio:
-                continue
-            if current_ratio >= desired_ratio:
-                continue
-            fulfillment = current_ratio / desired_ratio
-            if fulfillment < worst_fulfillment:
-                worst_fulfillment = fulfillment
-                worst_balanced = unit_class
-        if worst_balanced is None:
-            return UnitClass.TANK
-        return worst_balanced
-
     @staticmethod
     def fulfill_aircraft_request(
         squadrons: list[Squadron], quantity: int, budget: float
     ) -> Tuple[float, bool]:
+        from game.highcommand.loans import loan_for
+
         for squadron in squadrons:
+            if loan_for(squadron) is not None:
+                continue
             price = squadron.aircraft.price * quantity
             # Final check to make sure the number of aircraft won't exceed the number of available pilots
             # after fulfilling this aircraft request.
@@ -241,6 +669,8 @@ class ProcurementAi:
         ):
             parking_type = ParkingType().from_squadron(squadron)
 
+            if squadron.location.sunk:
+                continue
             if not squadron.can_provide_pilots(request.number):
                 continue
             if squadron.location.unclaimed_parking(parking_type) < request.number:
@@ -319,20 +749,3 @@ class ProcurementAi:
                 understaffed = cp
 
         return understaffed
-
-    def cost_ratio_of_ground_unit(
-        self, control_point: ControlPoint, unit_class: UnitClass
-    ) -> float:
-        allocations = control_point.allocated_ground_units(
-            self.game.coalition_for(self.is_player).transfers
-        )
-        class_cost = 0
-        total_cost = 0
-        for unit_type, count in allocations.all.items():
-            cost = unit_type.price * count
-            total_cost += cost
-            if unit_type.unit_class is unit_class:
-                class_cost += cost
-        if not total_cost:
-            return 0
-        return class_cost / total_cost

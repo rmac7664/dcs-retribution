@@ -24,7 +24,8 @@
     "Su-25 Frogfoot",
     "Tu-22M3 Backfire-C",
     "JF-17 Thunder",
-    "H-6J Badger"
+    "H-6J Badger",
+    "WingLoong-I"
   ],
   "awacs": [
     "A-50"
@@ -57,14 +58,16 @@
     "Paratrooper RPG-16"
   ],
   "preset_groups": [
-    "SA-2/S-75",
     "SA-2/S-75 V-759/5V23",
+    "SA-2/S-75",
+    "SA-2/SA-3 Mixed Site",
     "SA-3/S-125",
     "SA-3/S-125 V-601P/5V27",
     "SA-6",
     "SA-10/S-300PS",
     "SA-10B/S-300PS",
-    "KS-19/SON-9"
+    "KS-19/SON-9",
+    "GPS Jamming Site (Red)"
   ],
   "naval_units": [],
   "air_defense_units": [
@@ -85,3 +88,5 @@
   "carrier_names": [],
   "doctrine": "coldwar"
 }
+
+

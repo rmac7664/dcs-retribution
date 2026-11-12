@@ -78,26 +78,6 @@ class CH_LandRoverWMIK_MK19(unittype.VehicleType):
 
 
 @vehiclemod
-class CH_Scimitar(unittype.VehicleType):
-    id = "CH_Scimitar"
-    name = "[CH] Scimitar CRV"
-    detection_range = 5000
-    threat_range = 3000
-    air_weapon_dist = 3000
-    eplrs = True
-
-
-@vehiclemod
-class CH_Scorpion(unittype.VehicleType):
-    id = "CH_Scorpion"
-    name = "[CH] Scorpion LT"
-    detection_range = 5000
-    threat_range = 3000
-    air_weapon_dist = 3000
-    eplrs = True
-
-
-@vehiclemod
 class CH_SkySabreC2(unittype.VehicleType):
     id = "CH_SkySabreC2"
     name = "[CH] Sky Sabre C2 (HX)"
@@ -119,7 +99,7 @@ class CH_SkySabreGiraffe(unittype.VehicleType):
 
 @vehiclemod
 class CH_SkySabreLN(unittype.VehicleType):
-    id = "CH_SkySabreLN"
+    id = "CH_SkySabre"
     name = "[CH] Sky Sabre iLauncher LN (HX)"
     detection_range = 0
     threat_range = 25000
@@ -160,7 +140,7 @@ class CH_Type26(unittype.ShipType):
 
 @shipmod
 class Type45(unittype.ShipType):
-    id = "Type45"
+    id = "CH_Type45"
     name = "[CH] Type 45 Destroyer"
     helicopter_num = 1
     parking = 1

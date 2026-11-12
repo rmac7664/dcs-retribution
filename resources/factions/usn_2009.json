@@ -18,7 +18,8 @@
     "AH-1W SuperCobra",
     "S-3B Viking",
     "SH-60B Seahawk",
-    "UH-1H Iroquois"
+    "UH-1H Iroquois",
+    "OH-58D(R) Kiowa Warrior"
   ],
   "awacs": [
     "E-2C Hawkeye"
@@ -48,7 +49,8 @@
   ],
   "preset_groups": [
     "Hawk",
-    "Patriot"
+    "Patriot",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "FFG Oliver Hazard Perry",

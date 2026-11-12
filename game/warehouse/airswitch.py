@@ -45,6 +45,7 @@ from .supply import (
 if TYPE_CHECKING:
     from game import Game
     from game.coalition import Coalition
+    from game.sim import GameUpdateEvents
     from game.squadrons import Squadron
     from game.transfers import TransferOrder
 
@@ -449,7 +450,7 @@ def _reload_ground_run(game: Game, transfer: TransferOrder, load: SupplyLoad) ->
     transfer.units[truck] = load.carriers
     transfer.supplies = load
     transfer.request_airflift = False
-    transfers.arrange_transport(transfer, game.conditions.start_time)
+    transfers.arrange_transport(transfer, game.conditions.start_time, _events())
 
 
 def send_by_air(
@@ -512,6 +513,7 @@ def send_by_air(
         option.origin,
         destination,
         {truck: pallets},
+        player=coalition.player,
         request_airflift=True,
         supplies=SupplyLoad(munitions=air, tons=tons, carriers=pallets),
     )
@@ -538,7 +540,7 @@ def send_by_air(
     if run.transport is None:
         # Ran out of aircraft for the last pallets: they go back on the ship/convoy.
         _put_back(game, switch, [run])
-    coalition.transfers._send_supply_route_event_stream_update()
+    _send_supply_route_update()
     logging.info(
         "Supply: %s sends %s to %s by air (%s, %d aircraft)",
         coalition.player.name,
@@ -620,10 +622,14 @@ def _put_back(game: Game, switch: AirSwitch, runs: list[TransferOrder]) -> None:
         return
     load = _truck_load(game, dict(munitions), 0.0)
     run = TransferOrder(
-        switch.position, switch.destination, {truck: load.carriers}, supplies=load
+        switch.position,
+        switch.destination,
+        {truck: load.carriers},
+        player=coalition.player,
+        supplies=load,
     )
     coalition.transfers.pending_transfers.append(run)
-    coalition.transfers.arrange_transport(run, game.conditions.start_time)
+    coalition.transfers.arrange_transport(run, game.conditions.start_time, _events())
     if ground is not None:
         switch.ground = run
 
@@ -636,9 +642,7 @@ def undo_send_by_air(game: Game, transfer: TransferOrder) -> None:
     assert isinstance(switch, AirSwitch)
     runs = switched_runs(game, transfer)
     _put_back(game, switch, runs)
-    game.coalition_for(
-        transfer.player
-    ).transfers._send_supply_route_event_stream_update()
+    _send_supply_route_update()
     logging.info(
         "Supply: air delivery to %s undone; cargo back on the %s",
         switch.destination.name,
@@ -718,3 +722,17 @@ def ai_send_by_air(game: Game, coalition: Coalition) -> list[str]:
         except ValueError:
             logging.exception("Supply: AI could not switch a shipment to air")
     return done
+
+
+def _events() -> GameUpdateEvents:
+    from game.sim import GameUpdateEvents
+
+    return GameUpdateEvents()
+
+
+def _send_supply_route_update() -> None:
+    """Redraws supply routes on the map after a send by air or an undo."""
+    from game.server import EventStream
+
+    with EventStream.event_context() as events:
+        events.update_supply_routes()

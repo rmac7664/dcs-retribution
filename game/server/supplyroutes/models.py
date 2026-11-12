@@ -24,18 +24,20 @@ class TransportFinder:
     def find_in_transport_map(
         self, transport_map: TransportMap[Any]
     ) -> list[MultiGroupTransport]:
-        transports = []
-        transport = transport_map.find_transport(
-            self.control_point_a, self.control_point_b
-        )
-        if transport is not None:
-            transports.append(transport)
-        transport = transport_map.find_transport(
-            self.control_point_b, self.control_point_a
-        )
-        if transport is not None:
-            transports.append(transport)
-        return transports
+        return [
+            transport
+            for transport in transport_map
+            if (
+                (
+                    transport.origin == self.control_point_a
+                    and transport.destination == self.control_point_b
+                )
+                or (
+                    transport.origin == self.control_point_b
+                    and transport.destination == self.control_point_a
+                )
+            )
+        ]
 
     def find_transports(self, sea_route: bool) -> list[MultiGroupTransport]:
         if sea_route:
@@ -68,6 +70,10 @@ class TransportFinder:
                     f"{count} {units} transferring from {transport.origin} to "
                     f"{transport.destination}"
                 )
+            from game.transfers import Convoy
+
+            if isinstance(transport, Convoy) and transport.ground_managed:
+                descriptions[-1] += f" · {transport.movement_summary()}"
         return descriptions
 
 

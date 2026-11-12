@@ -15,8 +15,10 @@ from dcs.unitgroup import FlyingGroup
 
 from game.ato import Flight, FlightWaypoint, FlightType
 from game.ato.flightstate import InFlight, WaitingForStart
+from game.ato.flightplans.formation import FormationLayout
 from game.ato.flightwaypointtype import FlightWaypointType
 from game.ato.starttype import StartType
+from game.missiongenerator.a10cdu import enable_route_vnav
 from game.missiongenerator.aircraft.waypoints.cargostop import CargoStopBuilder
 from game.missiongenerator.missiondata import MissionData
 from game.settings import Settings
@@ -71,6 +73,7 @@ class WaypointGenerator:
         mission_start_time = self.set_takeoff_time(waypoints[0])
 
         filtered_points: list[FlightWaypoint] = []
+        generated = []
         for point in self.flight.points:
             if point.only_for_player and not self.flight.client_count:
                 continue
@@ -88,6 +91,7 @@ class WaypointGenerator:
                     ):
                         self.builder_for_waypoint(point).add_tasks(self.group.points[0])
                 if point == self.flight.state.current_waypoint:
+                    generated.append((point, self.group.points[0]))
                     # We don't need to build this waypoint because pydcs did that for
                     # us, but we do need to configure the tasks for it so that mid-
                     # mission aircraft starting at a waypoint with tasks behave
@@ -122,9 +126,22 @@ class WaypointGenerator:
                 ]
 
         for idx, point in enumerate(filtered_points):
-            self.builder_for_waypoint(point).build()
+            generated.append((point, self.builder_for_waypoint(point).build()))
+
+        from game.missiongenerator.aircraft.searchpattern import add_search_pattern
+
+        if not self.flight.client_count and self.flight.flight_type in (
+            FlightType.CAS,
+            FlightType.ARMED_RECON,
+        ):
+            add_search_pattern(self.flight, self.group, self.time, generated)
+        if self.flight.flight_type is FlightType.AFAC_FRONTLINE:
+            from .afac import add_frontline_search_loop
+
+            add_frontline_search_loop(self.flight, self.group)
 
         self._resolve_locked_speed_time_conflicts()
+        enable_route_vnav(self.flight, self.group)
 
         # Set here rather than when the FlightData is created so they waypoints
         # have their TOTs and fuel minimums set. Once we're more confident in our fuel
@@ -132,15 +149,43 @@ class WaypointGenerator:
         # plan construction, but for now it's only used by the kneeboard so is generated
         # late.
         self._estimate_min_fuel_for(waypoints)
-        return mission_start_time, waypoints
+
+        # In-air starts spawn at the current waypoint, so DCS omits the
+        # already-passed waypoints; slice from the spawn waypoint so the kneeboard
+        # numbering matches the cockpit.
+        kneeboard_waypoints = waypoints
+        if isinstance(self.flight.state, InFlight):
+            kneeboard_waypoints = waypoints[self.flight.state.waypoint_index :]
+        return mission_start_time, kneeboard_waypoints
 
     def _resolve_locked_speed_time_conflicts(self) -> None:
-        """Unlock the speed on any waypoint that has a locked speed between two
-        time-locked (TOT) waypoints. DCS rejects that combination at mission start;
-        the bounding TOTs already determine the segment speed, so the speed lock is
-        redundant. The times are kept (needed to sync with the escorted package).
+        """Unlock the speed on any waypoint that has a locked speed while sitting
+        between time-locked (TOT) waypoints.
+
+        DCS rejects that combination at mission start ("All waypoints (N-M) have
+        locked speed and surrounded by waypoints ... with locked time"): the
+        bounding TOTs already determine the segment's speed, so a locked speed in
+        between is contradictory. It happens e.g. on a carrier escort whose JOIN
+        TOT clamps to the mission start -- the waypoint then gets a locked speed
+        (because ETA == 0) and is trapped between TOT-locked neighbours. Keep the
+        times (needed to sync with the escorted package) and drop the speed lock
+        so DCS can honour them. Split/RTB legs keep their locked speed since no
+        TOT-locked waypoint follows them.
         """
         points = self.group.points
+        # A waypoint locked to a time (TOT) must not ALSO lock its speed: the time
+        # already fixes the segment speed, so DCS rejects the pair ("locked speed ...
+        # surrounded by ... locked time"). A carrier BARCAP/CAP hits this when an
+        # in-flight start under a TOT at/before mission start clamps every waypoint to
+        # ETA == 0, which PydcsWaypointBuilder then marks speed_locked while it is also
+        # time-locked. Keep the time; drop the redundant speed lock. (The pass below
+        # additionally handles a speed-locked but NOT time-locked leg -- e.g. a Split --
+        # trapped between two TOT-locked waypoints.)
+        for point in points:
+            if getattr(point, "speed_locked", False) and getattr(
+                point, "ETA_locked", False
+            ):
+                point.speed_locked = False
         n = len(points)
         eta_locked_before = [False] * n
         seen = False
@@ -167,6 +212,20 @@ class WaypointGenerator:
                 eta_locked_after = True
 
     def builder_for_waypoint(self, waypoint: FlightWaypoint) -> PydcsWaypointBuilder:
+        if (
+            self.flight.flight_type.is_afac
+            and waypoint is self.flight.flight_plan.layout.patrol_start
+        ):
+            from .afac import AfacSearchBuilder
+
+            return AfacSearchBuilder(
+                waypoint,
+                self.group,
+                self.flight,
+                self.mission,
+                self.time,
+                self.mission_data,
+            )
         builders = {
             FlightWaypointType.CARGO_STOP: CargoStopBuilder,
             FlightWaypointType.DROPOFF_ZONE: LandingZoneBuilder,
@@ -194,6 +253,19 @@ class WaypointGenerator:
             FlightWaypointType.TARGET_POINT: TargetBuilder,
         }
         builder = builders.get(waypoint.waypoint_type, DefaultWaypointBuilder)
+
+        # A lone AI ship's join and split are labelled NAV -- there is no formation to
+        # form -- but they are still where the package meets and parts, and what hangs
+        # off them is package business: the escort task, the flag that releases the
+        # escorts, jamming, the unlimited-fuel toggle. The layout knows which waypoint
+        # is which whatever it is called, so ask it rather than the label.
+        layout = self.flight.flight_plan.layout
+        if isinstance(layout, FormationLayout):
+            if waypoint is layout.join:
+                builder = JoinPointBuilder
+            elif waypoint is layout.split:
+                builder = SplitPointBuilder
+
         return builder(
             waypoint,
             self.group,

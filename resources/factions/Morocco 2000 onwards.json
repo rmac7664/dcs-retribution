@@ -16,7 +16,8 @@
     "CH-47D",
     "CH-47F Block I",
     "SA 342M Gazelle",
-    "AH-64D Apache Longbow"
+    "AH-64D Apache Longbow",
+    "RQ-1A Predator"
   ],
   "awacs": [],
   "frontline_units": [
@@ -53,7 +54,8 @@
   "preset_groups": [
     "Hawk",
     "Patriot",
-    "SA-10B/S-300PS"
+    "SA-10B/S-300PS",
+    "GPS Jamming Site (Red)"
   ],
   "naval_units": [
     "DDG Arleigh Burke IIa",
@@ -62,7 +64,8 @@
   "missiles": [],
   "air_defense_units": [
     "M163 Vulcan Air Defense System",
-    "AAA ZU-23 Emplacement"
+    "AAA ZU-23 Emplacement",
+    "EWR AN/FPS-117 Radar"
   ],
   "requirements": {},
   "has_jtac": false,

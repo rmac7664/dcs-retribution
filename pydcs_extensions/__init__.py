@@ -1,8 +1,11 @@
+from . import native_currenthill
 from .SWPack import *
 from .a4ec import *
 from .a7e import *
 from .a6a import *
+from .atmosx_clouds import *
 from .bandit_clouds import *
+from .weather2_clouds import *
 from .e7a import *
 from .ea6b import *
 from .f9f import *
@@ -20,7 +23,7 @@ from .f84g import *
 from .f111c import *
 from .fa18efg import *
 from .frenchpack import *
-from .hercules import *
+from .germanymilitaryassetspack import *
 from .highdigitsams import *
 from .irondome import *
 from .jas39 import *
@@ -36,8 +39,12 @@ from .sk60 import *
 from .su15 import *
 from .su30 import *
 from .su35s import *
+from .f15ex import *
+from .f15cge import *
+from .eurofighter import *
 from .su57 import *
 from .swedishmilitaryassetspack import *
+from .iranmilitaryassetspack import *
 from .coldwarassets import *
 from .uh60l import *
 from .vietnamwarvessels import *
@@ -48,6 +55,7 @@ from .usamilitaryassetspack import *
 from .ukmilitaryassetspack import *
 from .ukrainemilitaryassetspack import *
 from .tornado_adv import *
+from .turkeymilitaryassetspack import *
 from .VSN_F35 import *
 
 

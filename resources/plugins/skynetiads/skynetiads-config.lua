@@ -11,6 +11,27 @@ env.info("DCSRetribution|Skynet-IADS plugin - configuration")
 
 if dcsRetribution and SkynetIADS then
 
+    -- Query power, not radar activity: a silent battery can still engage.
+    local elementsByGroup = {}
+    dcsRetribution.iadsHasWorkingPower = function(groupName)
+        local element = elementsByGroup[groupName]
+        if element then
+            return element:hasWorkingPowerSource()
+        end
+        return nil -- Unmanaged sites must remain potential threats.
+    end
+    dcsRetribution.iadsCanEngage = function(groupName)
+        local element = elementsByGroup[groupName]
+        if not element then return nil end
+        if not element:hasWorkingPowerSource() then return false end
+        if element:getAutonomousState() and element:getAutonomousBehaviour() ==
+                SkynetIADSAbstractRadarElement.AUTONOMOUS_STATE_DARK then
+            return false
+        end
+        -- Ordinary radar silence is not a shutdown: the IADS can wake it.
+        return true
+    end
+
     -- specific options
     local createRedIADS = false
     local createBlueIADS = false
@@ -27,6 +48,7 @@ if dcsRetribution and SkynetIADS then
     local actMobileMaxEmissionTime_merad = 120
     local actMobileMinimumScootDistance_merad = 500
     local actMobileMaximumScootDistance_merad = 3000
+    local contactUpdateInterval = 15
     local adjustGoLiveRange = false
     local adjustGoLiveRange_SA5 = 100
     local adjustGoLiveRange_SA10 = 100
@@ -52,6 +74,7 @@ if dcsRetribution and SkynetIADS then
             actMobileMaxEmissionTime_merad = dcsRetribution.plugins.skynetiads.actMobileMaxEmissionTime_merad
             actMobileMinimumScootDistance_merad = dcsRetribution.plugins.skynetiads.actMobileMinimumScootDistance_merad
             actMobileMaximumScootDistance_merad = dcsRetribution.plugins.skynetiads.actMobileMaximumScootDistance_merad
+            contactUpdateInterval = dcsRetribution.plugins.skynetiads.contactUpdateInterval
             adjustGoLiveRange = dcsRetribution.plugins.skynetiads.adjustGoLiveRange
             adjustGoLiveRange_SA5 = dcsRetribution.plugins.skynetiads.adjustGoLiveRange_SA5
             adjustGoLiveRange_SA10 = dcsRetribution.plugins.skynetiads.adjustGoLiveRange_SA10
@@ -74,6 +97,7 @@ if dcsRetribution and SkynetIADS then
             -- skip processing of units which can not be handled by skynet
             return
         end
+        elementsByGroup[element.dcsGroupName] = iads_unit
         if element.engagement_zone then
             iads_unit:setEngagementZone(element.engagement_zone)
         end
@@ -110,11 +134,16 @@ if dcsRetribution and SkynetIADS then
                 end
             end
         end
+        for _, name in ipairs(element.localPowerSources or {}) do
+            local generator = Unit.getByName(name)
+            if generator then iads_unit:addPowerSource(generator) end
+        end
         if element.PD then
             for i, pd in pairs(element.PD) do
                 env.info(string.format("DCSRetribution|Skynet-IADS plugin - adding IADS Point Defence %s", pd))
                 local point_defence = iads:addSAMSite(pd)
                 if point_defence ~= nil then
+                    elementsByGroup[pd] = point_defence
                     -- only add as point defence if skynet can handle the PD unit
                     iads_unit:addPointDefence(point_defence)
                 end
@@ -127,6 +156,12 @@ if dcsRetribution and SkynetIADS then
         local coalitionPrefix = "BLUE"
         if coalition == 1 then
             coalitionPrefix = "RED"
+        end
+
+        if dcsRetribution.IADS and dcsRetribution.IADS.automaticTopology then
+            iads.topology = EscalationIadsTopology:create(
+                iads, dcsRetribution.IADS[coalitionPrefix], coalition
+            )
         end
 
         if debug then
@@ -210,6 +245,15 @@ if dcsRetribution and SkynetIADS then
             --activate the radio menu to toggle IADS Status output
             env.info("DCSRetribution|Skynet-IADS plugin - adding in radio menu")
             iads:addRadioMenu()
+        end
+
+        -- How often the whole network re-reads its radars and re-decides who wakes.
+        -- Skynet's own default is 5 seconds, which is the single biggest cost it has on
+        -- a large map; MANTIS, for comparison, runs at 30. The price of raising it is
+        -- latency -- a site can take up to this long to notice something -- so it is a
+        -- setting rather than a number picked here.
+        if contactUpdateInterval and tonumber(contactUpdateInterval) then
+            iads:setUpdateInterval(tonumber(contactUpdateInterval))
         end
 
         --activate the IADS

@@ -38,13 +38,6 @@ class RaceTrackBuilder(PydcsWaypointBuilder):
             )
             return
 
-        # Start Defensive Jamming for all flights
-        settings = self.flight.coalition.game.settings
-        ai_jammer = settings.plugin_option("ewrj.ai_jammer_enabled")
-        if settings.plugins.get("ewrj") and ai_jammer:
-            self.defensive_jamming(waypoint, "start")
-            self.offensive_jamming(waypoint, "start")
-
         # NB: It's important that the engage task comes before the orbit task.
         # Though they're on the same waypoint, if the orbit task comes first it
         # is their first priority and they will not engage any targets because
@@ -82,7 +75,7 @@ class RaceTrackBuilder(PydcsWaypointBuilder):
         elapsed = int((flight_plan.patrol_end_time - self.now).total_seconds())
         racetrack.stop_after_time(elapsed)
         # What follows is some code to cope with the broken 'stop after time' condition
-        create_stop_orbit_trigger(racetrack, self.package, self.mission, elapsed)
+        create_stop_orbit_trigger(racetrack, self.group.id, self.mission, elapsed)
         # end of hotfix
         waypoint.add_task(racetrack)
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import pickle
 import shutil
+from datetime import date
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING, Any
 
@@ -33,15 +35,47 @@ class DummyObject:
         self.__dict__.update(state)
 
 
+class RemovedEnum:
+    """Stands in for an enum a save still names after the feature was dropped.
+
+    A settings enum is pickled by reference, so deleting the class stops every
+    campaign that ever stored one from loading at all. The value it resolves to is
+    thrown away by Settings.__setstate__ -- there is no field left to hold it -- but
+    it has to resolve to something first.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # An enum member unpickles as EnumClass(value); take the value and drop it.
+        pass
+
+    def __setstate__(self, state: Any) -> None:
+        pass
+
+
+#: Classes that were pickled into saves and no longer exist. See RemovedEnum.
+REMOVED_CLASSES = {
+    # Fast forward, removed along with the whole feature.
+    "FastForwardStopCondition",
+    "CombatResolutionMethod",
+}
+
+
 class MigrationUnpickler(pickle.Unpickler):
     """Custom unpickler to migrate campaign save-files for when components have been moved"""
 
     def find_class(self, module: Any, name: str) -> Any:
+        if module == "game.settings.settings" and name in REMOVED_CLASSES:
+            return RemovedEnum
+
         handlers = [
             self._handle_airport_migrations,
             self._handle_weather_classes,
             self._handle_ch_russian_assets,
             self._handle_ch_usa_assets,
+            self._handle_ch_uk_assets,
+            self._handle_ch_ukraine_assets,
+            self._handle_retired_highdigitsams,
+            self._handle_frenchpack,
             self._handle_su30,
             self._handle_misc,
         ]
@@ -231,6 +265,12 @@ class MigrationUnpickler(pickle.Unpickler):
 
         if name.startswith("MIM104_"):
             return getattr(usamilitaryassetspack, "CH_" + name, None)
+        if name.endswith("_KAT1"):
+            # The mod moved the whole Patriot KAT1 battery to the Germany pack in
+            # 1.5.0, so the class is in another module now.
+            from pydcs_extensions import germanymilitaryassetspack
+
+            return getattr(germanymilitaryassetspack, name, None)
         # Mod -> native DCS: ED shipped these as CHAP units, so migrate old saves to the
         # native class (mirrors the CH Russia handler above and the groundunittype
         # display-name migrator). The HIMARS variants ED didn't add (GLSDB / PrSM /
@@ -251,6 +291,59 @@ class MigrationUnpickler(pickle.Unpickler):
         # The B-21 has no native DCS equivalent -> a rename within the mod.
         if name == "B_21":
             return getattr(usamilitaryassetspack, "CH_B_21", None)
+        return None
+
+    def _handle_ch_uk_assets(self, module: str, name: str) -> Any:
+        """Handle migrations for the UK military assets pack: 1.5.0 dropped the
+        Scimitar and the Scorpion as redundant with the DCS units ED shipped, so map
+        old saves to the native class."""
+        if module != "pydcs_extensions.ukmilitaryassetspack.ukmilitaryassetspack":
+            return None
+        from dcs.vehicles import Armor
+
+        native = {
+            "CH_Scimitar": Armor.CHAP_FV107,
+            "CH_Scorpion": Armor.CHAP_FV101,
+        }
+        return native.get(name)
+
+    def _handle_ch_ukraine_assets(self, module: str, name: str) -> Any:
+        """Handle migrations for the Ukraine military assets pack: 2.0.0 removed the
+        T-64BV and the T-84 Oplot-M as duplicates of the DCS units ED shipped, so map
+        old saves to the native class."""
+        if module != (
+            "pydcs_extensions.ukrainemilitaryassetspack.ukrainemilitaryassetspack"
+        ):
+            return None
+        from dcs.vehicles import Armor
+
+        native = {
+            "CH_T64BV": Armor.CHAP_T64BV,
+            "T84_OplotM": Armor.CHAP_T84OplotM,
+        }
+        return native.get(name)
+
+    def _handle_retired_highdigitsams(self, module: str, name: str) -> Any:
+        """Replace retired mod class references with current native DCS classes."""
+        if module != "pydcs_extensions.highdigitsams.highdigitsams":
+            return None
+        from dcs.vehicles import AirDefence
+
+        native = {
+            "AAA_SON_9_Fire_Can": AirDefence.SON_9,
+            "SAM_SA_10__5V55RUD__S_300PS_LN_5P85CE": AirDefence.S_300PS_5P85C_ln,
+        }
+        return native.get(name)
+
+    def _handle_frenchpack(self, module: str, name: str) -> Any:
+        """Handle migrations for Frenchpack: 5.0 dropped its own VAB Mephisto, which
+        DCS ships itself, so map old saves to the native class."""
+        if module != "pydcs_extensions.frenchpack.frenchpack":
+            return None
+        if name == "VAB_MEPHISTO":
+            from dcs.vehicles import Armor
+
+            return Armor.VAB_Mephisto
         return None
 
     def _handle_su30(self, module: str, name: str) -> Any:
@@ -325,7 +418,7 @@ class MigrationUnpickler(pickle.Unpickler):
 
 def _create_dir_if_needed(path: Path) -> Path:
     if not path.exists():
-        path.mkdir(755, parents=True)
+        path.mkdir(0o755, parents=True)
     return path
 
 
@@ -343,6 +436,12 @@ def base_path() -> Path:
     global _dcs_saved_game_folder
     assert _dcs_saved_game_folder
     return _create_dir_if_needed(Path(_dcs_saved_game_folder))
+
+
+# These folders keep the name the fork was called when the player's campaigns, his
+# factions, his layouts and his kneeboards were written into them. The application is
+# DCS Escalation; the shelf his things are already on is still Retribution, and
+# renaming it would hide every one of them.
 
 
 def debug_dir() -> Path:
@@ -377,8 +476,52 @@ def airwing_dir() -> Path:
     return _create_dir_if_needed(base_path() / "Retribution" / "AirWing")
 
 
+def data_cartridge_dir() -> Path:
+    """Where DCS looks for .dtc files: one flat folder, not per campaign."""
+    return _create_dir_if_needed(base_path() / "DTC")
+
+
 def kneeboards_dir() -> Path:
     return _create_dir_if_needed(base_path() / "Retribution" / "Kneeboards")
+
+
+def tile_cache_dir() -> Path:
+    """Directory for cached basemap tiles used by recon kneeboards.
+
+    Prefers ``<save_dir>/Retribution/TileCache`` under the Saved Games tree
+    that escalation already writes to. When ``persistency.setup`` has not
+    been called (standalone dev scripts, golden-image generators, ad-hoc
+    test harnesses), falls back to the OS-conventional user cache location
+    so the tile pipeline still works.
+
+    Users may delete this directory at any time to reclaim space or force
+    a fresh fetch.
+    """
+    global _dcs_saved_game_folder
+    if _dcs_saved_game_folder:
+        return _create_dir_if_needed(base_path() / "Retribution" / "TileCache")
+    import os
+    import platform
+
+    if platform.system() == "Windows":
+        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    else:
+        root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    path = root / "retribution" / "tilecache"
+    return _create_dir_if_needed(path)
+
+
+def mission_archive_dir() -> Path:
+    """Directory holding the archived copy of each generated mission.
+
+    A subfolder of ``Missions`` rather than the Escalation tree, so DCS's own
+    mission browser lists it and an archived turn opens straight from the game.
+    """
+    return _create_dir_if_needed(base_path() / "Missions" / "Retribution Archive")
+
+
+def payload_backups_dir() -> Path:
+    return _create_dir_if_needed(base_path() / "Retribution" / "PayloadBackups")
 
 
 def payloads_dir(backup: bool = False) -> Path:
@@ -401,8 +544,13 @@ def save_dir() -> Path:
     return _create_dir_if_needed(base_path() / "Retribution" / "Saves")
 
 
-def pre_pretense_backups_dir() -> Path:
-    return _create_dir_if_needed(save_dir() / "PrePretenseBackups")
+def suggested_save_path(game: Game, today: date) -> Path:
+    campaign_name = game.campaign_name or game.theater.terrain.name
+    name = "".join(
+        "_" if char in '<>:"/\\|?*' or ord(char) < 32 else char
+        for char in campaign_name
+    ).strip(" .")
+    return save_dir() / f"{name or 'Campaign'} {today.isoformat()}.retribution"
 
 
 def server_port() -> int:
@@ -422,7 +570,58 @@ def mission_path_for(name: str) -> Path:
     return base_path() / "Missions" / name
 
 
+#: What the campaign looked like when it was last written to its save file. Kept here
+#: rather than on the game because it is a fingerprint *of* the game: putting it on the
+#: game would change the thing it describes.
+_saved_signature: Optional[str] = None
+
+
+def game_signature(game: Game) -> str:
+    """A fingerprint of the campaign as a save file would hold it.
+
+    Pickling a campaign of a few hundred objectives takes about fifty milliseconds and
+    gives the same bytes for the same state, so this is an exact answer to "has anything
+    changed", and cheap enough to ask when the window closes.
+    """
+    data = _unload_static_data(game)
+    try:
+        return hashlib.sha256(pickle.dumps(game)).hexdigest()
+    finally:
+        _restore_static_data(game, data)
+
+
+def has_unsaved_changes(game: Optional[Game]) -> bool:
+    """Whether closing now would lose something.
+
+    A campaign that has never been saved has everything to lose. Anything that cannot
+    be worked out -- no save yet, or a fingerprint that could not be taken -- counts as
+    unsaved: being asked once too often costs a keystroke, and the other mistake costs
+    the evening's campaign.
+    """
+    if game is None:
+        logging.debug("Unsaved check: no campaign loaded")
+        return False
+    if _saved_signature is None:
+        logging.debug("Unsaved check: no saved fingerprint")
+        return True
+    try:
+        current_signature = game_signature(game)
+        logging.debug(
+            "Unsaved check: saved=%s current=%s",
+            _saved_signature,
+            current_signature,
+        )
+        if current_signature == _saved_signature:
+            return False
+    except Exception:
+        logging.exception("Could not tell whether the campaign has been modified")
+        return True
+    return True
+
+
 def load_game(path: str) -> Optional[Game]:
+    global _saved_signature
+    _saved_signature = None
     with open(path, "rb") as f:
         try:
             save = MigrationUnpickler(f).load()
@@ -433,6 +632,57 @@ def load_game(path: str) -> Optional[Game]:
             return None
 
 
+def settle(game: Game) -> None:
+    """Build what the first look at the campaign builds anyway.
+
+    A flight's plan is laid out on demand -- and a package whose weapons have changed
+    range since it was laid out has its waypoints rebuilt, join and IP and split
+    re-rolled -- and the first thing to ask for any of that is the map drawing itself,
+    moments after the campaign is loaded. Fingerprinting before that compares the
+    campaign against a version of itself that stopped existing as soon as it was drawn,
+    which is why closing an untouched campaign still asked whether to save it.
+
+    Cheap: about fifty milliseconds over a full ATO, and none of it is work the map was
+    not about to do.
+    """
+    from game.missiongenerator.motorpoolpopulator import MotorpoolPopulator
+    from game.server.flights.models import FlightJs
+
+    for coalition in (game.blue, game.red):
+        for package in coalition.ato.packages:
+            for flight in package.flights:
+                try:
+                    FlightJs.for_flight(flight, with_waypoints=True)
+                except Exception:
+                    logging.exception("Could not settle %s", flight)
+
+    # The undeployed armour a base keeps is not written into the save: the map fills
+    # each motorpool the first time it draws one, so a campaign that had only been
+    # looked at was already different from its own save file and closing it asked
+    # whether to save. Filled here instead, before the fingerprint is taken.
+    try:
+        MotorpoolPopulator(game).populate_control_points(game.theater.controlpoints)
+    except Exception:
+        logging.exception("Could not settle the motorpools")
+
+
+def remember_saved_state(game: Game) -> None:
+    """This is the campaign as it now sits in its save file."""
+    global _saved_signature
+    try:
+        settle(game)
+        _saved_signature = game_signature(game)
+        logging.debug(
+            "Remembered saved campaign: game=%s path=%s fingerprint=%s",
+            id(game),
+            getattr(game, "savepath", None),
+            _saved_signature,
+        )
+    except Exception:
+        logging.exception("Could not fingerprint the saved campaign")
+        _saved_signature = None
+
+
 def save_game(game: Game) -> bool:
     with logged_duration("Saving game"):
         try:
@@ -441,6 +691,7 @@ def save_game(game: Game) -> bool:
                 pickle.dump(game, f)
                 _restore_static_data(game, data)
             shutil.copy(_temporary_save_file(), game.savepath)
+            remember_saved_state(game)
             return True
         except Exception:
             logging.exception("Could not save game")

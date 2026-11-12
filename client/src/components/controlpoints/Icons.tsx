@@ -1,6 +1,16 @@
 import { ControlPoint } from "../../api/_liberationApi";
-import { Icon, Point } from "leaflet";
+import { Icon, IconOptions, Point } from "leaflet";
 import ms from "milsymbol";
+import { healthBarSvg } from "../health/health";
+
+export class ControlPointIcon extends Icon {
+  constructor(
+    readonly controlPointId: string,
+    options: IconOptions,
+  ) {
+    super(options);
+  }
+}
 
 /** A thin white edge so the main base's HQ staff shows against other icons. */
 const MAIN_BASE_OUTLINE = { outlineWidth: 2, outlineColor: "white" };
@@ -18,8 +28,10 @@ export const iconForControlPoint = (cp: ControlPoint) => {
     ? new ms.Symbol(plainSidc(cp.sidc), options).getAnchor()
     : symbol.getAnchor();
 
-  return new Icon({
-    iconUrl: symbol.toDataURL(),
+  return new ControlPointIcon(cp.id, {
+    iconUrl:
+      "data:image/svg+xml;charset=utf-8," +
+      encodeURIComponent(healthBarSvg(symbol.asSVG(), cp.health)),
     iconAnchor: new Point(anchor.x, anchor.y),
   });
 };

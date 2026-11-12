@@ -1,0 +1,258 @@
+"""The pieces the location dialog is drawn with.
+
+The palette and the row/card primitives come from the pilot dialog, which took them
+from the Air Wing; only what a location needs and nothing else has is here: the
+health bar with three colours, a compass that is drawn rather than rotated, and the
+words for what kind of thing an objective is.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Optional
+
+from typing import Callable
+
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QWidget
+
+from game.data.groups import GroupTask
+from game.theater import (
+    ControlPoint,
+    TheaterGroundObject,
+)
+from game.theater.iadsnetwork.iadsexplain import LinkTone
+from game.theater.theatergroundobject import (
+    BuildingGroundObject,
+    AirDefenceKind,
+    IadsGroundObject,
+    MissileSiteGroundObject,
+    NavalGroundObject,
+)
+from game.utils import Heading
+from qt_ui.widgets.controls import button
+from qt_ui.windows.pilot.common import (
+    ACCENT,
+    AMBER,
+    BAR_TRACK,
+    GREEN,
+    RED,
+    TEXT_LABEL,
+    label,
+)
+
+#: The three states a site's units can be in, in the order the bar stacks them.
+ALIVE_INK = GREEN
+REPAIRING_INK = AMBER
+DAMAGED_INK = "#FF8C00"
+DESTROYED_INK = RED
+
+#: The fill behind a chip, per tone. Dim enough to sit on a card without shouting.
+TONE_INK = {
+    LinkTone.GOOD: GREEN,
+    LinkTone.WARN: AMBER,
+    LinkTone.BAD: RED,
+    LinkTone.INFO: ACCENT,
+}
+
+
+class HealthBar(QWidget):
+    """Alive, repairing and destroyed in one bar.
+
+    Three numbers rather than a fraction: a battery with four wrecks and two units
+    coming back is not the same site as one with six wrecks, and the difference is
+    what the player is deciding about.
+    """
+
+    def __init__(
+        self,
+        alive: float,
+        repairing: int,
+        total: int,
+        width: int = 200,
+        height: int = 6,
+        damaged: bool = False,
+    ) -> None:
+        super().__init__()
+        self.alive = alive
+        self.repairing = repairing
+        self.total = max(total, 1)
+        self.damaged = damaged
+        self.setFixedSize(width, height)
+
+    def paintEvent(self, event: object) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        radius = self.height() / 2
+
+        track = QPainterPath()
+        track.addRoundedRect(0, 0, self.width(), self.height(), radius, radius)
+        painter.fillPath(track, QColor(BAR_TRACK))
+
+        left = 0.0
+        for count, ink in (
+            (self.alive, DAMAGED_INK if self.damaged else ALIVE_INK),
+            (self.repairing, REPAIRING_INK),
+        ):
+            if count <= 0:
+                continue
+            width = self.width() * count / self.total
+            segment = QPainterPath()
+            segment.addRoundedRect(left, 0, width, self.height(), radius, radius)
+            painter.fillPath(segment, QColor(ink))
+            left += width
+        painter.end()
+
+
+class Compass(QWidget):
+    """The heading as a dial with a needle.
+
+    Drawn rather than a rotated pixmap: the pixmap was a 32 px arrow that lost a pixel
+    of itself at every angle that was not a multiple of ninety degrees.
+    """
+
+    def __init__(self, heading: Heading, size: int = 32) -> None:
+        super().__init__()
+        self.heading = heading
+        self.setFixedSize(size, size)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def set_heading(self, heading: Heading) -> None:
+        self.heading = heading
+        self.update()
+
+    def paintEvent(self, event: object) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        box = QRectF(1, 1, self.width() - 2, self.height() - 2)
+
+        painter.setPen(QPen(QColor(TEXT_LABEL), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(box)
+
+        centre = box.center()
+        radians = math.radians(self.heading.degrees)
+        reach = box.width() / 2 - 3
+        tip = QPointF(
+            centre.x() + math.sin(radians) * reach,
+            centre.y() - math.cos(radians) * reach,
+        )
+        needle = QPen(QColor(ACCENT), 2)
+        needle.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(needle)
+        painter.drawLine(centre, tip)
+        painter.end()
+
+
+#: The campaign's category keys, in the words a player would use for them.
+BUILDING_NAMES = {
+    "allycamp": "ALLY CAMP",
+    "ammo": "AMMO DEPOT",
+    "commandcenter": "COMMAND CENTRE",
+    "comms": "COMMS",
+    "derrick": "DERRICK",
+    "factory": "FACTORY",
+    "farp": "FARP",
+    "fuel": "FUEL DEPOT",
+    "oil": "OIL",
+    "power": "POWER STATION",
+    "village": "VILLAGE",
+    "ware": "WAREHOUSE",
+    "ww2bunker": "BUNKER",
+}
+
+
+def kind_of(ground_object: TheaterGroundObject) -> str:
+    """What this objective is, in the words the map uses for it."""
+    if isinstance(ground_object, BuildingGroundObject):
+        category = ground_object.category
+        return BUILDING_NAMES.get(category, category.upper())
+    if isinstance(ground_object, NavalGroundObject):
+        return "NAVAL"
+    if isinstance(ground_object, MissileSiteGroundObject):
+        return "MISSILE SITE"
+    if isinstance(ground_object, IadsGroundObject):
+        kind = ground_object.air_defence_kind
+        if kind is AirDefenceKind.JAMMER:
+            return "GPS JAMMER"
+        if kind is AirDefenceKind.RADAR:
+            return "EWR"
+        return "SAM"
+    return "RESERVE ARMOR GROUP"
+
+
+#: The reach of an air-defence site, in the words a player would use for it. The task
+#: is what the campaign picked the site for, and it survives whatever is bought there
+#: later, so it says more than the class the objective was created as.
+TASK_NAMES = {
+    GroupTask.LORAD: "LONG RANGE",
+    GroupTask.MERAD: "MEDIUM RANGE",
+    GroupTask.SHORAD: "SHORT RANGE",
+    GroupTask.AAA: "AAA",
+    GroupTask.EARLY_WARNING_RADAR: "RADAR",
+    GroupTask.POINT_DEFENSE: "POINT DEFENCE",
+}
+
+
+def owner_of(control_point: ControlPoint) -> str:
+    if control_point.captured.is_neutral:
+        return "NEUTRAL"
+    return "BLUE" if control_point.captured.is_blue else "RED"
+
+
+def kind_chip_text(ground_object: TheaterGroundObject, cp: ControlPoint) -> str:
+    parts = [kind_of(ground_object)]
+    # A jamming site is named by what it does; the slot the campaign put it in says
+    # nothing about its reach.
+    task: Optional[GroupTask] = (
+        None if parts[0] == "GPS JAMMER" else getattr(ground_object, "task", None)
+    )
+    # A site can hold a battery in an old radar slot, or the reverse.
+    if (parts[0] == "SAM" and task is GroupTask.EARLY_WARNING_RADAR) or (
+        parts[0] == "EWR" and task is not GroupTask.EARLY_WARNING_RADAR
+    ):
+        task = None
+    reach = TASK_NAMES.get(task) if task is not None else None
+    if reach is not None and reach != parts[0]:
+        parts.append(reach)
+    parts.append(owner_of(cp))
+    return " · ".join(parts)
+
+
+def two_tone_button(
+    text: str,
+    tail: str,
+    tail_ink: str = ACCENT,
+    kind: str = "normal",
+    handler: Optional[Callable[[], None]] = None,
+) -> QPushButton:
+    """A button that carries a figure: "Repair $18M", "Face the front 312°".
+
+    The figure is what the eye is looking for, so it is not painted in the same ink as
+    the verb. A QPushButton cannot do that with its own text, so the two are labels
+    inside it, and they let the press through to the button under them.
+    """
+    widget = button("", kind, handler)
+    row = QHBoxLayout(widget)
+    row.setContentsMargins(14, 4, 14, 4)
+    row.setSpacing(7)
+    for piece, ink, bold in ((text, "", False), (tail, tail_ink, True)):
+        if not piece:
+            continue
+        drawn = label(piece, 12, ink or _button_ink(kind), bold=bold)
+        drawn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        row.addWidget(drawn)
+    # A QPushButton sizes itself from its own text, which is empty here, so the two
+    # labels were painted into a button too narrow for them.
+    widget.setMinimumWidth(row.sizeHint().width())
+    widget.setMinimumHeight(max(widget.minimumHeight(), row.sizeHint().height()))
+    return widget
+
+
+def _button_ink(kind: str) -> str:
+    """The ink the house button paints its own text in."""
+    from qt_ui.widgets.controls import BUTTON_KINDS
+
+    return str(BUTTON_KINDS[kind][2])

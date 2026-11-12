@@ -11,6 +11,7 @@ from dcs.vehicles import vehicle_map
 
 from game.data.units import UnitClass
 from game.dcs.unittype import UnitType
+from game.groundmovement.mobility import GroundMobility
 
 
 @dataclass
@@ -51,6 +52,44 @@ class SkynetProperties:
 
 
 @dataclass(frozen=True)
+class GpsJammingProperties:
+    """How far this unit type denies GPS, from its ``gps_jamming`` yaml block.
+
+    The block's *presence* is what makes a ground unit a jammer; both fields are
+    optional tuning that falls back to the campaign setting::
+
+        gps_jamming:
+          radius_nm: 45
+          miss_radius_m: 250
+
+    Keeping the reach in the unit's own data file means adding a jammer is a data
+    edit -- register the vehicle, write its yaml, add the block. No id list in
+    Python needs touching, so a unit author never has to land alongside this
+    feature.
+    """
+
+    radius_nm: Optional[float] = None
+    miss_radius_m: Optional[float] = None
+
+    @classmethod
+    def from_data(cls, data: Any) -> Optional[GpsJammingProperties]:
+        """The block, or None when the unit declares none -- the common case. A
+        bare ``true`` is a jammer on the campaign defaults."""
+        if data is None or data is False:
+            return None
+        if data is True:
+            return cls()
+        if not isinstance(data, dict):
+            return None
+
+        def number(key: str) -> Optional[float]:
+            value = data.get(key)
+            return float(value) if isinstance(value, (int, float)) else None
+
+        return cls(radius_nm=number("radius_nm"), miss_radius_m=number("miss_radius_m"))
+
+
+@dataclass(frozen=True)
 class GroundUnitType(UnitType[Type[VehicleType]]):
     spawn_weight: int
     skynet_properties: SkynetProperties
@@ -58,6 +97,14 @@ class GroundUnitType(UnitType[Type[VehicleType]]):
     # Defines if we should place the ground unit with an inverted heading.
     # Some units like few Launchers have to be placed backwards to be able to fire.
     reversed_heading: bool = False
+
+    #: Set only on the handful of unit types that deny GPS. None everywhere else.
+    gps_jamming: Optional[GpsJammingProperties] = None
+
+    ground_mobility: GroundMobility = GroundMobility()
+
+    # Only plain riflemen can be selected as MANPADS team auxiliaries.
+    is_rifleman: bool = False
 
     _by_name: ClassVar[dict[str, GroundUnitType]] = {}
     _by_unit_type: ClassVar[dict[type[VehicleType], list[GroundUnitType]]] = (
@@ -112,6 +159,10 @@ class GroundUnitType(UnitType[Type[VehicleType]]):
     @staticmethod
     def _migrator() -> Dict[str, str]:
         return {
+            # DCS calls it an EW Radio Jammer; Escalation only ever uses it to deny
+            # GPS, and the site it builds is a GPS Jamming Site.
+            "EW Radio Jammer (Red)": "GPS Jammer (Red)",
+            "EW Radio Jammer (Blue)": "GPS Jammer (Blue)",
             "[CH] T-90A MBT": "MBT T-90M [CH]",
             "[CH] T-90M MBT": "MBT T-90M [CH]",
             "[CH] Pantsir-S1 SPAAGM": 'SAM SA-22 Pantsir-S1 "Greyhound" [CH]',
@@ -132,6 +183,20 @@ class GroundUnitType(UnitType[Type[VehicleType]]):
             "[CH] M142 HIMARS (PrSM AShM)": "MLRS M142 HIMARS ATACMS HE [CH]",  # CHAP_M142_ATACMS_M48
             "[CH] Oshkosh FMTV M1083": "Truck M1083 A1P2 MTV [CH]",  # CHAP_M1083
             "[CH] Oshkosh M-ATV MRAP (M2)": "APC MRAP M-ATV [CH]",  # CHAP_MATV
+            # CH UK pack 1.5.0 dropped these two as redundant with the
+            # native DCS units ED shipped.
+            "[CH] Scimitar CRV": "Scout FV107 Scimitar [CH]",  # CHAP_FV107
+            "[CH] Scorpion LT": "LT FV101 Scorpion [CH]",  # CHAP_FV101
+            # CH Ukraine pack 2.0.0 dropped these two as duplicates of the
+            # native DCS units ED shipped.
+            "[CH] T-64BV MBT": "MBT T-64BV Type 2017 [CH]",  # CHAP_T64BV
+            "[CH] T-84 Oplot-M MBT": "MBT T-84 Oplot-M [CH]",  # CHAP_T84OplotM
+            # Frenchpack 5.0 dropped its own Mephisto; DCS ships one.
+            "VAB Mephisto Frenchpack": "VAB Mephisto",  # VAB_Mephisto
+            # Retired High Digit SAMs types have native DCS replacements.
+            "AAA SON-9 Fire Can": "AAA Fire Can SON-9",  # SON_9
+            # The current catalogue labels native 5P85C as TEL D.
+            "SAM SA-10 (5V55RUD) S-300PS LN 5P85CE": 'SAM SA-10 S-300 "Grumble" TEL D',  # S-300PS 5P85C ln
         }
 
     @classmethod
@@ -172,4 +237,7 @@ class GroundUnitType(UnitType[Type[VehicleType]]):
                 data.get("skynet_properties", {})
             ),
             reversed_heading=data.get("reversed_heading", False),
+            gps_jamming=GpsJammingProperties.from_data(data.get("gps_jamming")),
+            ground_mobility=GroundMobility.from_data(data.get("ground_mobility")),
+            is_rifleman=data.get("is_rifleman", False),
         )

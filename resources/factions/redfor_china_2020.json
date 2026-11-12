@@ -30,7 +30,8 @@
     "Su-34 Fullback",
     "Tu-22M3 Backfire-C",
     "Tu-95MS Bear-H",
-    "H-6J Badger"
+    "H-6J Badger",
+    "WingLoong-I"
   ],
   "awacs": [
     "A-50",
@@ -104,7 +105,8 @@
     "SA-20/S-300PMU-1",
     "SA-20B/S-300PMU-2",
     "SA-23/S-300VM",
-    "Chinese Navy"
+    "Chinese Navy",
+    "GPS Jamming Site (Red)"
   ],
   "naval_units": [
     "Frigate 1135M Rezky",

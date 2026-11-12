@@ -57,6 +57,9 @@ from game.ato.flighttype import FlightType
 from game.ato.package import Package
 from game.dcs.aircrafttype import AircraftType
 from game.dcs.groundunittype import GroundUnitType
+from game.groundmovement.journey import GroundJourney, GroundRoute
+from game.groundmovement.orders import GroundPosition
+from game.groundmovement.settings import distance_per_turn, enabled as movement_enabled
 from game.naming import namegen
 from game.procurement import AircraftProcurementRequest
 from game.theater import (
@@ -76,8 +79,51 @@ from game.utils import meters, nautical_miles
 if TYPE_CHECKING:
     from game import Game
     from game.warehouse.supply import SupplyLoad
+    from game.sim import GameUpdateEvents
     from game.squadrons import Squadron
-    from game.theater import Coalition
+    from game.theater import Coalition, TheaterGroundObject
+
+
+def create_transfer(
+    game_model: Any,
+    origin: ControlPoint,
+    destination: ControlPoint,
+    units: dict[GroundUnitType, int],
+    now: datetime,
+    request_airflift: bool = False,
+) -> TransferOrder:
+    """Create and register a transfer through the normal model pathway."""
+    transfer = TransferOrder(
+        origin=origin,
+        destination=destination,
+        units=units,
+        player=origin.captured,
+        request_airflift=request_airflift,
+    )
+    game_model.transfer_model.new_transfer(transfer, now)
+    return transfer
+
+
+def submit_transfer(
+    game_model: Any,
+    origin: ControlPoint,
+    destination: ControlPoint,
+    selected_units: dict[GroundUnitType, int],
+    now: datetime,
+    request_airlift: bool = False,
+) -> TransferOrder:
+    """Submit dialog selections through the normal transfer creation pathway."""
+    units = {unit_type: count for unit_type, count in selected_units.items() if count}
+    for unit_type, count in units.items():
+        logging.info(f"Transferring {count} {unit_type} from {origin} to {destination}")
+    return create_transfer(
+        game_model,
+        origin,
+        destination,
+        units,
+        now,
+        request_airflift=request_airlift,
+    )
 
 
 class Transport:
@@ -108,15 +154,25 @@ class TransferOrder:
     #: stops and can switch transport modes before reaching their destination.
     position: ControlPoint = field(init=False)
 
-    #: True if the transfer order belongs to the player.
-    player: Player = field(init=False)
-
     #: The units being transferred.
     units: dict[GroundUnitType, int]
 
+    #: The coalition that owns this transfer. This is the sole ownership authority;
+    #: it is set at construction time and never derived from mutable control-point
+    #: state.
+    player: Player
+
     transport: Optional[Transport] = field(default=None)
 
+    #: True once the units have actually left their origin, which is when a
+    #: transport is first assigned -- not when the order is written. A transfer
+    #: waiting for a lift it does not have is not in limbo: its units are still
+    #: at the origin, still deployable to the front, still counted in the ground
+    #: war. Old saves have no such field, so it defaults to departed.
+    departed: bool = field(default=True)
+
     request_airflift: bool = field(default=False)
+    ground_blocked_reason: str = ""
 
     #: Fuel and munitions carried by a supply order (see game/warehouse/supply.py).
     #: The units of a supply order are its cargo trucks; they are never commissioned.
@@ -145,13 +201,24 @@ class TransferOrder:
 
     def __post_init__(self) -> None:
         self.position = self.origin
-        self.player = self.origin.captured
 
     @property
     def description(self) -> str:
         if self.transport is None:
+            if self.ground_blocked_reason:
+                return self.ground_blocked_reason
             return "No transports available"
         return self.transport.description()
+
+    @property
+    def cancellation_error(self) -> str | None:
+        if isinstance(self.transport, Convoy) and self.transport.ground_managed:
+            journey = self.transport.ground_journey
+            if journey is not None and journey.travelled_distance > 0:
+                return "A convoy on the road must reach its next base before cancelling; its units cannot return instantly"
+            if not self.position.is_friendly(self.player):
+                return "The convoy's current base is no longer friendly"
+        return None
 
     def kill_all(self) -> None:
         self.units.clear()
@@ -185,7 +252,9 @@ class TransferOrder:
             self.units.clear()
             return
         logging.info(f"Units halting at {location}.")
-        location.base.commission_units(self.units)
+        if self.departed:
+            # Never left, never debited: handing them over would create copies.
+            location.base.commission_units(self.units)
         self.units.clear()
 
     @property
@@ -332,7 +401,7 @@ class AirliftPlanner:
         self.game = game
         self.transfer = transfer
         self.next_stop = next_stop
-        self.for_player = transfer.destination.captured
+        self.for_player = transfer.player
         self.package = Package(next_stop, game.db.flights, auto_asap=True)
 
     def compatible_with_mission(
@@ -456,7 +525,9 @@ class AirliftPlanner:
             return min(partial, key=lambda c: c[:2])[2]
         return None
 
-    def create_package_for_airlift(self, now: datetime) -> None:
+    def create_package_for_airlift(
+        self, now: datetime, events: GameUpdateEvents
+    ) -> None:
         candidates = self._candidate_squadrons()
         if self.game.settings.logistics_enabled:
             # Biggest transport that fits the load, fewest flights (see
@@ -477,13 +548,8 @@ class AirliftPlanner:
         if self.package.flights:
             self.package.set_tot_asap(now)
             self.game.ato_for(self.for_player).add_package(self.package)
-            from game.server import EventStream
-            from game.sim import GameUpdateEvents
-
-            events = GameUpdateEvents()
             for f in self.package.flights:
-                events = events.new_flight(f)
-            EventStream.put_nowait(events)
+                events.new_flight(f)
 
     def create_airlift_flight(self, squadron: Squadron) -> int:
         from game.warehouse.supply import carriers_per_aircraft, fit_pallets
@@ -544,9 +610,7 @@ class MultiGroupTransport(MissionTarget, Transport):
         self.transfers: List[TransferOrder] = []
 
     def is_friendly(self, to_player: Player) -> bool:
-        if self.origin.captured == to_player:
-            return True
-        return False
+        return self.player_owned == to_player
 
     def add_units(self, transfer: TransferOrder) -> None:
         self.transfers.append(transfer)
@@ -598,6 +662,8 @@ class MultiGroupTransport(MissionTarget, Transport):
 
     @property
     def player_owned(self) -> Player:
+        if self.transfers:
+            return self.transfers[0].player
         return self.origin.captured
 
     def find_escape_route(self) -> Optional[ControlPoint]:
@@ -608,12 +674,93 @@ class MultiGroupTransport(MissionTarget, Transport):
 
     @property
     def coalition(self) -> Coalition:
-        return self.origin.coalition
+        return self.origin.coalition.game.coalition_for(self.player_owned)
 
 
 class Convoy(MultiGroupTransport):
     def __init__(self, origin: ControlPoint, destination: ControlPoint) -> None:
         super().__init__(namegen.next_convoy_name(), origin, destination)
+        self.ground_managed = False
+        self.ground_journey: GroundJourney | None = None
+        self.ground_blocked_reason = ""
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.__dict__.setdefault("ground_managed", False)
+        self.__dict__.setdefault("ground_journey", None)
+        self.__dict__.setdefault("ground_blocked_reason", "")
+
+    def prepare_ground_movement(self, not_before_turn: int) -> None:
+        """Snapshot the authored campaign road route; never advance on generation."""
+        self.ground_managed = True
+        if self.ground_journey is not None:
+            return
+        try:
+            route = GroundRoute.from_points(
+                GroundPosition(p.x, p.y)
+                for p in self.origin.convoy_route_to(self.destination)
+            )
+        except (ValueError, KeyError) as exc:
+            self.ground_blocked_reason = f"No valid campaign road route: {exc}"
+            return
+        self.ground_journey = GroundJourney(route, last_advanced_turn=not_before_turn)
+        self.ground_blocked_reason = ""
+        self.update_ground_position()
+
+    def update_ground_position(self) -> None:
+        if self.ground_journey is not None:
+            point = self.ground_journey.position
+            self.position = self.origin.position.new_in_same_map(point.x, point.z)
+
+    def movement_pause_reason(self) -> str:
+        if not movement_enabled(self.coalition.game.settings):
+            return "Ground Movement disabled"
+        if not self.destination.is_friendly(self.player_owned):
+            return "next base is no longer friendly"
+        return self.ground_blocked_reason
+
+    def movement_info(self) -> dict[str, Any] | None:
+        if not self.ground_managed:
+            return None
+        journey = self.ground_journey
+        reason = self.movement_pause_reason()
+        return {
+            "status": "paused" if reason else "moving",
+            "pause_reason": reason or None,
+            "distance_travelled_m": journey.travelled_distance if journey else 0,
+            "distance_remaining_m": journey.remaining_distance if journey else None,
+            "route_distance_m": journey.route.length if journey else None,
+            "progress_percent": (
+                round(100 * journey.travelled_distance / journey.route.length, 2)
+                if journey
+                else 0
+            ),
+        }
+
+    def movement_summary(self) -> str:
+        info = self.movement_info()
+        if info is None:
+            return "departs this turn"
+        remaining = info["distance_remaining_m"]
+        distance = (
+            f"{remaining / 1000:.1f} km remaining"
+            if remaining is not None
+            else "route unavailable"
+        )
+        if info["pause_reason"]:
+            return f"Paused: {info['pause_reason']} · {distance}"
+        return f"{info['progress_percent']:.0f}% complete · {distance}"
+
+    def mission_route(self) -> tuple[Point, ...]:
+        journey = self.ground_journey
+        if journey is None or self.movement_pause_reason():
+            return (self.route_start,)
+        settings = self.coalition.game.settings
+        points = journey.preview(
+            distance_per_turn(settings, on_road=True),
+            distance_per_turn(settings, on_road=False),
+        )
+        return tuple(self.origin.position.new_in_same_map(p.x, p.z) for p in points)
 
     def mission_types(self, for_player: Player) -> Iterator[FlightType]:
         if self.is_friendly(for_player):
@@ -624,14 +771,22 @@ class Convoy(MultiGroupTransport):
 
     @property
     def route_start(self) -> Point:
+        if self.ground_managed:
+            return self.position
         return self.origin.convoy_origin_for(self.destination)
 
     @property
     def route_end(self) -> Point:
+        if self.ground_journey is not None:
+            p = self.ground_journey.route.segments[-1].end
+            return self.origin.position.new_in_same_map(p.x, p.z)
+        if self.ground_managed:
+            return self.destination.position
         return self.destination.convoy_origin_for(self.origin)
 
     def description(self) -> str:
-        return f"In a convoy from {self.origin} to {self.destination}"
+        text = f"In a convoy from {self.origin} to {self.destination}"
+        return f"{text} · {self.movement_summary()}" if self.ground_managed else text
 
     def find_escape_route(self) -> Optional[ControlPoint]:
         return None
@@ -721,6 +876,38 @@ class TransportMap(Generic[TransportType]):
 
 
 class ConvoyMap(TransportMap[Convoy]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_transit: list[Convoy] = []
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.__dict__.setdefault("in_transit", [])
+
+    def retain(self, convoy: Convoy) -> None:
+        """A departed cohort must not merge with newly departing reinforcements."""
+        if self.find_transport(convoy.origin, convoy.destination) is convoy:
+            del self.transports[convoy.origin][convoy.destination]
+        if convoy not in self.in_transit:
+            self.in_transit.append(convoy)
+
+    def disband_transport(self, transport: Convoy) -> None:
+        if transport in self.in_transit:
+            transport.disband()
+            self.in_transit.remove(transport)
+        else:
+            super().disband_transport(transport)
+
+    def __iter__(self) -> Iterator[Convoy]:
+        yield from super().__iter__()
+        yield from self.in_transit
+
+    def departing_from(self, origin: ControlPoint) -> Iterator[Convoy]:
+        yield from (convoy for convoy in self if convoy.origin == origin)
+
+    def travelling_to(self, destination: ControlPoint) -> Iterator[Convoy]:
+        yield from (convoy for convoy in self if convoy.destination == destination)
+
     def create_transport(
         self, origin: ControlPoint, destination: ControlPoint
     ) -> Convoy:
@@ -757,12 +944,6 @@ class PendingTransfers:
     def __iter__(self) -> Iterator[TransferOrder]:
         yield from self.pending_transfers
 
-    def _send_supply_route_event_stream_update(self) -> None:
-        from game.server import EventStream
-
-        with EventStream.event_context() as events:
-            events.update_supply_routes()
-
     @property
     def pending_transfer_count(self) -> int:
         return len(self.pending_transfers)
@@ -776,7 +957,34 @@ class PendingTransfers:
     def network_for(self, control_point: ControlPoint) -> TransitNetwork:
         return self.game.transit_network_for(control_point.captured)
 
-    def arrange_transport(self, transfer: TransferOrder, now: datetime) -> None:
+    def arrange_transport(
+        self, transfer: TransferOrder, now: datetime, events: GameUpdateEvents
+    ) -> None:
+        self._assign_transport(transfer, now, events)
+        if isinstance(transfer.transport, Convoy) and self._movement_enabled():
+            convoy = transfer.transport
+            convoy.prepare_ground_movement(self.game.turn)
+            if convoy.ground_journey is None:
+                transfer.ground_blocked_reason = convoy.ground_blocked_reason
+                self.convoys.remove(convoy, transfer)
+                return
+        if transfer.transport is not None:
+            transfer.ground_blocked_reason = ""
+        if (
+            transfer.transport is not None
+            and not transfer.departed
+            and transfer.supplies is None
+        ):
+            # The units leave the origin now, not when the order was written. Until
+            # a lift exists they sit at their base, where the ground war can still
+            # count them.
+            transfer.origin.base.commit_losses(transfer.units)
+            transfer.departed = True
+            events.update_motorpools_at(transfer.origin)
+
+    def _assign_transport(
+        self, transfer: TransferOrder, now: datetime, events: GameUpdateEvents
+    ) -> None:
         network = self.network_for(transfer.position)
         path = network.shortest_path_between(transfer.position, transfer.destination)
         next_stop = path[0]
@@ -797,7 +1005,9 @@ class PendingTransfers:
                 return self.cargo_ships.add(transfer, next_stop)
         else:
             next_stop = transfer.destination
-        AirliftPlanner(self.game, transfer, next_stop).create_package_for_airlift(now)
+        AirliftPlanner(self.game, transfer, next_stop).create_package_for_airlift(
+            now, events
+        )
         if (
             transfer.transport is None
             and transfer.supplies is not None
@@ -815,11 +1025,34 @@ class PendingTransfers:
             elif link == TransitConnection.Shipping:
                 self.cargo_ships.add(transfer, first_stop)
 
-    def new_transfer(self, transfer: TransferOrder, now: datetime) -> None:
-        transfer.origin.base.commit_losses(transfer.units)
+    def new_transfer(
+        self,
+        transfer: TransferOrder,
+        now: datetime,
+        events: GameUpdateEvents | None = None,
+    ) -> None:
+        assert (
+            transfer.player == self.player
+        ), "Transfer ownership does not match the collection's player"
+        if events is None:
+            from game.sim import GameUpdateEvents
+
+            events = GameUpdateEvents()
+            publish_events = True
+        else:
+            publish_events = False
+        # Not debited here: they are committed when a lift actually exists, in
+        # arrange_transport. Until then they are at their base and the ground war
+        # still counts them.
+        transfer.departed = False
         self.pending_transfers.append(transfer)
-        self.arrange_transport(transfer, now)
-        self._send_supply_route_event_stream_update()
+        self.arrange_transport(transfer, now, events)
+        events.update_motorpools_at(transfer.origin)
+        events.update_supply_routes()
+        if publish_events:
+            from game.server import EventStream
+
+            EventStream.put_nowait(events)
 
     def split_transfer(self, transfer: TransferOrder, size: int) -> TransferOrder:
         """Creates a smaller transfer that is a subset of the original."""
@@ -841,9 +1074,15 @@ class PendingTransfers:
             units[unit_type] = take
         for td in to_delete:
             del transfer.units[td]
-        new_transfer = TransferOrder(transfer.origin, transfer.destination, units)
+        new_transfer = TransferOrder(
+            transfer.origin,
+            transfer.destination,
+            units,
+            player=transfer.player,
+        )
         # Split where the cargo is now, not back at its origin.
         new_transfer.position = transfer.position
+        new_transfer.departed = transfer.departed
         if transfer.supplies is not None:
             new_transfer.supplies = transfer.supplies.split_off(
                 sum(new_transfer.units.values())
@@ -854,89 +1093,165 @@ class PendingTransfers:
 
     # Type checking ignored because singledispatchmethod doesn't work with required type
     # definitions. The implementation methods are all typed, so should be fine.
+    # The dispatch classes are passed explicitly to .register() to avoid
+    # get_type_hints() evaluation (which would require importing GameUpdateEvents
+    # at module load time, creating a circular import through game.sim).
     @singledispatchmethod
-    def cancel_transport(  # type: ignore
+    def cancel_transport(
         self,
-        transport,
+        transport: object,
         transfer: TransferOrder,
+        events: GameUpdateEvents,
     ) -> None:
         pass
 
-    @cancel_transport.register
+    @cancel_transport.register(Airlift)
     def _cancel_transport_air(
-        self, transport: Airlift, _transfer: TransferOrder
+        self, transport: Airlift, _transfer: TransferOrder, events: GameUpdateEvents
     ) -> None:
-        from game.sim import GameUpdateEvents
-        from game.server import EventStream
-
         flight = transport.flight
         flight.package.remove_flight(flight)
-        events = GameUpdateEvents().delete_flight(flight)
+        events.delete_flight(flight)
         if not flight.package.flights:
             self.game.ato_for(self.player).remove_package(flight.package)
-            events = events.delete_flights_in_package(flight.package)
-        EventStream().put_nowait(events)
+            events.delete_flights_in_package(flight.package)
 
-    @cancel_transport.register
+    @cancel_transport.register(Convoy)
     def _cancel_transport_convoy(
-        self, transport: Convoy, transfer: TransferOrder
+        self, transport: Convoy, transfer: TransferOrder, events: GameUpdateEvents
     ) -> None:
         self.convoys.remove(transport, transfer)
 
-    @cancel_transport.register
+    @cancel_transport.register(CargoShip)
     def _cancel_transport_cargo_ship(
-        self, transport: CargoShip, transfer: TransferOrder
+        self, transport: CargoShip, transfer: TransferOrder, events: GameUpdateEvents
     ) -> None:
         self.cargo_ships.remove(transport, transfer)
 
-    def cancel_transfer(self, transfer: TransferOrder) -> None:
+    def cancel_transfer(
+        self, transfer: TransferOrder, events: GameUpdateEvents | None = None
+    ) -> None:
+        reason = getattr(transfer, "cancellation_error", None)
+        if reason:
+            raise ValueError(reason)
+        refund_at = transfer.origin
+        if isinstance(transfer.transport, Convoy) and transfer.transport.ground_managed:
+            refund_at = transfer.position
+        if events is None:
+            from game.sim import GameUpdateEvents
+
+            events = GameUpdateEvents()
+            publish_events = True
+        else:
+            publish_events = False
         if transfer.transport is not None:
-            self.cancel_transport(transfer.transport, transfer)
+            self.cancel_transport(transfer.transport, transfer, events)
         self.pending_transfers.remove(transfer)
         if transfer.supplies is not None:
+            # A supply run's cargo goes back into stock where it is now.
             from game.warehouse.supply import return_to
 
             return_to(transfer, transfer.position, transfer.size)
             transfer.units.clear()
-        else:
-            transfer.origin.base.commission_units(transfer.units)
-        self._send_supply_route_event_stream_update()
+        elif transfer.departed:
+            # Units that never found a lift never left, so there is nothing to
+            # give back -- they have been at the origin the whole time.
+            refund_at.base.commission_units(transfer.units)
+        events.update_motorpools_at(refund_at)
+        events.update_supply_routes()
+        if publish_events:
+            from game.server import EventStream
 
-    def perform_transfers(self) -> None:
+            EventStream.put_nowait(events)
+
+    def perform_transfers(self, events: GameUpdateEvents) -> None:
         """
         Performs completable transfers from the list of pending transfers and adds
         uncompleted transfers which are en route back to the list of pending transfers.
         Disbands all convoys and cargo ships
         """
-        self.disband_uncompletable_transfers()
+        self.disband_uncompletable_transfers(events)
+        had_transfers = bool(self.pending_transfers)
+        ground_transfers: set[int] = set()
+        for convoy in list(self.convoys):
+            if self._movement_enabled() and not convoy.ground_managed:
+                convoy.prepare_ground_movement(self.game.turn - 1)
+            if not convoy.ground_managed:
+                continue
+            ground_transfers.update(id(transfer) for transfer in convoy.transfers)
+            if convoy.size:
+                for transfer in list(convoy.transfers):
+                    if not transfer.size:
+                        convoy.remove_units(transfer)
+            if (
+                convoy.ground_journey is not None
+                and not convoy.movement_pause_reason()
+                and convoy.size
+            ):
+                settings = self.game.settings
+                convoy.ground_journey.advance(
+                    self.game.turn,
+                    distance_per_turn(settings, on_road=True),
+                    distance_per_turn(settings, on_road=False),
+                )
+                convoy.update_ground_position()
+            if not convoy.size or (
+                convoy.ground_journey is not None and convoy.ground_journey.completed
+            ):
+                for transfer in list(convoy.transfers):
+                    origin = transfer.position
+                    transfer.proceed()
+                    events.update_motorpools_at(origin, transfer.position)
+                self.convoys.disband_transport(convoy)
+            else:
+                self.convoys.retain(convoy)
         incomplete = []
         for transfer in self.pending_transfers:
-            transfer.proceed()
+            origin = transfer.position
+            if id(transfer) not in ground_transfers:
+                transfer.proceed()
+            # Refresh both the pre-move (origin/current) and post-move
+            # (destination/commission) locations.
+            events.update_motorpools_at(origin, transfer.position)
             if not transfer.completed:
                 incomplete.append(transfer)
         self.pending_transfers = incomplete
-        self.convoys.disband_all()
+        for convoy in list(self.convoys):
+            if not convoy.ground_managed:
+                self.convoys.disband_transport(convoy)
         self.cargo_ships.disband_all()
-        self._send_supply_route_event_stream_update()
+        if had_transfers:
+            events.update_supply_routes()
 
-    def plan_transports(self, now: datetime) -> None:
+    def _movement_enabled(self) -> bool:
+        settings = getattr(self.game, "settings", None)
+        return (
+            settings is not None
+            and getattr(settings, "plugins", {}).get("groundmovement") is True
+            and movement_enabled(settings)
+        )
+
+    def plan_transports(self, now: datetime, events: GameUpdateEvents) -> None:
         """
         Plan transports for all pending and completable transfers which don't have a
         transport assigned already. This calculates the shortest path between current
         position and destination on every execution to ensure the route is adopted to
         recent changes in the theater state / transit network.
         """
-        self.disband_uncompletable_transfers()
+        self.disband_uncompletable_transfers(events)
+        if self._movement_enabled():
+            for convoy in self.convoys:
+                convoy.prepare_ground_movement(self.game.turn)
         for transfer in self.pending_transfers:
             if transfer.transport is None:
-                self.arrange_transport(transfer, now)
+                self.arrange_transport(transfer, now, events)
             if transfer.supplies is not None:
                 if transfer.transport is None:
                     transfer.stalled_turns = getattr(transfer, "stalled_turns", 0) + 1
                 else:
                     transfer.stalled_turns = 0
 
-    def disband_uncompletable_transfers(self) -> None:
+    def disband_uncompletable_transfers(self, events: GameUpdateEvents) -> None:
         """
         Disbands all transfers from the list of pending_transfers which can not be
         completed anymore because the theater state changed or the transit network does
@@ -944,10 +1259,26 @@ class PendingTransfers:
         """
         completable_transfers = []
         for transfer in self.pending_transfers:
+            # An in-transit convoy is not physically at its origin CP. Preserve its
+            # owner, cargo and position if either base changes hands; pause instead
+            # of commissioning it at a distant base or deleting it on a capture.
+            if isinstance(transfer.transport, Convoy) and (
+                transfer.transport.ground_managed or self._movement_enabled()
+            ):
+                completable_transfers.append(transfer)
+                continue
             if not transfer.is_completable(self.network_for(transfer.position)):
+                origin = transfer.position
+                escape = transfer.find_escape_route()
                 if transfer.transport:
-                    self.cancel_transport(transfer.transport, transfer)
+                    self.cancel_transport(transfer.transport, transfer, events)
                 transfer.disband()
+                # Disband may commission units at the position or the escape
+                # route snapshotted before transport cancellation.
+                events.update_motorpools_at(origin)
+                if escape is not None:
+                    events.update_motorpools_at(escape)
+                events.update_supply_routes()
             else:
                 completable_transfers.append(transfer)
         self.pending_transfers = completable_transfers

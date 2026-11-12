@@ -17,9 +17,12 @@ from game.ato.airtaaskingorder import AirTaskingOrder
 from game.ato.flight import Flight
 from game.ato.flighttype import FlightType
 from game.ato.package import Package
+from game.ato.traveltime import TotEstimator
+from game.commander.coordinatedtot import apply_tot_mode
 from game.dcs.beacons import Beacons
 from game.game import Game
 from game.radio.RadioFrequencyContainer import RadioFrequencyContainer
+from game.radio.TacanContainer import TacanContainer
 from game.radio.radios import RadioFrequency
 from game.radio.tacan import TacanChannel
 from game.server import EventStream
@@ -133,6 +136,8 @@ class PackageModel(QAbstractListModel):
         if not index.isValid():
             return None
         flight = self.flight_at_index(index)
+        if flight is None:
+            return None
         if role == Qt.ItemDataRole.DisplayRole:
             return self.text_for_flight(flight)
         if role == Qt.ItemDataRole.DecorationRole:
@@ -159,60 +164,113 @@ class PackageModel(QAbstractListModel):
 
     def add_flight(self, flight: Flight) -> None:
         """Adds the given flight to the package."""
-        with self.game_model.sim_controller.paused_sim():
-            self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
-            self.package.add_flight(flight)
-            # update_tot is not called here because the new flight does not have a
-            # flight plan yet. Will be called manually by the caller.
-            self.endInsertRows()
+        self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
+        self.package.add_flight(flight)
+        # update_tot is not called here because the new flight does not have a
+        # flight plan yet. Will be called manually by the caller.
+        self.endInsertRows()
+        self._redraw_the_rest_of_the_package(flight)
 
     def cancel_or_abort_flight_at_index(self, index: QModelIndex) -> None:
         """Removes the flight at the given index from the package."""
-        self.cancel_or_abort_flight(self.flight_at_index(index))
+        flight = self.flight_at_index(index)
+        if flight is not None:
+            self.cancel_or_abort_flight(flight)
 
     def cancel_or_abort_flight(self, flight: Flight) -> None:
-        with self.game_model.sim_controller.paused_sim():
-            if flight.state.cancelable:
-                self.delete_flight(flight)
-                EventStream.put_nowait(GameUpdateEvents().delete_flight(flight))
-            else:
-                flight.abort()
-                EventStream.put_nowait(GameUpdateEvents().update_flight(flight))
+        if flight.state.cancelable:
+            self.delete_flight(flight)
+            EventStream.put_nowait(GameUpdateEvents().delete_flight(flight))
+        else:
+            flight.abort()
+            EventStream.put_nowait(GameUpdateEvents().update_flight(flight))
 
     def delete_flight(self, flight: Flight) -> None:
         """Removes the given flight from the package."""
-        with self.game_model.sim_controller.paused_sim():
-            index = self.package.flights.index(flight)
-            self.beginRemoveRows(QModelIndex(), index, index)
-            self.package.remove_flight(flight)
-            self.endRemoveRows()
-            self.update_tot()
-            self.game_model.release_freq(flight.frequency)
-            self.game_model.release_tacan(flight.tacan)
+        index = self.package.flights.index(flight)
+        self.beginRemoveRows(QModelIndex(), index, index)
+        self.package.remove_flight(flight)
+        self.endRemoveRows()
+        self.update_tot()
+        self.game_model.release_freq(flight.frequency)
+        self.game_model.release_tacan(flight.tacan)
+        self._redraw_the_rest_of_the_package(flight)
 
-    def flight_at_index(self, index: QModelIndex) -> Flight:
-        """Returns the flight located at the given index."""
+    def _redraw_the_rest_of_the_package(self, changed: Flight) -> None:
+        """Push every OTHER flight in the package to the map.
+
+        Adding or removing a flight changes the routes of the ones that stay: crossing
+        two flights is what turns their join and split from nav points into a
+        rendezvous and back. Only the flight that was added or removed was ever pushed,
+        so the others kept drawing the names they had until something else touched
+        them.
+        """
+        events = GameUpdateEvents()
+        pushed = False
+        for flight in self.package.flights:
+            if flight is not changed:
+                events.update_flight(flight)
+                pushed = True
+        if pushed:
+            EventStream.put_nowait(events)
+
+    def flight_at_index(self, index: QModelIndex) -> Optional[Flight]:
+        """A Qt index may outlive its row while campaign results clear the ATO."""
+        if (
+            not index.isValid()
+            or index.model() is not self
+            or index.column() != 0
+            or not 0 <= index.row() < len(self.package.flights)
+        ):
+            return None
         return self.package.flights[index.row()]
 
     def set_tot(self, tot: datetime.datetime) -> None:
-        with self.game_model.sim_controller.paused_sim():
-            self.package.time_over_target = tot
-            self.update_tot()
+        self.package.time_over_target = tot
+        self.update_tot()
 
     def set_asap(self, asap: bool) -> None:
-        with self.game_model.sim_controller.paused_sim():
-            self.package.auto_asap = asap
-            self.update_tot()
+        self.package.auto_asap = asap
+        if asap:
+            self.package.auto_coordinated = False
+        self.update_tot()
+
+    def set_coordinated(self, coordinated: bool) -> None:
+        self.package.auto_coordinated = coordinated
+        if coordinated:
+            self.package.auto_asap = False
+        self.update_tot()
+
+    def push_tot_if_unreachable(self) -> None:
+        """Move the package TOT later if any flight can no longer make it.
+
+        Sliding the whole package keeps the spacing its offsets asked for, which a
+        flight left with an unreachable TOT does not.
+        """
+        if self.package.auto_asap or self.package.auto_coordinated:
+            # set_tot_asap already puts the TOT on the earliest reachable time.
+            return
+        now = self.game_model.sim_controller.current_time_in_sim
+        earliest = TotEstimator(self.package).earliest_tot(now)
+        if self.package.time_over_target < earliest:
+            self.package.time_over_target = earliest
 
     def update_tot(self) -> None:
-        with self.game_model.sim_controller.paused_sim():
-            if self.package.auto_asap:
-                self.package.set_tot_asap(
-                    self.game_model.sim_controller.current_time_in_sim
-                )
-            self.tot_changed.emit()
-            # For some reason this is needed to make the UI update quickly.
-            self.layoutChanged.emit()
+        if self.package.auto_coordinated and self.package.flights:
+            coalition = self.package.flights[0].coalition
+            apply_tot_mode(
+                self.package,
+                coalition.ato.packages,
+                self.game_model.sim_controller.current_time_in_sim,
+                coalition.game.settings.desired_player_mission_duration,
+            )
+        elif self.package.auto_asap:
+            self.package.set_tot_asap(
+                self.game_model.sim_controller.current_time_in_sim
+            )
+        self.tot_changed.emit()
+        # For some reason this is needed to make the UI update quickly.
+        self.layoutChanged.emit()
 
     @property
     def mission_target(self) -> MissionTarget:
@@ -270,36 +328,34 @@ class AtoModel(QAbstractListModel):
 
     def add_package(self, package: Package) -> None:
         """Adds a package to the ATO."""
-        with self.game_model.sim_controller.paused_sim():
-            self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
-            self.ato.add_package(package)
-            # We do not need to send events for new flights in the package here. Events
-            # were already sent when the flights were added to the in-progress package.
-            self.endInsertRows()
-            # noinspection PyUnresolvedReferences
-            self.client_slots_changed.emit()
-            self.on_packages_changed()
+        self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
+        self.ato.add_package(package)
+        # We do not need to send events for new flights in the package here. Events
+        # were already sent when the flights were added to the in-progress package.
+        self.endInsertRows()
+        # noinspection PyUnresolvedReferences
+        self.client_slots_changed.emit()
+        self.on_packages_changed()
 
     def cancel_or_abort_package_at_index(self, index: QModelIndex) -> None:
         """Removes the package at the given index from the ATO."""
         self.cancel_or_abort_package(self.package_at_index(index))
 
     def cancel_or_abort_package(self, package: Package) -> None:
-        with self.game_model.sim_controller.paused_sim():
-            with EventStream.event_context() as events:
-                if all(f.state.cancelable for f in package.flights):
-                    events.delete_flights_in_package(package)
-                    self._delete_package(package)
-                    return
+        with EventStream.event_context() as events:
+            if all(f.state.cancelable for f in package.flights):
+                events.delete_flights_in_package(package)
+                self._delete_package(package)
+                return
 
-                package_model = self.find_matching_package_model(package)
-                for flight in package.flights:
-                    if flight.state.cancelable:
-                        package_model.delete_flight(flight)
-                        events.delete_flight(flight)
-                    else:
-                        flight.abort()
-                        events.update_flight(flight)
+            package_model = self.find_matching_package_model(package)
+            for flight in package.flights:
+                if flight.state.cancelable:
+                    package_model.delete_flight(flight)
+                    events.delete_flight(flight)
+                else:
+                    flight.abort()
+                    events.update_flight(flight)
 
     def _delete_package(self, package: Package) -> None:
         """Removes the given package from the ATO."""
@@ -371,17 +427,74 @@ class TransferModel(QAbstractListModel):
     """The model for a ground unit transfer."""
 
     TransferRole = Qt.ItemDataRole.UserRole
+    inventory_changed = Signal()
 
     def __init__(self, game_model: GameModel) -> None:
         super().__init__()
         self.game_model = game_model
+        #: Snapshot of whether RED rows are currently visible to the model.
+        #: ``_all_transfers`` reads this rather than re-checking the live setting
+        #: on every call so that row contents never change silently; visibility
+        #: changes are applied atomically inside ``sync_game_and_visibility``.
+        self._red_visible: bool = self._compute_red_visible()
+        sim_controller = getattr(self.game_model, "sim_controller", None)
+        if sim_controller is not None:
+            sim_controller.sim_update.connect(self.on_sim_update)
+
+    def _compute_red_visible(self) -> bool:
+        """Whether RED rows are visible given the current game state."""
+        game = self.game_model.game
+        if game is None:
+            return False
+        return bool(getattr(game.settings, "enable_enemy_buy_sell", False))
+
+    @staticmethod
+    def owner_of(transfer: TransferOrder) -> Player:
+        return transfer.player
 
     @property
     def transfers(self) -> PendingTransfers:
         return self.game_model.game.coalition_for(player=Player.BLUE).transfers
 
+    def _transfers_for(self, player: Player) -> PendingTransfers:
+        return self.game_model.game.coalition_for(player=player).transfers
+
+    def _is_transfer_authorized(self, transfer: TransferOrder) -> bool:
+        """Whether the UI is allowed to mutate this transfer's ownership."""
+        return transfer.player.is_blue or (
+            transfer.player.is_red and self._compute_red_visible()
+        )
+
+    def _all_transfers(self) -> list[TransferOrder]:
+        if self.game_model.game is None:
+            return []
+        transfers = list(self._transfers_for(Player.BLUE).pending_transfers)
+        if self._red_visible:
+            transfers.extend(self._transfers_for(Player.RED).pending_transfers)
+        return transfers
+
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return self.transfers.pending_transfer_count
+        return len(self._all_transfers())
+
+    def sync_game_and_visibility(self) -> None:
+        """Re-snapshot RED-visibility, resetting the model if it changed.
+
+        Called from ``GameModel.set`` after game replacement, and from the
+        settings dialog after a successful settings application. When the
+        visibility snapshot changes, the snapshot is updated strictly inside
+        ``beginResetModel``/``endResetModel`` so views are notified and row
+        contents never change silently.
+        """
+        new_red_visible = self._compute_red_visible()
+        self.beginResetModel()
+        self._red_visible = new_red_visible
+        self.endResetModel()
+
+    def on_sim_update(self, _events: GameUpdateEvents) -> None:
+        """Refresh pending transfers replaced during turn processing."""
+        self.beginResetModel()
+        self.endResetModel()
+        self.inventory_changed.emit()
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
@@ -407,10 +520,23 @@ class TransferModel(QAbstractListModel):
 
     def new_transfer(self, transfer: TransferOrder, now: datetime) -> None:
         """Updates the game with the new unit transfer."""
-        self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
-        # TODO: Needs to regenerate base inventory tab.
-        self.transfers.new_transfer(transfer, now)
-        self.endInsertRows()
+        if not self._is_transfer_authorized(transfer):
+            return
+        visible = transfer.player.is_blue or (
+            transfer.player.is_red and self._red_visible
+        )
+        if visible:
+            if transfer.player.is_blue:
+                insert_row = len(self._transfers_for(Player.BLUE).pending_transfers)
+            else:
+                insert_row = self.rowCount()
+            self.beginInsertRows(QModelIndex(), insert_row, insert_row)
+        events = GameUpdateEvents()
+        self._transfers_for(self.owner_of(transfer)).new_transfer(transfer, now, events)
+        if visible:
+            self.endInsertRows()
+        EventStream.put_nowait(events)
+        self.inventory_changed.emit()
 
     def cancel_transfer_at_index(self, index: QModelIndex) -> None:
         """Cancels the planned unit transfer at the given index."""
@@ -418,15 +544,28 @@ class TransferModel(QAbstractListModel):
 
     def cancel_transfer(self, transfer: TransferOrder) -> None:
         """Cancels the planned unit transfer at the given index."""
-        index = self.transfers.index_of_transfer(transfer)
+        if not self._is_transfer_authorized(transfer):
+            return
+        if reason := getattr(transfer, "cancellation_error", None):
+            from PySide6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(None, "Cannot cancel transfer", reason)
+            return
+        transfers = self._transfers_for(self.owner_of(transfer))
+        visible_transfers = self._all_transfers()
+        if transfer not in visible_transfers:
+            return
+        index = visible_transfers.index(transfer)
         self.beginRemoveRows(QModelIndex(), index, index)
-        # TODO: Needs to regenerate base inventory tab.
-        self.transfers.cancel_transfer(transfer)
+        events = GameUpdateEvents()
+        transfers.cancel_transfer(transfer, events)
         self.endRemoveRows()
+        EventStream.put_nowait(events)
+        self.inventory_changed.emit()
 
     def transfer_at_index(self, index: QModelIndex) -> TransferOrder:
         """Returns the transfer located at the given index."""
-        return self.transfers.transfer_at_index(index.row())
+        return self._all_transfers()[index.row()]
 
 
 class AirWingModel(QAbstractListModel):
@@ -452,7 +591,27 @@ class AirWingModel(QAbstractListModel):
             return self.icon_for_squadron(squadron)
         elif role == AirWingModel.SquadronRole:
             return squadron
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return AirWingModel.tooltip_for_squadron(squadron)
         return None
+
+    @staticmethod
+    def tooltip_for_squadron(squadron: Squadron) -> Optional[str]:
+        """What the word under the task chip means.
+
+        The row draws a cohesion band by name -- Friendly, Frosty -- and the name on
+        its own does not say what it is about. Nothing at all for a squadron in the
+        Neutral band, which draws no word either.
+        """
+        from game.squadrons import friendship
+
+        value = squadron.cohesion
+        if value is None:
+            return None
+        band = friendship.band(value, squadron.settings)
+        if band.colour is None:
+            return None
+        return f"Squadron cohesion: {band.name} ({value:.1f} of 10)"
 
     @staticmethod
     def text_for_squadron(squadron: Squadron) -> str:
@@ -503,7 +662,11 @@ class SquadronModel(QAbstractListModel):
 
     @staticmethod
     def text_for_pilot(pilot: Pilot) -> str:
-        """Returns the text that should be displayed for the pilot."""
+        """Returns the text that should be displayed for the pilot.
+
+        No rank here: the detail line under the name already carries it in full,
+        and an abbreviation on top of that is the same fact twice.
+        """
         return pilot.name
 
     @staticmethod
@@ -512,17 +675,19 @@ class SquadronModel(QAbstractListModel):
         return None
 
     def _filtered_pilots(self) -> list[Pilot]:
-        """Roster subset this model exposes, preserving roster order.
+        """Roster subset this model exposes, ranking officers before their juniors.
 
-        "living" excludes dead pilots, "dead" keeps only them, "all" lists
-        everyone with living pilots first (stable within each group).
+        "living" excludes dead pilots, "dead" keeps only them, "all" lists everyone with
+        living pilots first. Sorting is stable, so pilots of equal rank keep the order
+        the roster gave them.
         """
         roster = self.squadron.current_roster
         if self.pilot_filter == "living":
-            return [p for p in roster if p.alive]
-        if self.pilot_filter == "dead":
-            return [p for p in roster if not p.alive]
-        return sorted(roster, key=lambda p: not p.alive)
+            roster = [p for p in roster if p.alive]
+        elif self.pilot_filter == "dead":
+            roster = [p for p in roster if not p.alive]
+        order = self.squadron.rank_order
+        return sorted(roster, key=lambda p: (not p.alive, *order(p)))
 
     def pilot_at_index(self, index: QModelIndex) -> Pilot:
         """Returns the pilot located at the given index."""
@@ -534,13 +699,30 @@ class SquadronModel(QAbstractListModel):
         pilot.player = not pilot.player
         self.endResetModel()
 
-    def toggle_leave_state(self, index: QModelIndex) -> None:
-        pilot = self.pilot_at_index(index)
+    def toggle_leave_state(self, index: QModelIndex, turns: int = 0) -> None:
+        self.toggle_leave_state_of(self.pilot_at_index(index), turns)
+
+    def toggle_leave_state_of(self, pilot: Pilot, turns: int = 0) -> None:
+        """By pilot rather than by row: the model resets after each one, and a row
+        number taken before that no longer means the same man."""
         self.beginResetModel()
-        if pilot.on_leave:
-            self.squadron.return_from_leave(pilot)
-        else:
-            self.squadron.send_on_leave(pilot)
+        try:
+            if pilot.on_leave:
+                # Calling a man back early costs him; leave that ran out does not.
+                self.squadron.cancel_leave(pilot)
+            else:
+                self.squadron.send_on_leave(
+                    pilot, turns, self.squadron.coalition.game.turn
+                )
+        finally:
+            self.endResetModel()
+
+    def discharge_pilot(self, index: QModelIndex) -> None:
+        self.discharge(self.pilot_at_index(index))
+
+    def discharge(self, pilot: Pilot) -> None:
+        self.beginResetModel()
+        self.squadron.discharge(pilot)
         self.endResetModel()
 
     def is_auto_assignable(self, task: FlightType) -> bool:
@@ -563,6 +745,9 @@ class GameModel:
     def __init__(self, game: Optional[Game], sim_controller: SimController) -> None:
         self.game: Optional[Game] = game
         self.sim_controller = sim_controller
+        from qt_ui.groundmovement import GroundMovementCommands
+
+        self.ground_movement_commands = GroundMovementCommands(self)
         self.transfer_model = TransferModel(self)
         self.blue_air_wing_model = AirWingModel(self, player=Player.BLUE)
         self.red_air_wing_model = AirWingModel(self, player=Player.RED)
@@ -596,6 +781,9 @@ class GameModel:
         self.game = game
         self.ato_model.replace_from_game(player=True)
         self.red_ato_model.replace_from_game(player=False)
+        # The transfer model snapshots RED-visibility; re-sync after the game
+        # object is replaced so its visible rows match the new game's settings.
+        self.transfer_model.sync_game_and_visibility()
 
     def get(self) -> Game:
         if self.game is None:
@@ -621,6 +809,10 @@ class GameModel:
                 allocated_icls.add(cp.icls_channel)
             elif isinstance(cp, RadioFrequencyContainer):
                 allocated_freqs.add(cp.frequency)
+            # Airfields are TacanContainers too (built-in/portable TACAN); pick
+            # them up so the manual-assign dialog can warn on duplicates.
+            if isinstance(cp, TacanContainer) and not isinstance(cp, NavalControlPoint):
+                allocated_tacan.add(cp.tacan)
         # Map DME/VOR-DME/TACAN/VORTAC beacons share TACAN's channelization, so flag
         # them as unavailable too, not just other player-assigned channels (#36).
         for beacon in Beacons.iter_theater(self.game.theater):

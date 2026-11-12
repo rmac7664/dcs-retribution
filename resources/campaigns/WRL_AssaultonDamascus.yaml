@@ -1,11 +1,11 @@
 ---
 name: Syria - WRL - Assault on Damascus (v1.2) #1.0 - Original Release / #1.1 - Player F15e added / #1.2 - IADS ADDED & Massive Overhaul, Added C130 spawn support at main airbase
 theater: Syria
-authors: HolyOrangeJuice
+authors: HolyOrangeJuice, modified by juanjux
 recommended_player_faction: WRL - Task Force Blue
 recommended_enemy_faction: WRL - Task Force Red
 recommended_start_date: 2022-06-04
-description: "<p>This campaign is the gold standard of WRL campaigns. This campaign will always have the latest retribution additions. Consider this a feature complete campaign as it progresses through updates. Play Battle 4 Gerogia as a beginner mission. Play this one for an advanced experience</p><p>This mission was heavily modified by HolyOrangeJuice [OscarJuliet] for the WRL Group. Join us for weekly PVE events. <a style=\"color: white\" href=\"https://werunliberation.com\">werunliberation.com</a></p><p>Original Battle for Golan Heights by Khopa.</p><p>This modified campaign does not represent any historical time period or events. Attack from Ramat-David and eliminate the enemy around Damascus.</p><p>All WRL Campaigns use high budget and high income to focus on the PVE goals to eliminate the enemy. Use lower starting money and income for increased difficulty.</p>"
+description: "<p>This campaign is the gold standard of WRL campaigns. This campaign will always have the latest escalation additions. Consider this a feature complete campaign as it progresses through updates. Play Battle 4 Gerogia as a beginner mission. Play this one for an advanced experience</p><p>This mission was heavily modified by HolyOrangeJuice [OscarJuliet] for the WRL Group. Join us for weekly PVE events. <a style=\"color: white\" href=\"https://werunliberation.com\">werunliberation.com</a></p><p>Original Battle for Golan Heights by Khopa.</p><p>This modified campaign does not represent any historical time period or events. Attack from Ramat-David and eliminate the enemy around Damascus.</p><p>All WRL Campaigns use high budget and high income to focus on the PVE goals to eliminate the enemy. Use lower starting money and income for increased difficulty.</p>"
 miz: WRL_AssaultonDamascus.miz
 performance: 2
 version: "10.7" #CTLD Zones Added
@@ -16,99 +16,7 @@ recommended_enemy_income_multiplier: 1.0
 settings:
   max_frontline_width: 30
 advanced_iads: true # Campaign has connection_nodes / power_sources / command_centers
-iads_config:
-#REDFOR DEFENSE MARJ AIRBASE AREA
-  - M-COMMAND-1:
-    - M-POWER-1
-    - M-POWER-2
-    - M-TOWER-1
-    - M-TOWER-2 
-  - M-EWR-1:
-    - M-POWER-1
-    - M-TOWER-1
-  - M-EWR-2:
-    - M-POWER-1
-    - M-TOWER-1
-  - M-EWR-3:
-    - M-POWER-2
-    - M-TOWER-2
-  - M-SAM-1:
-    - M-POWER-1
-    - M-TOWER-1
-  - M-SAM-2:
-    - M-POWER-1
-    - M-TOWER-1
-  - M-SAM-3:
-    - M-POWER-2
-    - M-TOWER-2
-  - M-SAM-4:
-    - M-POWER-2
-    - M-TOWER-2
-  - M-SAM-5:
-    - M-POWER-2
-    - M-TOWER-2
-  - M-SAM-6:
-    - M-POWER-2
-    - M-TOWER-2
- #REDFOR DEFENSE DAMASCUS AIRBASE AREA
-  - D-COMMAND-1:
-    - D-POWER-1
-    - D-POWER-2
-    - D-TOWER-1
-    - D-TOWER-2 
-  - D-EWR-1:
-    - D-POWER-1
-    - D-TOWER-1
-  - D-EWR-2:
-    - D-POWER-2
-    - D-TOWER-2
-  - D-EWR-3:
-    - D-POWER-2
-    - D-TOWER-2      
-  - D-SAM-1:
-    - D-POWER-1
-    - D-TOWER-1
-  - D-SAM-2:
-    - D-POWER-2
-    - D-TOWER-2
-  - D-SAM-3:
-    - D-POWER-1
-    - D-TOWER-1  
-  - D-SAM-4:
-    - D-POWER-2
-    - D-TOWER-2  
- #REDFOR DEFENSE AL-DUMAYR AIRBASE AREA
-  - A-COMMAND-1:
-    - A-POWER-1
-    - A-TOWER-1
-  - A-EWR-1:
-    - A-POWER-1
-    - A-TOWER-1
-  - A-EWR-2:
-    - A-POWER-1
-    - A-TOWER-1
-  - A-SAM-1:
-    - A-POWER-1
-    - A-TOWER-1
-  - A-SAM-2:
-    - A-POWER-1
-    - A-TOWER-1
- #BLUEFOR RAMAT DEFENSE
-  - R-COMMAND-1:
-    - R-POWER-1
-    - R-TOWER-1
-  - RAMAT1:
-    - R-POWER-1
-    - R-TOWER-1
-  - RAMAT2:
-    - R-POWER-1
-    - R-TOWER-1
-  - RAMAT3:
-    - R-POWER-1
-    - R-TOWER-1
-  - RAMAT4:
-    - R-POWER-1
-    - R-TOWER-1
+
 squadrons:
   CVN-74 John Stennis:
     - primary: BARCAP
@@ -116,117 +24,147 @@ squadrons:
       aircraft:
         - VF-142 #F14B
       size: 16
+      pilots: 20
     - primary: Strike
       secondary: any
       aircraft:
         - VFA-192 #Hornet Navy
       size: 16
+      pilots: 20
     - primary: AEW&C
       aircraft:
         - VAW-125 #E2C
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - S-3B Tanker
       size: 2
+      pilots: 6
     - primary: Strike
       secondary: any
       aircraft:
         - S-3B Viking
       size: 4
+      pilots: 8
   LHA-1 Tarawa:
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - AV-8B Harrier II Night Attack
       size: 12
+      pilots: 16
   # AIR SPAWN BLUE
   BLUEAIR:
     - primary: AEW&C
       aircraft:
         - E-3A
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - KC-135 Stratotanker
       size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - KC-130
       size: 2  
+      pilots: 6
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - B-52H Stratofortress
       size: 2
+      pilots: 6
     - primary: Strike
       secondary: any
       aircraft:
         - B-1B Lancer
       size: 2
+      pilots: 6
     - primary: BAI
       secondary: any
       aircraft:
         - F-117A Nighthawk
       size: 8   
+      pilots: 12
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
         - F-15C Eagle
       size: 16      
+      pilots: 20
   # Ramat-David
   30:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - MQ-9 Reaper
+      size: 2
+      pilots: 6
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - F-15E Strike Eagle (Suite 4+)
       size: 16  
+      pilots: 20
     - primary: SEAD
       secondary: air-to-ground
       aircraft:
         - VMFA-251 #Hornet - Marines
       size: 16
+      pilots: 20
     - primary: Strike
       secondary: any
       aircraft:
         - 23rd FS #Viper USAF
       size: 16
+      pilots: 20
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
         - 58th FS #F15c
       size: 16
+      pilots: 20
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - A-10C Thunderbolt II (Suite 7)
       size: 16
+      pilots: 20
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - AV-8B Harrier II Night Attack
       size: 16
+      pilots: 20
   Golan North:
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - A Company, 1-211th ARB #AH-64D Apache Longbow
       size: 8       
+      pilots: 12
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - Mi-24P Hind-F
       size: 8
+      pilots: 12
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - Ka-50 Hokum III
       size: 8
+      pilots: 12
     - primary: Transport
       secondary: air-to-ground
       aircraft:
         - HMLA-169 (UH-1H) #UH-1H Iroquois
       size: 8
+      pilots: 12
   # Golan South
   Golan South: 
     - primary: BAI
@@ -234,33 +172,46 @@ squadrons:
       aircraft:
         - AH-1W SuperCobra
       size: 4
+      pilots: 8
     - primary: BAI
       secondary: air-to-ground
       aircraft:
         - SA 342M Gazelle
       size: 8
+      pilots: 12
     - primary: Transport
       secondary: air-to-ground
       aircraft:
         - Mi-8MTV2 Hip
       size: 8
+      pilots: 12
   # Damascus
   7:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - WingLoong-I
+      size: 2
+      pilots: 6
     - primary: BARCAP
       secondary: air-to-air
       aircraft:
         - MiG-29S Fulcrum-C
       size: 12
+      pilots: 16
     - primary: SEAD
       secondary: air-to-ground
       aircraft:
         - Su-34 Fullback
       size: 12
+      pilots: 16
     - primary: Strike
       secondary: air-to-ground
       aircraft:
         - Su-24M Fencer-D
       size: 12
+      pilots: 16
   # Marj Ruhayyil
 #  23:
   # Al-Dumayr
@@ -279,7 +230,12 @@ squadrons:
 #  22:
   # QABR AS SITT
 #  29:
+# GPS jamming: one site on the enemy EWR marker whose 15 nm radius covers the
+# most of its own air defences. No radar on it, so it is a STRIKE target, not
+# SEAD, and a satellite-guided weapon aimed inside the bubble lands wide.
 ground_forces:
+  D-EWR-2: GPS Jamming Site (Red)
+
   M-SAM-1: SA-11
   M-SAM-2: SA-11
   M-SAM-3: SA-2/S-75

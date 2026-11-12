@@ -1,0 +1,151 @@
+-- Explicit entry point for exported campaign metadata. Loading is inert.
+assert(RealisticCAS and RealisticCAS.startDetection,"load Realistic CAS detectors first")
+do
+  function RealisticCAS.startMission(config)
+    local c=config or {}
+    if c.enabled~=true then return nil,"disabled" end
+    if RealisticCAS.mission or RealisticCAS._running then return nil,"already running" end
+    local r=c.registry
+    assert(type(r)=="table" and r.schemaVersion==1,"unsupported registry schema")
+    for _,field in ipairs({'groups','targets','observers','knownAirDefenseGroups','warnings'}) do
+      assert(type(r[field])=='table','missing registry '..field)
+    end
+    local known,managed,unitNames={},{},{}
+    for _,v in ipairs(r.knownAirDefenseGroups) do
+      assert(type(v.name)=='string','invalid SAM objective group')
+      known[v.name]=true
+    end
+    for _,v in ipairs(r.knownGroundGroups or {})do
+      assert(type(v.name)=='string' and v.name~='' and not known[v.name], 'invalid known ground group')
+      known[v.name]=true
+    end
+    for _,v in ipairs(r.groups) do
+      assert(type(v.name)=='string' and v.name~='' and not managed[v.name],'invalid target group')
+      assert(not known[v.name],'known ground group must not be concealed: '..v.name)
+      assert(v.originalInvisible==false,'visibility ownership required')
+      managed[v.name]=true
+    end
+    for _,v in ipairs(r.targets) do
+      assert(type(v.name)=='string' and v.name~='' and not unitNames[v.name],'invalid target unit')
+      assert(managed[v.groupName],'target outside managed group list')
+      unitNames[v.name]=true
+    end
+    if c.afacEnabled then
+      for _,v in ipairs(r.afacKnownTargets or {})do
+        assert(known[v.groupName] and not unitNames[v.name], 'invalid known AFAC target')
+        unitNames[v.name]=true
+      end
+    end
+    -- Build the environment before hiding anything. No guessed time or biome.
+    local environment=RealisticCAS.newEnvironment(c.environment)
+    assert(RealisticCAS.Sensors.finite(c.acquisitionSeconds) and c.acquisitionSeconds>=0
+      and c.acquisitionSeconds<=600,'acquisition time must be explicit and between 0 and 600 seconds')
+    assert(c.probabilisticDetection==nil or type(c.probabilisticDetection)=='boolean',
+      'invalid probabilistic detection option')
+    local probability=RealisticCAS.Sensors.probabilityConfig(c.probability)
+    RealisticCAS.validateContactReports(c)
+    assert(c.f10FrontlineContacts==nil or type(c.f10FrontlineContacts)=='boolean','invalid F10 contact option')
+    if c.f10FrontlineContacts then RealisticCAS.validateF10Contacts(c.frontlineMapGroups,managed)end
+    if c.afacEnabled then RealisticCAS.validateAFACMarking(c.afacMarking) end
+    local function log(kind,msg)
+      env.info('REALISTIC_CAS_MISSION|'..kind..'|t='..timer.getTime()..'|'..tostring(msg))
+    end
+    local api={active=false}
+    local handler={}
+    function api:stop()
+      local mapStopped=not self.f10Contacts or self.f10Contacts:stop()
+      local markersStopped=not self.detectors or self.detectors:stop()
+      if self.fog and not self.fog:stop() then
+        log('ERROR','visibility restoration incomplete; retry RealisticCAS.mission:stop()')
+        return false
+      end
+      if not markersStopped then
+        log('ERROR','AFAC spot cleanup incomplete; retry RealisticCAS.mission:stop()')
+        return false
+      end
+      if not mapStopped then
+        log('ERROR','F10 contact cleanup incomplete; retry RealisticCAS.mission:stop()')
+        return false
+      end
+      world.removeEventHandler(handler)
+      self.active=false
+      if RealisticCAS.mission==self then RealisticCAS.mission=nil end
+      return true
+    end
+    function handler:onEvent(event)
+      local dead=event and ((world.event.S_EVENT_DEAD and event.id==world.event.S_EVENT_DEAD)or
+        (world.event.S_EVENT_UNIT_LOST and event.id==world.event.S_EVENT_UNIT_LOST))
+      local killed=event and world.event.S_EVENT_KILL and event.id==world.event.S_EVENT_KILL
+      local born=event and world.event.S_EVENT_BIRTH and event.id==world.event.S_EVENT_BIRTH
+      if dead or killed or born then
+        local nav=api.detectors and api.detectors.afacNavigation
+        if nav then
+          local unit=event.initiator
+          if killed then unit=event.target end
+          local ok,err=pcall(function()nav:lifeEvent(unit,not born)end)
+          if not ok then log('ERROR','AFAC life notification: '..tostring(err))end
+        end
+      end
+      if event and event.id==world.event.S_EVENT_SHOT and api.detectors and api.detectors.afacMarking then
+        local ok,name=pcall(function() return event.initiator:getName() end)
+        if ok then api.detectors.afacMarking:shot(name) end
+      end
+      if event and (event.id==world.event.S_EVENT_SHOT or
+        (world.event.S_EVENT_SHOOTING_START and event.id==world.event.S_EVENT_SHOOTING_START))then
+        local nav=api.detectors and api.detectors.afacNavigation
+        if nav then
+          local ok,err=pcall(function()nav:fireEvent(event.initiator)end)
+          if not ok then log('ERROR','AFAC fire notification: '..tostring(err))end
+        end
+      end
+      if event and world.event.S_EVENT_MISSION_END and event.id==world.event.S_EVENT_MISSION_END then
+        local ok,result=pcall(function()return api:stop()end)
+        if not ok or not result then log('ERROR','mission-end cleanup: '..tostring(result)) end
+      end
+    end
+    RealisticCAS.mission=api -- Retain a recovery handle even if startup rollback fails.
+    local ok,err=pcall(function()
+      local afacObservers={}
+      for _,observer in ipairs(r.observers)do if observer.afac then afacObservers[observer.name]=true end end
+      api.fog=assert(RealisticCAS.start({enabled=true,targets=r.groups,ttl=c.ttl,
+        contactReports=c.contactReports,contactReportSeconds=c.contactReportSeconds,
+        contactCoordinateFormat=c.afacMarking and c.afacMarking.coordinateFormat,
+        afacObservers=afacObservers,
+        debug=c.debug,expiryBudget=c.expiryBudget,onFire=function(groupName,unitName,point)
+          local nav=api.detectors and api.detectors.afacNavigation
+          if nav then nav:fire(groupName,unitName,point)end
+        end}))
+      api.detectors=RealisticCAS.startDetection(api.fog,{targets=r.targets,observers=r.observers,
+        knownTargets=c.afacEnabled and r.afacKnownTargets or nil,
+        airDefenseThreats=r.airDefenseThreats,afacAvoidance=c.afacAvoidance,
+        environment=environment,acquisitionSeconds=c.acquisitionSeconds,
+        probabilisticDetection=c.probabilisticDetection,
+        probability=probability,
+        afacEnabled=c.afacEnabled,
+        afacMarking=c.afacMarking,
+        contactReports=c.contactReports,
+        acquisitionMaxGap=c.acquisitionMaxGap,interval=c.interval,revisit=c.revisit,
+        targetBudget=c.targetBudget,workBudget=c.workBudget,cellSize=c.cellSize,
+        observerBudget=c.observerBudget,losBudget=c.losBudget,observerQuantum=c.observerQuantum,
+        debug=c.debug,traceDecisions=c.traceDecisions})
+      if c.f10FrontlineContacts then
+        api.f10Contacts=RealisticCAS.startF10Contacts(api.fog,{groups=c.frontlineMapGroups,
+          log=function(detail)log('F10_ERROR',detail)end})
+      end
+      world.addEventHandler(handler)
+      api.active=true
+      for _,warning in ipairs(r.warnings)do log('WARNING',warning)end
+      for name,value in pairs(probability) do log('CONFIG',name..'='..value) end
+      log('START','managedGroups='..#r.groups..'|targetUnits='..#r.targets..
+        '|observers='..#r.observers..'|knownSAMGroups='..#r.knownAirDefenseGroups..
+        '|acquisitionSeconds='..c.acquisitionSeconds..'|probabilisticDetection='..tostring(c.probabilisticDetection==true))
+    end)
+    if not ok then
+      log('ERROR','startup: '..tostring(err))
+      local cleaned,result=pcall(function()return api:stop()end)
+      if not cleaned or not result then log('ERROR','rollback: '..tostring(result))end
+      return nil,tostring(err)
+    end
+    return api
+  end
+end

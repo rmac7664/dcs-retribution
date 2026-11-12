@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 from datetime import datetime
 from typing import Any, Optional, TYPE_CHECKING
 
 from game.armedforces.armedforces import ArmedForces
 from game.ato.airtaaskingorder import AirTaskingOrder
+from game.ato.savedpoints import SavedPoint
 from game.campaignloader.defaultsquadronassigner import DefaultSquadronAssigner
 from game.commander import TheaterCommander
 from game.commander.missionscheduler import MissionScheduler
@@ -13,7 +16,7 @@ from game.navmesh import NavMesh
 from game.orderedset import OrderedSet
 from game.procurement import AircraftProcurementRequest, ProcurementAi
 from game.profiling import MultiEventTracer, logged_duration
-from game.squadrons import AirWing
+from game.squadrons import AirWing, friendship
 from game.theater.bullseye import Bullseye
 from game.theater.player import Player
 from game.theater.transitnetwork import TransitNetwork, TransitNetworkBuilder
@@ -38,12 +41,17 @@ class Coalition:
         self.faction = faction
         self.budget = budget
         self.ato = AirTaskingOrder()
+        self.saved_points: list[SavedPoint] = []
         self.transit_network = TransitNetwork()
         self.procurement_requests: OrderedSet[AircraftProcurementRequest] = OrderedSet()
         self.bullseye = Bullseye(self.game.point_in_world(0, 0))
         self.air_wing = AirWing(player, game, self.faction)
         self.armed_forces = ArmedForces(self.faction)
         self.transfers = PendingTransfers(game, player)
+        # Money the automated HQ spent per category last turn (front_line,
+        # runways, buildings, ground_objects, aircraft). Surfaced in the
+        # Finances dialog so the player sees where their income went.
+        self.last_turn_expenses: dict[str, float] = {}
 
         # Late initialized because the two coalitions in the game are mutually
         # dependent, so must be both constructed before this property can be set.
@@ -143,13 +151,46 @@ class Coalition:
     def set_bullseye(self, bullseye: Bullseye) -> None:
         self.bullseye = bullseye
 
-    def end_turn(self) -> None:
+    def reconcile_pilot_pools(self) -> list[str]:
+        """Cross-check every squadron's pool of available pilots against its roster.
+
+        Cheap -- it walks the ATO once -- and it turns a desync from a dead end into
+        a log line: a fit, unassigned pilot who has fallen off the list is put back
+        rather than being unassignable until the turn ends.
+        """
+        flying = {
+            id(member.pilot)
+            for package in self.ato.packages
+            for flight in package.flights
+            for member in flight.iter_members()
+            if member.pilot is not None
+        }
+        restored = []
+        for squadron in self.air_wing.iter_squadrons():
+            for pilot in squadron.reconcile_available_pilots(flying):
+                restored.append(f"{pilot.name} ({squadron.name})")
+        if restored:
+            logging.warning(
+                "Pilots were off their squadron's available list with nothing "
+                "holding them; put back: %s",
+                ", ".join(restored),
+            )
+        return restored
+
+    def end_turn(self, events: GameUpdateEvents) -> None:
         """Processes coalition-specific turn finalization.
 
         For more information on turn finalization in general, see the documentation for
         `Game.finish_turn`.
         """
         self.air_wing.end_turn()
+
+        # After the air wing rather than before it: a squadron that moved this turn has
+        # to meet its new neighbours, and this turn's recruits have to start meeting
+        # anybody. Here rather than in Squadron.end_turn because the drift crosses
+        # squadrons at a base, and per-squadron would roll every crossing pair twice.
+        friendship.tend_friendships(self.air_wing, self.game.settings)
+
         self.budget += Income(self.game, self.player).total
 
         # Need to recompute before transfers and deliveries to account for captures.
@@ -161,7 +202,7 @@ class Coalition:
         # one hop ahead. ControlPoint.process_turn handles unit deliveries. The
         # coalition-specific turn-end happens before the theater-wide turn-end, so this
         # is handled correctly.
-        self.transfers.perform_transfers()
+        self.transfers.perform_transfers(events)
 
     def preinit_turn_0(self, squadrons_start_full: bool) -> None:
         """Runs final Coalition initialization.
@@ -170,7 +211,7 @@ class Coalition:
         """
         self.air_wing.populate_for_turn_0(squadrons_start_full)
 
-    def initialize_turn(self, is_turn_0: bool) -> None:
+    def initialize_turn(self, is_turn_0: bool, events: GameUpdateEvents) -> None:
         """Processes coalition-specific turn initialization.
 
         For more information on turn initialization in general, see the documentation
@@ -187,7 +228,7 @@ class Coalition:
         with logged_duration("Procurement of airlift assets"):
             self.transfers.order_airlift_assets()
         with logged_duration("Transport planning"):
-            self.transfers.plan_transports(self.game.conditions.start_time)
+            self.transfers.plan_transports(self.game.conditions.start_time, events)
         if self.player.is_red and self.game.settings.logistics_enabled:
             # The AI flies urgent or threatened ship and convoy cargo instead, and
             # keeps a transport squadron so its supply can go by air.
@@ -201,7 +242,12 @@ class Coalition:
             ensure_transport_squadron(self.game, self)
             request_more_transports(self.game, self)
 
-        if not is_turn_0:
+        # When the LLM commands OPFOR, leave red's air plan empty for it to author
+        # via the API. The scripted commander still runs as a fallback at Take Off if
+        # the AI issues no orders (see game.agent.service.run_opfor_fallback_if_needed).
+        # Procurement still runs so red reinforces automatically either way.
+        ai_controls_red = self.player.is_red and self.game.settings.opfor_ai_enabled
+        if not is_turn_0 and not ai_controls_red:
             self.plan_missions(self.game.conditions.start_time)
         if self.game.settings.logistics_enabled:
             # After scheduling, so take-off times are final.
@@ -248,19 +294,27 @@ class Coalition:
             manage_runways = self.game.settings.automate_runway_repair
             manage_front_line = self.game.settings.automate_front_line_reinforcements
             manage_aircraft = self.game.settings.automate_aircraft_reinforcements
+            manage_ground_objects = self.game.settings.automate_ground_object_repairs
+            manage_buildings = self.game.settings.automate_building_repairs
         else:
             manage_runways = True
             manage_front_line = True
             manage_aircraft = True
+            manage_ground_objects = self.game.settings.automate_ground_object_repairs
+            manage_buildings = self.game.settings.automate_building_repairs
 
-        self.budget = ProcurementAi(
+        procurement = ProcurementAi(
             self.game,
             self.player,
             self.faction,
             manage_runways,
             manage_front_line,
             manage_aircraft,
-        ).spend_budget(self.budget)
+            manage_ground_objects,
+            manage_buildings,
+        )
+        self.budget = procurement.spend_budget(self.budget)
+        self.last_turn_expenses = procurement.last_expenses
 
     def add_procurement_request(self, request: AircraftProcurementRequest) -> None:
         self.procurement_requests.add(request)

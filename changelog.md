@@ -1,3 +1,179 @@
+﻿# Escalation v1.0.0
+
+## Features/Improvements
+* **[UI]** Suggest the campaign name and current date when saving a new campaign for the first time (adapted from RetLab #1387).
+* **[Flight Plans]** Place attack Escort and SEAD Escort holds at ingress instead of near the target, preserving patrol and transport protection.
+* **[Intel]** Economy map links with icon hover highlighting and direct base-tab links from Air and Ground forces.
+* **[Ground Movement]** Buy faction towing trucks for mobile SAM batteries in the location dialog and REST/MCP API, limited to the total number of towable units plus two.
+* **[Pilots]** Assign names by drag-and-drop or ordered squadron autofill, with thirteen themed name lists and editable user categories shared across campaigns.
+* **[Mods]** Update Spino's F-15EX to v3.0 with three air-to-air variants, fifteen stations, revised payloads, fuel capacities and radio presets. Blufor Current and WRL - Task Force Blue can field the CFT variant.
+* **[IMAC]** Optional in-mission scripted air coordination with aircraft and cruise-missile interception, returning-fighter tasking, support evasion, DEAD waiting and F10 pause controls for both coalitions.
+* **[IADS]** Rebuild sparse topology with configurable fixed power feeds (default two), automatic radio failover and 35 nm coverage defaults; reduce redundant campaign infrastructure.
+* **[Map]** Add separate Blue/Red visibility filters for destroyed repairable sites, alongside the non-repairable filters.
+* **[Repairs]** Cancel pending building repairs with refunds in the UI and OPFOR REST/MCP; select individual buildings through the API.
+* **[Live Pilots]** Preselect post-debrief leave grants without understaffing squadrons and update projected pilot coverage as grants change.
+* **[Realistic CAS]** AFACs wait in a safe orbit when defences block their work area, recheck access and return at BINGO fuel.
+* **[F10 Map]** Label destroyed objectives, including cleared armor/SAM sites, and retain markers at destroyed building positions.
+* **[Ground Movement]** Relocate whole mobile SAM/radar sites with audited mobility, towing/carrier checks, offline transit, legacy-save compatibility and player/API controls.
+* **[F10 Map]** Include installation types in objective marker labels alongside codenames and allegiance.
+* **[UI]** Add an aircraft payload library editor for Escalation and Custom presets, accessible from Edit → Payloads and flight payloads.
+* **[Mission Generation]** Automatically equip player A-10C II aircraft with HMCS + NVG at night, respecting disabled helmets and era restrictions.
+* **[Flight Plans]** Optional shared package routes, enabled by default for BARCAP, TARCAP and Refueling, with map edits and OPFOR API support.
+* **[Weather]** Show estimated base and top heights for each active cloud layer from the matching installed preset.
+* **[Economy]** Configurable equipment resale value, enabled at 85% of the new price by default, shared by both coalitions.
+* **[Map]** [RetLab] Save named lines and areas per squadron, manage them in Player Aircrafts, and export them to kneeboards and supported DTCs (adapted from RetLab).
+* **[BARCAP]** Refuel AI patrols before BINGO with transit and queueing fuel margins when more than twenty minutes remain, then resume the original station window, with safe RTB fallbacks.
+* **[Naval]** Release attacked formations locally and limit anti-ship salvos per mission, with defensive exceptions and persistent shot accounting (adapted from RetLab).
+* **[Ground Forces]** Generate configurable vehicle-based MANPADS teams with rifleman auxiliaries and dispersed placement.
+* **[Units]** Add eight stock CurrentHill ground units from DCS 2.9.31 and missing Iraqi aircraft availability without requiring mod packs (adapted from RetLab #1413).
+* **[High Command]** Balance reward score ranges, limit bomber squadron rewards to two aircraft, avoid redundant support loans, and show difficulty separately from priority.
+* **[Live Pilots]** Share small, configurable morale gains from squadron mates' air and ground victories.
+* **[UI]** Allow missile sites to be disbanded for a refund after campaign start.
+* **[Realistic CAS]** Show discovery times on F10 contact markers.
+* **[UI]** Highlight visible map icons when hovering over Show on map buttons.
+* **[Missiles]** Snap map aimpoints to visible enemy objective icons at any zoom level.
+* **[UI]** Persistent campaign alert bell with counts, actionable notices and turn-by-turn reminders for unresolved problems.
+* **[Missiles]** Persistent objective/GPS assignments for missile sites and land-attack ships, with range validation, main-map picking and OPFOR REST/MCP support.
+* **[Map]** Filter missile sites separately from air defences in map search.
+* **[OPFOR AI]** RED reserve movement and base-stock deployment through REST/MCP, with the same rules as BLUE.
+* **[Campaigns]** Modernize Clash of the Titans with redundant IADS, GPS jammers, depots, ground supply and balanced, dispersed air wings.
+* **[Ground Movement]** Reuse the main map for GPS destination selection without opening or loading another map.
+* **[Ground Movement]** Show exclusion zones while selecting a map destination without changing saved layer preferences.
+* **[Ground Movement]** Choose GPS destinations on the map with live route, distance, arrival estimates and blocked-position feedback.
+* **[Ground Movement]** Reserve groups reached by the front automatically reinforce their own side, closing active movements and keeping surplus in the Motor Pool.
+* **[Ground Movement]** Persistent convoy and armor transport with Motor Pool support, infantry mobility, route previews, dispatch/stop controls, progress and loss tracking, and API commands.
+* **[Ground Movement]** Deploy custom Reserve Armor Groups from base stock to friendly GPS positions, with active defence and persistent movement.
+* **[Realistic CAS]** AI-only AFAC area and frontline missions with skill-based reconnaissance, coordinated laser/IR/smoke marking, threat avoidance, pilot experience and protected UAV operators.
+* **[Realistic CAS]** Progressive ground-target discovery, full-front CAS search patrols and optional F10 contact reports, with terrain, weather, daylight and movement effects.
+* **[Live Pilots]** Per-squadron pilot capacities, reserve slots for new campaign squadrons, bulk roster actions and seniority/cohesion-based crew selection.
+* **[Squadrons]** Add 229 squadron presets and expand 27 with stock DCS liveries, including the Mirage F1CR for French factions (adapted from RetLab #1466).
+* **[UI]** Redesigned Air Wings and Air Wing Configuration with aircraft/base grouping, searchable selectors, squadron cards and task controls.
+* **[Mission Generation]** Date- and latitude-based mission times with local sunrise and sunset in the WEATHER tooltip.
+* **[Live Pilots]** Expanded morale and relationship modelling with configurable bands, recovery, damaged-return penalties and roster indicators.
+* **[Campaign]** Configurable persistent aircraft, ship and building damage, with shared base workshops, mechanic hiring, repair controls and debrief/API reporting.
+* **[High Command]** Objectives and rewards for both sides, with redeemable tickets, aircraft loans, base selection and integrated map and debrief tracking.
+* **[Campaigns]** Improve Gran Polvorin's IADS power and communications coverage; authored infrastructure moves require a new campaign.
+* **[UI]** Campaign-wide GPS points shared across player aircraft, with ground elevations, editable map pins and aircraft/kneeboard export.
+* **[Campaign]** Protect newly captured bases from recapture for one full turn, with an event log notice for bases without ground forces.
+* **[Payload]** Select GAU-8 combat mix, HEI or practice ammunition for the A-10 family and save it with the loadout.
+* **[DTC]** Expanded Apache, Viper, Hornet and CJS aircraft cartridges with navigation, tactical overlays and recovery data (adapted from RetLab and Retribution #966).
+* **[DTC]** Add Hornet orbit references and radio labels, complete Viper automatic countermeasure tables and reserve its bullseye steerpoint (adapted from RetLab).
+* **[Flight Plans]** Configurable runway/carrier approach alignment and departure holds, with calm-wind runway selection, precise localizer geometry and shorter helicopter distances.
+* **[Payload]** Hide training, smoke, illumination and other non-combat stores by default, with an option to show them.
+* **[Live Pilots]** Configurable rank names and promotion XP thresholds, with updated defaults for new campaigns.
+* **[Mission Log]** Configurable combat commentary with coalition and pilot identification, base capture/loss notices and separate monitoring/interception controls.
+* **[Flight Plans]** Fuel-aware planning with route and refuelling estimates, automatic tanker support and prompts when edits change fuel requirements.
+* **[Planning]** Add optional pre-push and pre-station tanker stops with configurable refuelling time and boom/probe matching (adapted from RetLab).
+* **[UI]** Redesigned flight and package editors with crew controls, timelines, task colours and direct switching between flights.
+* **[Planning]** Add Coordinated package timing behind covering SEAD/DEAD, with ASAP fallback and warnings (adapted from RetLab).
+* **[UI]** Intel statistics and history with independent faction and metric comparisons.
+* **[UI]** Shared campaign and per-pilot aircraft notes in Player Aircrafts.
+* **[Escalation]** DCS Escalation branding and simplified navigation, preserving existing campaign data and save paths.
+* **[UI]** Searchable faction transfers and GPS deployments in Intel, with group counts, destinations and progress, plus bulk ground-unit transfer controls.
+* **[UI]** Reorganized searchable settings with consolidated plugin controls, repair options and automatically saved application preferences.
+* **[UI]** Live OPFOR AI commander status and activity, with connection controls and turn cancellation.
+* **[UI]** Redesigned base and purchasing dialogs with grouped catalogues, squadron inventories, repair costs and deployable-force comparisons.
+* **[UI]** Map layers for the wind at the surface, 2000 m and 8000 m, under Navmesh & terrain, off by default.
+* **[UI]** The debriefing totals what each side's losses cost: aircraft and ground units to replace, and the income lost while the buildings are repaired.
+* **[Cheats]** Location Destroy/Revive cheat: a site's window destroys or revives everything there.
+* **[UI]** Interactive flight-plan map editing with role-coloured waypoints, target attack runs, leg distances and context actions.
+* **[Mission Generator]** Blue tanker and AEW&C orbits are drawn on the F10 map, labelled with callsign, type, frequency and TACAN, and each CAP station as a thinner racetrack. (adapted from the RetLab fork)
+* **[Live Pilots]** Detailed pilot records and experience breakdowns covering kills, missions, wounds, aircraft losses and morale.
+* **[Campaign AI]** The auto-planner frags the detectors covering a sector before the SAMs behind them: a DEAD sent at a SAM the network holds dark has nothing to shoot at. The OPFOR briefing carries the same tactic. (adapted from the RetLab fork)
+* **[Mods]** Support for the CurrentHill German Military Assets pack (1.5.0), behind a New Game checkbox: 25 units from the Leopard 2A7V to the Sachsen frigate, with the combat ones in the modern NATO faction. The Patriot KAT1 battery moved here from the USA pack. Two batteries can be generated and bought: Skyshield C-RAM, and FlaRakRad with IRIS-T SLS.
+* **[Mods]** F-22A 2.1.0: the IRST pod moved to station 6 and the combined AMRAAM-plus-pod stores are gone, so every shipped loadout was rebuilt around them. The mod's own smoke, the GBU-32 and the anti-radiation Mako are offered in the pylon editor.
+* **[Mods]** Frenchpack 5.0: the FELIN riflemen, LRAC gunner and PGM marksman are selectable. The mod's own VAB Mephisto is gone, which DCS now ships, and campaigns in progress move to it.
+* **[Mods]** CurrentHill Ukraine pack 2.0.0: the T-64BV and the T-84 Oplot-M are gone from the mod, which ED now ships itself. Campaigns in progress move to the DCS units.
+* **[Mods]** Support for the CurrentHill Turkey Military Assets pack (2.0.0), behind a New Game checkbox: the Bayraktar TB2 with its MAM-C and MAM-L munitions, flying CAS, BAI and armed recon for Ukraine 2020.
+* **[Mods]** The Su-35S is declared at v2.0.37b. Every store the fork puts on a pylon is still one the mod offers.
+* **[Mods]** The Spanish Naval Assets pack is declared at desdemicabina 3.3.0, and the Juan Carlos I is the single-player hull the release added, whose deck elevators move.
+* **[Mods]** CurrentHill UK pack 1.5.0: the Scimitar and the Scorpion are gone from the mod, which ED now ships itself. Campaigns in progress move to the DCS units.
+* **[Mods]** The CurrentHill Russia and Sweden packs are declared at 2.0.1 and 1.5.0. Neither release added, removed or renamed a unit.
+* **[Mission Generation]** Optional GPS jamming with campaign/faction support and effects on satellite-guided weapons (adapted from 414Ret).
+* **[Cleanup]** Remove obsolete Pretense, Hercules and retired mission-script integrations, with compatibility migrations for old saves.
+* **[UI]** Reliable save-on-exit handling that prompts only for real changes and keeps the campaign open after cancelled or failed saves.
+* **[Map]** Distinct infrastructure icons and search filters for factories, warehouses, fuel depots and oil.
+* **[OPFOR AI]** Expanded API reporting for pilot records and leave, repair progress, factory status, IADS state and air losses.
+* **[Live Pilots]** Optional pilot cheats (Settings, Cheats page): rename, set rank, heal and revive.
+* **[UI]** Command palette: Ctrl+P finds settings, bases, objectives, squadrons, pilots, flights and every command in the menus, and opens what is chosen.
+* **[UI]** A site's window has Show on map, which moves the map to the site without zooming.
+* **[Campaigns]** Battle for Area 51: red's IADS is one network instead of three with its three power stations feeding a single grid, and blue gets the radars, comms towers and power stations it never had.
+* **[IADS]** Clear power, communications and autonomous-site status on the map and in site dialogs, with configurable infrastructure coverage.
+* **[IADS]** Check terrain visibility when associating ground radars with SAM sites, so batteries without usable cover can operate autonomously (adapted from RetLab).
+* **[UI]** The map has a search box: find a place by its code name, by what is parked there ("Patriot", "Linebacker") or by what kind of thing it is, with filters by side and by kind.
+* **[UI]** Searchable long combo-box lists with visible draggable scrollbars.
+* **[Mission Generator]** New *Use JTAC if the faction has one defined* option under Gameplay, beside *Number of JTAC controllers*, so the JTAC aircraft can be switched off mid-campaign instead of only in the new-game wizard.
+* **[UI]** Qt updated to 6.11.2.
+* **[UI]** Back to the native Windows file, colour and font dialogs.
+* **[Campaign]** New *Ignore parking space at airbases* option.
+* **[UI]** Radar sites, missile batteries and jamming sites are interchangeable: buy any of the three where one stands, and the icon follows what is parked there.
+* **[Factions]** WRL Task Force Blue gets an AN/FPS-117, so its EWR markers stop fielding Patriot search radars.
+* **[Plugins]** Splash Damage updated to 3.4.7, which fixes the Walleye crash, and 65 of its options are offered instead of 33.
+* **[Sim]** Removed fast forward and its two settings. Take Off hands DCS the mission at the time it was planned for.
+* **[Campaign]** New campaign "Marianas - Second Island Chain (2027)": a Taiwan crisis gone kinetic, Guam cratered and Rota, Tinian and Saipan taken. No ground front -- the islands change hands by air assault. Brings the China 2027 faction (adapted from the 414Ret fork).
+* **[Mission Generation]** Ship groups generate as mixed task groups instead of N copies of one hull: a screen fields destroyers, frigates and a cruiser where the faction has them, capped at three types. The buy menu still gives the hull picked (adapted from the 414Ret fork).
+* **[Payload]** Save per-airframe/task default loadouts for newly planned player flights.
+* **[Kneeboard]** Reconnaissance and package-coordination pages with cached theater maps and compact JPEG imagery.
+* **[Mission Generation]** Every generated mission is archived as well: a named, dated copy lands in `Missions/Retribution Archive/`, which DCS's own mission browser lists, so a past turn re-opens straight from the game. The newest 20 are kept, and the turn is still written to `retribution_nextturn.miz` exactly as before.
+* **[Plugins]** Configurable staggered cruise-missile raids with briefing, naval magazine and debrief tracking.
+* **[Mods]** Updated the bundled **Community A-4E-C** mod definition to **v2.3.0** (upstream PR #840) — refreshed weapon set plus the Shrike payload-rail CLSID fix (`AGM-45B → LAU-34_AGM-45B`) in the SEAD/anti-ship presets.
+* **[UX]** Bulk-set altitude across a flight's en-route waypoints, step the per-waypoint altitude editor by 1000 ft, and set the altitude scatter band and the patrol floor.
+* **[UI]** Double-clicking a log entry that names a base or site moves the map to it, without zooming.
+
+## Fixes
+* **[Ground Movement]** Let existing armor groups and mobile SAMs leave a nearby terrain exclusion through a bounded off-road exit, retaining terrain and ownership checks for the rest of the route.
+* **[OPFOR AI]** Preserve ground orders and deliberately empty air plans instead of replacing them with the scripted Take Off fallback.
+* **[Campaign]** Remove captured aircraft from squadrons without an evacuation destination and clean up affected saves without paying capture proceeds twice.
+* **[Ground Movement]** Allow reserve armor already at a friendly base to join its stock immediately without a zero-length route error.
+* **[Flight Plans]** Keep individual altitude profiles on shared routes and add vertical separation between overlapping flights.
+* **[Ground Movement]** Find terrain-safe off-road detours when campaign roads cannot connect, retaining off-road travel budgets and friendly-territory checks.
+* **[Map]** Initialize the map view before vector layers mount and preserve error stacks in the embedded console.
+* **[UI]** Exclude sold aircraft from squadron counts, totals and sorting immediately.
+* **[Squadrons]** Allow empty relocations from damaged runways after selling all aircraft, including when reloading a campaign.
+* **[Payload]** Match Shrike seekers independently of date restrictions, preserve manual weapon settings and correct AGM-45/78 head tables (adapted from RetLab #1366).
+* **[UI]** Show the campaign outcome after accepting mission results and use the correct text for defeats.
+* **[Performance]** Accelerate ground-unit placement with prepared and indexed land/sea geometry queries.
+* **[UI]** Guard stale flight selections when mission results replace the ATO.
+* **[Mission Generator]** Keep the coalition bullseye off flight routes, removing the extra F10 route leg.
+* **[IADS]** Keep unpowered SAM sites dark when lost communications trigger autonomous operation.
+* **[FIX]** Buying or selling at a site the enemy had targeted replanned both sides, emptying the player's ATO, and left the old threat ring behind for the combat simulation. Only the enemy is replanned now.
+* **[FIX]** The leg from the join to the ingress is flown at the package's speed, like the rest of the formation route. It was priced per flight, so an escort on a faster airframe arrived first. (adapted from the RetLab fork)
+* **[FIX]** The theatre AEW&C station could land on a boat, so a squadron flew two racetracks beside the carrier while an airfield with an E-3A parked on it was skipped. It is a land base now, and never a station already planned. (found in the RetLab fork)
+* **[FIX]** A supply route or shipping lane whose two ends are the same base is skipped and named in the log. Five shipped campaigns carried one. (adapted from the RetLab fork)
+* **[FIX]** US Super Hornets called with Australia's callsigns. The mod ships four pools and the extension carried one, holding the RAAF names. (adapted from the RetLab fork)
+* **[FIX]** The High Digit SAMs 40B6M track radar was declared under an id no build of the mod registers, so DCS dropped it from any site that used it.
+* **[Flight Plans]** Remove redundant strike line-up waypoints and place joins along the planned route.
+* **[FIX]** Two knots of wind was enough to select a bare runway at a field whose ILS runway was free; in calm air the ILS runway is preferred.
+* **[FIX]** Carrier map markers no longer reset or rebuild during dragging.
+* **[FIX]** Unticking a unit in the New Game wizard survives adding another one.
+* **[FIX]** A pilot on leave could not be called back while his squadron was at full strength, which it usually is: he holds his own place the whole time he is away, so coming back takes nobody else's.
+* **[FIX]** An escort put on a TARCAP emptied the map: the escort and the patrol each took their timing from the other, and nothing survived the recursion.
+* **[FIX]** A target nearer than the doctrine's minimum ingress distance could not be planned at all -- *No solutions found for waypoint* -- because the window the IP is looked for in closed to nothing.
+* **[FIX]** Two convoys on the road could both be called `Convoy 001`: the counter behind the name is not in the save. A campaign that already holds such a pair is repaired on load.
+* **[FIX]** A flight given a TOT offset **ahead** of its package arrived *behind* it instead, so an Escort or SEAD Escort never got there first. The package now leaves room for the flights that have to arrive ahead of it.
+* **[FIX]** A patrol in a package (TARCAP, BARCAP, tanker) could be given a takeoff before the mission started. The earliest package TOT is measured against every flight's own takeoff now, rather than estimated.
+* **[FIX]** Planning an escort into a package that holds nothing but escorts crashed -- it escorted itself. It flies the package's ordinary geometry now, and a plan that asks for itself raises a planning error.
+* **[FIX]** Nine factions had no early-warning radar, so their EWR markers fielded a SAM's acquisition radar instead.
+* **[FIX]** A site pinned by a campaign generated without its point defence.
+* **[FIX]** A CAP guarding its own base could be given a patrol route so short that DCS deleted the flight the moment it spawned, without it flying a metre. Patrol routes are now lengthened away from the enemy until they are long enough to be flown.
+* **[FIX]** Every orbit in a package ended at the same time, whichever flight's time was generated first, so an AWACS or a tanker packaged with a shorter-lived BARCAP left station early — up to two hours in one case.
+* **[FIX]** A payload with an empty pylon was thrown away whole and the aircraft was planned carrying nothing at all: the Tornado IDS strike fit leaves four stations free, so a Tornado sent on a strike flew with no bombs.
+* **[FIX]** Some building objectives could never be recorded as destroyed: an objective was only credited once every map object in its trigger zone was dead, and many of those zones hold scenery that cannot be destroyed at all. An objective standing on scenery with no damage model is credited on a direct hit now.
+* **[Plugins]** The BigEye EWR plugin's *has datalink / RWR / IRST* options never reached the radar-picture engine, so the picture was built from visual and radar alone whatever was ticked.
+* **[Campaigns]** Three authored factories never generated: the loader read factory markers from only one of the two authoring blocks, so The Tblisi Gap, Retake the Falklands and Operation Allied Sword each lost one. Every object class now loads from either block. NEW game required.
+* **[Aircraft]** Two squadron liveries pointed at personal Saved-Games-only skins and rendered wrong for anyone without them, on a server above all: the UH-1H and the C-130J-30 use in-game liveries now. The C-130J one was the only definition of that transport, so it was wrong in every campaign.
+* **[FIX]** The AH-1W carries TOW again in Blufor Late Cold War (80s): DCS models only the 1985 BGM-71D, so a 1983 campaign left the Cobra with rocket pods against armour. The faction overrides the weapon's year to 1970.
+* **[FIX]** The AIM-7P is date-gated on the Hornet's LAU-115 rails. Only three of its four clsids were declared, so picking the Sparrow P from those stations gave an unrecognised store with no introduction year -- a 1987 missile that flew in any campaign, however early. The F, M and MH rail clsids were already listed.
+* **[FIX]** The A-6E's TALDs and its AN/ALQ-167 pod are recognised weapons now: the TALDs were in no weapon file, so they never counted as decoys for SEAD planning and dodged their 1987 date, and the pod never counted as a jammer.
+* **[FIX]** **The A-6E drops laser-guided bombs again.** Nothing declared its TRAM turret as a designator, so the planner saw a loadout with no targeting pod and swapped every GBU for iron, in every campaign at every date. The A-6A has no TRAM and is unchanged.
+* **[Mission Generation]** Fixed an unloadable mission when every preferred neutral nation was already claimed by a belligerent: the generator handed a claimed country to the neutral coalition, putting one nation on two coalitions, which DCS rejects. It picks a genuinely unclaimed nation now.
+* **[Plugins]** Restored the **BigEye EWR** plugin to the active plugin list. It was the documented successor to the retired `ewrs` script but had itself been dropped, so the option was missing from the Plugin Options page and there were no early-warning calls at all. Off by default, as before.
+* **[Plugins]** Restored the **LotATC export** plugin to the active plugin list, and fixed a cross-wired option in its config: the *Export anti-air symbols* toggle was read into the *Export BLUE anti-air* flag, so symbols could not be turned off and the blue export followed the wrong checkbox.
+* **[Air Defense]** Generic AAA sites are no longer auto-issued a search radar, so they generate as optically-guided guns instead of radar-directed flak. The shared `AAA Site` / `Cold War Flak Site` layouts kept a fill-by-default radar slot that pulled in *any* of the faction's search radars (sometimes even a SAM site's big search radar); the slot is now `fill: false`, so only groups that explicitly bring a radar (e.g. the KS-19's SON-9 Fire Can) are radar-directed.
+* **[Mission Generation]** Fixed crashes planning a strike against a fully-destroyed objective (divide-by-zero), the "Fix TOTs automatically" action, and player ground-start flights spawning in the air.
+* **[UI]** Player cold-start CAP is no longer flagged in the past-start-times warning.
+* **[Server]** Bounded uvicorn's graceful shutdown so the app can no longer hang on exit.
+
 # Retribution v1.6.0
 
 ## Features/Improvements
@@ -23,20 +199,69 @@
 * **[Logistics]** "Send by air" from a replenishment ship loads the cargo at the friendly airfield that gives each squadron the shortest round trip (a carrier-based C-2 picks the nearest airfield ashore instead of flying to the main base and back), and every option shows its round trip and rough flight time, with a warning when that's longer than the mission.
 * **[Logistics]** Fixed: destroying every depot building at the enemy's main supply base didn't count as finding it, so neither "enemy main supply base found" nor "we destroyed the enemy's main supply base" was shown (the base still moved).
 * **[Logistics]** The AI now hunts enemy supply runs behind the lines as well as at the front. Airlifts are sized by real cargo weight (smaller aircraft get smaller pallets), and a supply airlift that hadn't landed when a mission stopped brings its cargo back.
+* **[FIX]** Su-57 payloads no longer lose stations. Its presets asked internal weapons bays for stores they cannot take (an R-73 on station 10 in all seven, rocket pods, a BetAB-500) and asked every anti-ship station for a Kh-59MK2, which this mod declares but offers on no pylon at all — so the anti-ship preset flew with 8 of 12 stations empty. DCS drops such a station silently. Added `tools/audit_mod_pylons.py`, which checks every payload the fork ships against each installed mod's own pylon table.
+* **[FIX]** The F-117A and both Tu-160s no longer offer DEAD. Their DCS types only know Pinpoint Strike, and a DEAD ingress tasks the group with AttackGroup, which only SEAD/CAS/AFAC/Antiship aircraft can execute — so planning one raised at Take Off, after the whole turn was planned. Use Strike against SAM sites with these aircraft.
+* **[Balance]** Ground objects (SAM/EWR/armor/ship/coastal sites) now cost money on turn 0 like on any other turn. They were free before while the buy dialog still quoted a price, so a campaign could open with a belt of S-300s bought for nothing — by either side, or by the OPFOR AI.
+* **[Campaign]** New option "AI buys its better ground units more often" (on by default): the AI picked a ground unit uniformly at random from everything of the right class it could afford, so a faction fielding both a modern MBT and a gun truck bought as many of one as the other. The roll is now weighted by price, the only capability measure the model has -- a weighting, not a maximum, so cheap units still appear (adapted from the 414Ret fork).
+* **[Mission Generation]** Two new naval options (both off by default): warships can be released to weapons-free one group at a time across a window instead of every hull opening up at once, and each warship group can carry a finite campaign stock of anti-ship missiles that never rearms — a group that runs dry drops back to return-fire rather than being disarmed. Land-attack cruise missiles keep their own separate magazine, so no shot is charged twice (adapted from the 414Ret fork).
+* **[UX]** Every generated mission is also archived to `Missions/Retribution Archive/<campaign>_turn<NN>_<timestamp>.miz`, so `retribution_nextturn.miz` no longer silently overwrites the mission you just flew. Self-pruning, and the fixed output path is unchanged (adapted from the 414Ret fork).
+* **[Modding]** Update High Digit SAMs support to 2.1.0: adds the SAMP/T battery (Aster 30, Block 1/1NT/2 launchers up to 200 km, ARABEL and Ground Fire 300 radars) and the SA-7/SA-7b Strela-2 MANPADS, and retires the units the mod dropped.
+* **[Mission Generation]** Ship-launched cruise missile strikes: warships carrying land-attack cruise missiles (Burke/Ticonderoga, CurrentHill Kalibr hulls) can hit shore targets, with an F10 "Cruise Missile Strike" call-for-fire onto your last map marker and an optional one-raid-per-side-per-turn auto planner. Each ship group carries a finite campaign magazine that never rearms, tracked across turns and shown in the briefing, the ground object dialog and the debrief. Both settings are off by default (adapted from the 414Ret fork).
+* **[Performance]** Faster mission generation: the land/sea point tests behind front-line and ground-unit placement now use shapely's `contains_xy` (no per-check `Point` allocation or predicate-wrapper overhead), ~5x faster on the check that dominated a Take-Off profile.
+* **[Mod]** Add support for the F-15EX Eagle II mod (by Spino).
+* **[Mod]** Add support for the F-15C EG Golden Eagle mod (by Spino).
+* **[Mod]** Add support for the Eurofighter Typhoon mod (by Lechuzas Negras).
+* **[Map]** A ground object that is fully destroyed but being repaired now shows an orange health bar instead of yellow, so it reads distinctly from a partially-damaged group (some units dead, some alive) which stays yellow.
+* **[Map]** Combatant (non-carrier) ship groups can be repositioned on the campaign map: drag the group to a destination (up to 80 nm/turn, open water only), it sails there in-mission and snaps to the destination at end of turn, re-parenting to the nearest friendly base. Player-driven for now. (Adopts upstream geofffranks' implementation, dcs-retribution#802.)
+* **[Weather]** "Use ATMOS-X live weather": with the ATMOS-X cloud preset pack selected, the generated weather is replaced by a real METAR observation fetched through the ATMOS-X CLI. The station is picked automatically — the airfield you fly from if it reports, otherwise the closest one on the map that does — or set by ICAO. The mission always keeps its own date and time and takes only the weather, so a campaign set in another era can fly today's real sky. If ATMOS-X is missing or the observation cannot be fetched, the mission keeps the weather Retribution generated.
+* **[Options]** "Custom cloud preset pack" setting (replaces "Use Bandit's clouds") makes a community cloud-preset weather mod's presets available to the mission generator — choose Bandit's Cloud Presets, Weather 2.0, or ATMOS-X to match the pack you have installed.
+* **[Map]** Unified, dark, grouped/collapsible map-layers panel with presets, replacing the scattered layer toggles (adapted from the 414Ret fork; the fog-of-war row is omitted and the emitter-highlight and destroyed-object toggles keep their existing behaviour).
+* **[AI]** AI AWACS and tanker support orbits are anchored on the front line and held deep behind the FLOT instead of drifting forward (adapted from the 414Ret fork).
+* **[AI]** Optimistic DEAD "site cleared" assumptions are now gated on whether the flight can actually reach the target, so the planner stops clearing SAMs it can't prosecute (adapted from the 414Ret fork).
+* **[Loadouts]** Weapons coverage refresh: many modern PGMs and air-to-air missiles are now available across factions, without the era date-gating (coverage adapted from the 414Ret fork; our existing introduction years are kept).
+* **[Mission Generation]** Player despawns (leaving an aircraft) no longer count as combat losses in the debriefing (adapted from the 414Ret fork).
+* **[Mission Generation]** More variety in generated air defenses: new SAM site layout variants (SA-2 four/six-launcher rings, an SA-2/SA-3 mixed site, SA-3, legacy SA-5 and reinforced SA-6 sites) wired into the period factions' preset pools, and generated EWR sites now draw true early-warning radars only instead of falling back to any search radar. (#892)
+* **[Mission Generation]** SAM sites field two engagement radars (the shared site templates gain a second, dispersed radar position), so a single anti-radiation missile no longer functionally kills the whole site. Buy-menu counts and site prices follow. A deliberate survivability/balance call — rationale and trade-offs in the PR body. (#893)
+* **[Mission Generator]** Stand-off/cruise-missile-armed flights now ingress from a realistic launch distance. Weapons can declare a `range` (nautical miles) in their `resources/weapons` YAML, and when a package carries such a weapon whose range exceeds the doctrine ingress distance, the ingress point is pushed out to that range (e.g. Tu-16s with Kh-22s begin their run ~160nm from the target instead of being dragged in to the doctrine ingress point). Weapons without a `range` are unaffected. Initial ranges are provided for the major stand-off, cruise, and anti-ship missiles and can be extended per-weapon. If a flight's payload is changed in the Edit Flight dialog such that the package's stand-off range changes, closing the dialog offers to regenerate the package's flight plans so the ingress point follows the new loadout.
+* **[UX]** Retribution snapshots your DCS custom-payload library on startup, keeping the last 10 copies under `Retribution/PayloadBackups`. Deleting `Saved Games/DCS/MissionEditor` is common troubleshooting advice and takes every custom loadout with it; nothing else holds a copy.
+* **[Mission Generator]** Motorpool target missions now match their mission-type counterparts: STRIKE keeps one player target waypoint per parked vehicle with one AI bombing task per vehicle at ingress; BAI gets a single player target-area waypoint with one AI engage task per unit-type group at ingress; armed recon gets a single player target waypoint with a garage-centered engagement zone sized to a full 5x5 parked grid plus 20 m, independent of the configured engagement range.
 * **[Modding]** Added support for the CurrentHill Iran Military Assets pack: the Shahed-136 launcher, two IRGCN fast-attack craft, and a new `[CH] Iran 2020` faction, behind a New Game mods checkbox. (#886)
 * **[Kneeboard]** Use a light-grey daytime kneeboard background instead of near-white, to avoid glare under HDR / Auto-HDR while staying readable in daylight.
 * **[UX]** Hovering a friendly flight's route line on the map highlights it in yellow, and clicking it selects that flight's package (and the flight) in the ATO sidebar.
 * **[UX]** Press Delete with a package selected in the Packages list to cancel it, making it quick to clear several packages in a row.
 * **[UX]** Avoid having escorts from wondering off too far while chasing a target.
 * **[UX]** Improved fast-forward settings with the ability to skip combat.
-* **[Data]** Add Refueling/Recovery tasks to A-6E Intruder mod
-* **[Modding]** Add CurrentHill UK Assets Pack support (v1.1.2)
-* **[Layouts]** Add signature to layouts' binary file for automatic reloading of updated layouts.
-* **[Modding]** Add support for Su-35S mod (v2.0.27b)
-* **[Plugins]** Update EW Script to version 2.1
-* **[Options]** New option to spawn TACAN beacons at captured airfields
 * **[UX]** Show an "End of Mission Detected, processing Mission Data" busy dialog while turn results are processed, so the wait is not mistaken for a missed detection
+* **[UX]** The info panel now reports finished repairs for runways and all repairable ground objects/buildings (both coalitions), plus per-base "in progress, N turns remaining" lines for your own repairs each turn.
+* **[UI]** Reworked the Finances dialog to show gross income, the HQ's automated per-category spending and the resulting net per turn, with a collapsible income breakdown and in-dialog automation toggles.
 * **[Map]** Hovering a SAM threat or detection ring highlights its emitter — and hovering an emitter highlights its ring — making it easy to tell which site a ring belongs to. Can be disabled from the map's layer control.
+* **[Map]** New "Red/Blue: destroyed (non-repairable)" layer toggles (below the ruler) to hide fully destroyed, non-rebuildable ground objects (buildings, ships, ...) per coalition. Repairable objects (air defenses, vehicle groups) are never hidden. Both shown by default.
+* **[Mission Generation]** Target recon kneeboard pages for each player flight: overview map of the package corridor with nearby threats and threat rings, detail map of the target with numbered aimpoints (MGRS), recommended attack-axis arrow, and an aimpoint table. OCA missions get an airfield-layout variant. Ground-start flights also get an airfield-departure page with spawn-slot markers, runway-in-use highlight, wind arrow, and an ATIS-like weather block (winds aloft, QNH, temp, clouds, sunrise/sunset). Toggleable via new "Generate target recon kneeboard pages" setting (default on); threats can be widened beyond the corridor with a new search-radius slider. Requires the new `mgrs` dependency.
+* **[Mission Generation]** DEAD and SEAD flights against a ground target now get one waypoint per individual target — the same targets (with coordinates) already listed on the SEAD/DEAD kneeboard page — so they can be designated quickly with TOO, just like Strike flights. The waypoints are player-only (AI tasking is unchanged), and targets the kneeboard does not list with coordinates (e.g. SEAD against a naval group) are unaffected. The SEAD/DEAD kneeboard target list also gains an "STPT" column showing each target's assigned waypoint number, matching the strike task page.
+* **[Loadouts]** Aircraft where DEAD isn't a natural role (A-10, F-35, Su-57, Su-35S, strategic bombers, etc.) can now fly DEAD when assigned manually, with a proper standoff loadout, without DEAD being auto-assigned to them by default. Aircraft yamls gain an optional `secondary_tasks` list for this.
+* **[Loadouts]** AI DEAD flights use the best standoff/PGM each airframe can carry instead of short-range or missing loadouts.
+* **[Comms]** Mirror automatic presets onto COMM2 on twin-radio aircraft, with one preset per frequency on each radio and both channels shown in the kneeboard.
+* **[IADS]** IADS infrastructure can be rebuilt: comms towers, power stations and command centres produce no income, so they had no repair price and stayed rubble for the rest of the campaign once bombed -- neither side ever restored its own network. They now cost a flat 15M (power station), 10M (command centre) or 5M (comms tower) to rebuild, and still generate no income, so striking the network becomes an attrition loop instead of a one-off: the SAMs behind a destroyed power station go dark and the owner has to pay to bring them back.
+* **[IADS]** A destroyed IADS building now reads as destroyed rather than absent: skynet_nodes dropped any node or connection whose units were all dead, and Skynet treats a missing dependency as satisfied, so bombing a power station switched its SAMs back on the next mission and destroying a coalition's last command centre handed it perfect command back. Buildings keep reaching Skynet destroyed (a static spawned dead answers getByName=ok, isExist=false, life=0, which is what Skynet tests); vehicle-backed roles still drop out.
+* **[Options]** New option to spawn TACAN beacons at captured airfields
+* **[Options]** New Campaign Doctrine option so AI non-combat (crash) air losses don't count: only losses DCS attributes to a weapon or SAM deplete a squadron, and the debriefing shows how many were not counted. Applies to both coalitions.
+* **[Cheat]** The money cheat can give or take money to both OWNFOR and OPFOR (previously OWNFOR only).
+* **[Mission Status]** Mission result window splits every loss category into OwnFor (your faction) and OpFor (enemy) columns instead of a single combined total.
+* **[AirWing]** Track per-squadron campaign aircraft stats (initial/destroyed/purchased, save-compatible) and expose pilot experience level and living/dead pilot views for the UI
+* **[AirWing]** Squadron list shows living-pilot, aircraft and unassigned counts; squadron dialog shows each pilot's experience level, lists killed-in-action pilots separately and hides the redundant "Active" status
+* **[AirWing]** Squadron dialog shows the aircraft type, an aircraft inventory (initial/current/destroyed/purchased), and buy/sell aircraft controls with price, on-order count and available parking slots
+* **[AirWing]** Insufficient-parking warnings are consolidated into a single non-modal dialog that names the missing parking type and links each squadron to its dialog
+* **[AirWing]** Air Wing list shows a "transfer ordered to X" indicator, and Airfield Command lists the units transferring into the base next turn
+* **[AirWing]** Airfield Command shows idle aircraft per squadron (e.g. "20 (10 idle)") with a "transfer ordered to X" indicator, lets you open a squadron's dialog by clicking its name, and lays the count below the name so long text no longer adds a horizontal scrollbar
+* **[BaseMenu]** Base intel summary shows aircraft occupied/transferring/free and a per-parking-type breakdown (shared / fixed-wing-exclusive / rotary-wing-exclusive / ground spawns), fixing the misleading "0 fixed-wing only parking" at bases whose slots are all shared
+* **[Plugins]** Update EW Script to version 2.1
+* **[Modding]** Add CurrentHill UK Assets Pack support (v1.1.2)
+* **[Modding]** Add support for Su-35S mod (v2.0.27b)
+* **[Modding]** Add support for the F-15EX Eagle II mod (by Spino).
+* **[Modding]** Add support for the F-15C EG Golden Eagle mod (by Spino).
+* **[Modding]** Add support for the Eurofighter Typhoon mod (by Lechuzas Negras).
+* **[Data]** Add Refueling/Recovery tasks to A-6E Intruder mod
+* **[Layouts]** Add signature to layouts' binary file for automatic reloading of updated layouts.
 * **[Mission Generator]** New campaign setting "Default laser code for Player flights" controls whether newly-created player flights are assigned a unique allocated TGP/weapon laser code (the new default, matching existing behavior) or stay on 1688. When a code is allocated it is applied to both the TGP/kneeboard code and the weapon code by default, so LGBs home on the player's own code without extra clicks; both remain independently overridable in the payload tab.
 * **[Engine]** Support for DCS 2.9.28.26283 including F-100D, F-14A (Export), and F-14BU.
 * **[Options]** Add new option to fast forward until player is at the IP.
@@ -46,6 +271,8 @@
 * **[Options]** New option to restrict helmet devices by date
 * **[Flight Plans]** Renaming a waypoint in the flight-plan list now propagates to the aircraft CDU/HUD and the kneeboard, not just the list — one name in all three places (#695).
 * **[Campaigns]** Ability to define motor pool objects which spawn reserve armor
+* **[UX]** Show motorpool reserve, in-transit, and expected inventory in Qt and React views with live updates
+* **[Mission Planning]** Autoplanner targets eligible motorpool reserve armor with prioritized armed-recon flights
 * **[Campaigns]** Motorpool placement is Garage_A-anchored and empty reserve pools are excluded from attack planning; updated placement measurements are documented.
 * **[UX]** Add the ability to filter campaigns by version, map, and performance
 * **[Engine]** Bump campaign version to 10.9 for motorpool support
@@ -57,28 +284,51 @@
 * **[Campaign AI]** The AI plans convoy interdiction and anti-shipping strikes against enemy transports again (it was looking at its own side's convoys). "Disable cargo ships" now also stops the AI from targeting them.
 * **[Mission Generation]** Airlift cargo stops on carriers and LHAs land on the ship instead of using an airfield ID.
 * **[UI]** Buying or selling a ground object re-plans only the side that was targeting it.
+* **[UX]** Editing a faction from the Air Wing dialog now takes effect in the running campaign; only preset-group changes did before.
+* **[UX]** The faction editor's tick boxes did nothing outside the New Game wizard; entries have a remove button there instead, which refuses a unit the campaign still has deployed.
+* **[UX]** The faction editor sorts its lists by the name shown rather than the internal DCS id.
 * **[Mission Generation]** Fix mission generation dying on "Duplicate convoy unit": convoy and cargo-ship names no longer reset each turn onto a convoy still in transit.
 * **[Mission Generator]** Dynamically allocated TACAN channels no longer collide with map beacons: DME/VOR-DME beacons (which share TACAN's channelization) are now blacklisted alongside TACAN/VORTAC, and beacons whose DCS data omits a channel (e.g. Syria's KALDE "KAD" VOR-DME) have their channel/band derived from the beacon's VHF frequency per the ICAO VOR/TACAN channelling plan instead of being silently skipped. The "Assign TACAN" dialog now warns in real time when the selected channel/band is already in use by a map beacon or another carrier/airfield/flight. (#36)
 * **[Map]** Right-clicking a front line under a blue flight-plan route now opens the new-package dialog instead of the browser context menu (the route's invisible hover overlay swallowed the click).
+* **[Mod Support]** Fix SA-10B/S-300PS sites never spawning at all: High Digit SAMs 2.1.0 dropped the whole S-300PS family, DCS silently discards a unit type it cannot resolve, and Retribution went on believing the site was alive. Now uses the stock S-300PS.
+
+## Fixes
+* **[Mission Generation]** Fix mission generation dying on "Duplicate convoy unit": convoy and cargo-ship names no longer reset each turn onto a convoy still in transit.
+* **[Mod Support]** Fix SA-10B/S-300PS sites never spawning at all: High Digit SAMs 2.1.0 dropped the whole S-300PS family, DCS silently discards a unit type it cannot resolve, and Retribution went on believing the site was alive. Now uses the stock S-300PS.
+* **[Data]** Fix the modern Spain faction's air defence: the WWII 2 cm Flak 38 needs the WWII Assets Pack, so without it DCS discarded every gun and the sites came up empty while Retribution counted them as defended. Spain operates neither the Soviet ZU-23 nor the US Avenger either, so its point defence is now the Stinger alone.
 * **[Data]** The F-14A-135-GR Early's payload file declared the wrong unitType, so the Early Tomcat flew every tasking unarmed; its loadouts now resolve (with a guard test pinning the payload to the airframe). (#889)
 * **[Mission Generator]** EWR sites now get the DCS "EWR" enroute task and come up on RED alarm, so their radars actually scan and report contacts (previously they could sit inert, especially with the "red alert state" performance option off). Works with or without the Skynet IADS plugin.
 * **[Plugins]** Fix the escort leash never running (DCS has no `Group.getByID`; look the group up by name via mist), so escorts are actually held to their engagement range.
 * **[Mission Planning]** Carrier/LHA targets now offer SEAD in the flight-task list and no longer list SEAD Escort twice (their escorts are SAM platforms, so they can be suppressed directly like any other naval group).
 * **[App]** Retribution no longer stays alive in the background after its window is closed: the API server's graceful shutdown is now bounded (uvicorn otherwise waited forever on the long-lived event-stream websocket and the join hung).
 * **[App]** Relaunching the executable while it is already running no longer spawns orphaned, windowless duplicate processes; a second instance detects the first via an OS file lock and exits immediately.
+* **[App]** Upgrade PySide6/Qt to 6.8.3. On 6.4.x QtWebEngine composited the embedded map through the native desktop-OpenGL driver, whose context cleanup could deadlock (e.g. nvoglv64.dll DrvValidateVersion / WaitForSingleObject during window destroy) when a fullscreen GPU application — most notably DCS itself — took over the GPU, freezing Retribution. Qt 6.8 composites the web view via Direct3D 11 instead, so no native-GL context is created and the deadlock is gone (still hardware-accelerated). This also resolves the intermittent "Not Responding" freeze when a dialog/panel is shown over the map, which had the same root cause.
 * **[Mission]** Reliably auto-detect end of mission, even when DCS wrote the final state.json before the wait dialog started watching
-* **[Performance]** Faster post-mission turn processing
-* **[AirWing]** Track per-squadron campaign aircraft stats (initial/destroyed/purchased, save-compatible) and expose pilot experience level and living/dead pilot views for the UI
-* **[AirWing]** Squadron list shows living-pilot, aircraft and unassigned counts; squadron dialog shows each pilot's experience level, lists killed-in-action pilots separately and hides the redundant "Active" status
-* **[AirWing]** Squadron dialog shows the aircraft type, an aircraft inventory (initial/current/destroyed/purchased), and buy/sell aircraft controls with price, on-order count and available parking slots
-* **[AirWing]** Air Wing list shows a "transfer ordered to X" indicator, and Airfield Command lists the units transferring into the base next turn
-* **[UI]** Avoid a crash dialog ("'QWidgetItem' object has no attribute 'width'") when a list using the two-column row delegate relayouts with a malformed style option under PySide6 6.4.x.
-* **[Mission Generation]** Fix the generated mission being rejected by DCS with "locked speed ... surrounded by waypoints ... with locked time" (e.g. carrier escorts).
+* **[Mission]** End-of-mission detection now finds DCS' state.json wherever the export hook actually wrote it (install dir, ESCALATION_EXPORT_DIR, TEMP, or the DCS Saved Games Missions folder) instead of only the working directory, polls more responsively, and logs the watched paths — fixing missions frequently not being detected as finished
+* **[Mission]** Fix a crash when choosing "Fix TOTs automatically" in the past-start-times dialog at Take Off: the automatic fix called `TotEstimator.earliest_tot()` without the required current-time argument and raised a `TypeError`.
+* **[AirWing]** Selling aircraft no longer lets the same units be re-sold (and re-flown) after a turn re-initialisation, which refunded their price repeatedly and could drive a squadron's aircraft count negative and then balloon it to ~airfield capacity on reload.
 * **[AirWing]** Squadron transfer-destination parking now accounts for already-ordered incoming transfers, matching the Airfield Command hangar count
+* **[UI]** Use Qt's non-native file dialogs (`AA_DontUseNativeDialogs`) so opening a file picker no longer freezes the whole app. The native Windows dialog deadlocks on a synchronous Win32 message when the embedded web map (QtWebEngine) is alive — e.g. clicking "Manually submit" on the modal "waiting for mission result" window hung Retribution ("Not Responding").
+* **[UI]** Avoid a crash dialog ("'QWidgetItem' object has no attribute 'width'") when a list using the two-column row delegate relayouts with a malformed style option under PySide6 6.4.x.
+* **[Kneeboard]** A dropped connection while fetching recon-kneeboard basemap tiles (e.g. `RemoteDisconnected`, which urllib does not wrap in `URLError`) no longer aborts mission generation at Take Off; the tile fetch now degrades to the offline basemap on any transient network error, with a last-resort backstop so a tile failure can never crash turn generation.
+* **[Kneeboard]** Flight-plan kneeboard now matches the in-game waypoint numbering for flights that start in the air: previously it always listed the full plan from takeoff, so for an in-air start the kneeboard waypoints were offset from the cockpit's (e.g. kneeboard "1: Hold" while DCS showed "1: Escort Hold"). The kneeboard now starts at the spawn waypoint, like the generated mission.
+* **[Kneeboard]** Stop the Support Info FREQ column being clipped now that it lists both COMM1 and COMM2 (the single-digit aircraft-count column no longer pads the row past the page edge).
+* **[Comms]** Fix COMM1/COMM2 being swapped in the kneeboard for the Super Hornet family (EA-18G, F/A-18E/F and their tanker variants): align their radio indices to the F/A-18C so intra-flight is COMM2 and ATC/package are on COMM1.
+* **[Mission Generation]** A malformed or unsupported aircraft payload file (e.g. a hand-written third-party mod file) no longer hides every payload for that airframe: the unparseable file is skipped and the rest -- including your own Mission-Editor-saved loadouts -- still load and are selectable. If none can be read, the aircraft falls back to an empty loadout instead of aborting turn generation, and the error is logged.
+* **[Mission Generation]** Loadout payloads are saved atomically (write to a temp file, then rename), so mission generation or the payload editor never reads a half-written payload file.
+* **[Mission Generation]** Fix the generated mission being rejected by DCS with "locked speed ... surrounded by waypoints ... with locked time" (e.g. carrier escorts).
 * **[Mission Generation]** Anti-Ship flights now attack the carrier group the flight plan routes to instead of the control point's first ground object, so strikes against carrier groups no longer leave the AI without a target (it would fly to the ingress point and turn back without engaging).
-* **[Performance]** Improved robustness w.r.t. state.json handling to avoid corruption and thus save loss.
-* **[Flight Plans]** Stabilized waypoint solver debug GeoJSON coordinate precision to avoid platform-specific floating point drift in debug output.
+* **[Mission Generation]** Anti-Ship flights now egress after expending their ordnance instead of continuing toward the enemy fleet (the attack task had no completion condition, so aircraft carrying only stand-off weapons such as the S-3B kept flying in after launching their missiles).
 * **[Mission Generation]** Assign plane-specific laser codes to LGB weapons when building the mission
+* **[Mission Planning]** Carrier/LHA targets now offer SEAD in the flight-task list and no longer list SEAD Escort twice (their escorts are SAM platforms, so they can be suppressed directly like any other naval group).
+* **[Map]** Carrier/LHA control points now show their ship group on the map like other naval groups: the tooltip lists the carrier and escorts (with [DEAD] markers for losses), the surviving escorts' air-defense rings are drawn, and the status marker turns yellow while any ship survives instead of red as soon as the carrier itself is sunk.
+* **[Flight Plans]** Player flights with a ground start (Cold/Warm/Runway) no longer spawn in the air when their computed startup time falls before mission start (e.g. due to a long player startup estimate); they now wait and start on the ground at mission start.
+* **[Flight Plans]** Stabilized waypoint solver debug GeoJSON coordinate precision to avoid platform-specific floating point drift in debug output.
+* **[Fast-forward]** Detect when the configured "Fast forward until" stop condition is unreachable for a player flight's start type (e.g. "Player startup time" with a runway or air start, which skip the Startup state) and prompt before launching the mission: per mismatched flight, the user can either downgrade the flight's start type to match the setting, or halt fast-forward at the flight's actual spawn instead, for this mission only. A hard tick ceiling also caps any remaining unreachable case as a back-stop, so the app can no longer hang on Take Off.
+* **[Flight Plans]** Escorts assigned to an AWACS or tanker now hold on that flight's racetrack orbit instead of at the far-away target-relative escort-hold point, so they actually co-locate with and protect it.
+* **[App]** Fix Retribution sometimes staying alive in the background after the window is closed.
+* **[Performance]** Improved robustness w.r.t. state.json handling to avoid corruption and thus save loss.
+* **[Performance]** Faster post-mission turn processing
 * **[Engine]** Fixed a bug where squadrons could transfer to enemy owned control points
 * **[Mission Generation]** Air assault drop-off zones are kept on land, so coastal objectives no longer drop the troops into the sea.
 * **[Mission Generation]** Relocate ground units that spawn on inland water (ponds, rivers, lakes) to the nearest land at mission start, fixing armor and SAM sites spawning underwater (#59).
@@ -458,6 +708,7 @@ BAI/ANTISHIP/DEAD/STRIKE/BARCAP/CAS/OCA/AIR-ASSAULT (main) missions
 
 ## Fixes
 
+* **[Ground Movement]** Preserve authored road connections and interpolated stops when microscopic buffer geometry loses coverage.
 * **[Mission Generation]** Fixed issue where aircraft carriers would return after being killed.
 * **[Mission Generation]** Kneeboard STRIKE coordinates would sometimes get clipped when not fitting.
 * **[UI]** Fix exception when trying to add a waypoints to a flightplan.
@@ -1185,6 +1436,8 @@ Saves from 2.3 are not compatible with 2.4.
 * **[Game]** Added new Economy options for adjusting income multipliers and starting budgets.
 
 ## Fixes :
+* **[High Command]** Prevent aircraft purchases and sales in loan squadrons, including workshop sales and automatic reinforcement.
+* **[HQ Automation]** Balance ground purchases against the actual roster and resulting force composition; unavailable classes no longer cause repeated expensive artillery orders.
 * **[Map]** Missiles sites now have a proper icon and will not re-use the SAM sites icon
 * **[Mission Generator]** Ground unit waypoints improperly set to "On Road" - fixed
 * **[Mission Generator]** Target waypoints not at ground level - fixed

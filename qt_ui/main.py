@@ -1,6 +1,7 @@
 import argparse
 import logging
 import ntpath
+import os
 import sys
 import tempfile
 from datetime import datetime
@@ -10,8 +11,8 @@ from typing import Optional
 import yaml
 from PySide6 import QtWidgets
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QCheckBox, QSplashScreen
+from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtWidgets import QApplication, QCheckBox, QSplashScreen, QWidget
 from dcs.liveries.liverycache import LiveryCache
 from dcs.payloads import PayloadDirectories
 
@@ -22,6 +23,7 @@ from game.data.weapons import Pylon, Weapon, WeaponGroup
 from game.dcs.aircrafttype import AircraftType
 from game.factions import FACTIONS
 from game.persistency import base_path
+from game.payloadbackup import backup_payloads
 from game.profiling import logged_duration
 from game.server import EventStream, Server
 from game.settings import Settings
@@ -41,6 +43,95 @@ from qt_ui.windows.preferences.QLiberationFirstStartWindow import (
 )
 
 THIS_DIR = Path(__file__).parent
+
+
+#: What Windows files this process under. The taskbar icon does not come from
+#: setWindowIcon: Windows groups a window by the application id of the process that
+#: owns it, and a process that never claims one inherits the launcher's -- which is
+#: why running from source showed Python's icon and the built executable did not.
+#: Any stable string will do, and this one will not collide with anything.
+APP_ID = "juanjux.dcs.escalation"
+
+
+def claim_taskbar_identity(app_id: str = APP_ID) -> bool:
+    """Tell Windows this is its own application. True if it took.
+
+    Has to happen before the first window is created, and does nothing anywhere
+    else: everything below is Windows' own shell.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:
+        # A missing shell32, an older Windows, a locked-down host: the icon is not
+        # worth failing to start over.
+        logging.info("Could not claim the taskbar identity", exc_info=True)
+        return False
+    return True
+
+
+#: The Win32 constants claim_class_icon needs.
+GCLP_HICON = -14
+GCLP_HICONSM = -34
+SM_CXICON, SM_CYICON = 11, 12
+SM_CXSMICON, SM_CYSMICON = 49, 50
+IMAGE_ICON = 1
+LR_LOADFROMFILE = 0x10
+
+
+def claim_class_icon(window: QWidget, icon: str = "./resources/icon.ico") -> bool:
+    """Give the window's class the application's icon. True if it took.
+
+    Windows falls back to the class icon when it cannot read the window's own, and Qt
+    registers its window classes with the executable's IDI_ICON1 resource or, when
+    there is none, as in python.exe, the generic application icon. The class is
+    shared by every top-level window of the process.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        user32.LoadImageW.restype = ctypes.c_void_p
+        user32.LoadImageW.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_wchar_p,
+            ctypes.c_uint,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint,
+        ]
+        user32.SetClassLongPtrW.restype = ctypes.c_size_t
+        user32.SetClassLongPtrW.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_ssize_t,
+        ]
+        path = str(Path(icon).resolve())
+        hwnd = int(window.winId())
+        for index, width, height in (
+            (GCLP_HICON, SM_CXICON, SM_CYICON),
+            (GCLP_HICONSM, SM_CXSMICON, SM_CYSMICON),
+        ):
+            handle = user32.LoadImageW(
+                None,
+                path,
+                IMAGE_ICON,
+                user32.GetSystemMetrics(width),
+                user32.GetSystemMetrics(height),
+                LR_LOADFROMFILE,
+            )
+            if not handle:
+                return False
+            user32.SetClassLongPtrW(hwnd, index, handle)
+    except Exception:
+        logging.info("Could not set the window class icon", exc_info=True)
+        return False
+    return True
 
 
 def inject_custom_payloads(user_path: Path) -> None:
@@ -68,11 +159,33 @@ def on_game_load(game: Optional[Game]) -> None:
 
 
 def run_ui(game: Optional[Game], ui_flags: UiFlags) -> None:
+    # Use ANGLE (Direct3D) instead of desktop OpenGL for Qt. The desktop-GL path
+    # (opengl32/nvoglv64 + wglSwapLayerBuffers) can deadlock the main thread on a
+    # synchronous Win32 message when a modal dialog is shown over the live
+    # QtWebEngine map -- e.g. interacting with / clicking outside the "Waiting for
+    # mission completion" window froze the whole app ("Not Responding"). ANGLE
+    # keeps hardware acceleration (via Direct3D) but removes that wgl* synchronous
+    # path. Must be set before Qt initialises its GL integration, i.e. before the
+    # QApplication below; setdefault lets an explicit QT_OPENGL still override it.
+    os.environ.setdefault("QT_OPENGL", "angle")
+
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
+    # Before the first window exists, or Windows has already filed us under
+    # whatever launched the process.
+    claim_taskbar_identity()
+
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon("./resources/icon.ico"))
+
+    # Native file/colour/font dialogs, i.e. Qt's default. They were switched off
+    # for a while because a native dialog opened over the live QtWebEngine map
+    # deadlocked the app -- the platform plugin issues a synchronous Win32
+    # SendMessage that never returns. That was the same wgl* path the QT_OPENGL
+    # setting above removes, so the narrower workaround costs a Windows file
+    # picker for nothing now.
 
     # init the theme and load the stylesheet based on the theme index
     liberation_theme.init()
@@ -96,6 +209,14 @@ def run_ui(game: Optional[Game], ui_flags: UiFlags) -> None:
     )
 
     inject_custom_payloads(persistency.base_path())
+
+    # Before anything can write to the payload directory, and before the user goes
+    # looking for whatever made them open Escalation today.
+    snapshot = backup_payloads(
+        persistency.payloads_dir(), persistency.payload_backups_dir()
+    )
+    if snapshot is not None:
+        logging.info("Backed up the payload library to %s", snapshot)
 
     # Splash screen setup
     pixmap = QPixmap("./resources/ui/splash_screen.png")
@@ -121,21 +242,21 @@ def run_ui(game: Optional[Game], ui_flags: UiFlags) -> None:
             message_box.setWindowTitle("No DCS installation directory.")
             message_box.setText(
                 "The DCS Installation directory is not set correctly. "
-                "This will prevent DCS Retribution from working properly, as the MissionScripting "
+                "This will prevent DCS Escalation from working properly, as the MissionScripting "
                 "file will not be modified."
                 "<br/><br/>To solve this problem, you can set the Installation directory "
                 "within the preferences menu. You can also manually edit or replace the "
                 "following file:"
                 "<br/><br/><strong>&lt;dcs_installation_directory&gt;/Scripts/MissionScripting.lua</strong>"
-                "<br/><br/>The easiest way to do it is to replace the original file with the file in dcs-retribution "
-                "distribution (&lt;dcs_retribution_installation&gt;/resources/scripts/MissionScripting.lua)."
-                "<br/><br/>You can find more information on how to manually change this file in the Retribution Wiki "
+                "<br/><br/>The easiest way to do it is to replace the original file with the file in dcs-escalation "
+                "distribution (&lt;dcs_escalation_installation&gt;/resources/scripts/MissionScripting.lua)."
+                "<br/><br/>You can find more information on how to manually change this file in the Escalation Wiki "
                 "(Page: Dedicated Server Guide) on GitHub.</p>"
             )
             message_box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Ok)
             message_box.setCheckBox(ignore_checkbox)
             message_box.exec_()
-    # Replace DCS Mission scripting file to allow DCS Retribution to work
+    # Replace DCS Mission scripting file to allow DCS Escalation to work
     try:
         liberation_install.replace_mission_scripting_file()
     except Exception as e:
@@ -154,6 +275,7 @@ def run_ui(game: Optional[Game], ui_flags: UiFlags) -> None:
 
     # Start window
     window = QLiberationWindow(game, ui_flags)
+    claim_class_icon(window)
     window.showMaximized()
     splash.finish(window)
     qt_execution_code = app.exec()
@@ -182,19 +304,6 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--dev", action="store_true", help="Enable development mode.")
-
-    speed_controls_group = parser.add_argument_group()
-    speed_controls_group.add_argument(
-        "--show-sim-speed-controls",
-        action="store_true",
-        help="Shows the sim speed controls in the top panel.",
-    )
-    speed_controls_group.add_argument(
-        "--no-show-sim-speed-controls",
-        dest="show_sim_speed_controls",
-        action="store_false",
-        help="Hides the sim speed controls in the top panel (default).",
-    )
 
     parser.add_argument("--new-map", help="Deprecated. Does nothing.")
     parser.add_argument("--old-map", help="Deprecated. Does nothing.")
@@ -277,7 +386,7 @@ def create_game(
     first_start = liberation_install.init()
     if first_start:
         sys.exit(
-            "Cannot generate campaign without configuring DCS Retribution. Start the UI "
+            "Cannot generate campaign without configuring DCS Escalation. Start the UI "
             "for the first run configuration."
         )
 
@@ -301,6 +410,8 @@ def create_game(
             automate_runway_repair=auto_procurement,
             automate_front_line_reinforcements=auto_procurement,
             automate_aircraft_reinforcements=auto_procurement,
+            automate_ground_object_repairs=auto_procurement,
+            automate_building_repairs=auto_procurement,
             enable_frontline_cheats=cheats,
             enable_base_capture_cheat=cheats,
             enable_transfer_cheat=cheats,
@@ -336,7 +447,6 @@ def create_game(
             f100_supersabre=False,
             f104_starfighter=False,
             f105_thunderchief=False,
-            hercules=False,
             oh_6=False,
             oh_6_vietnamassetpack=False,
             uh_60l=False,
@@ -345,6 +455,9 @@ def create_game(
             su15_flagon=False,
             su30_flanker_h=False,
             su35s_flanker_m=False,
+            f15ex=False,
+            f15cge=False,
+            eurofighter=False,
             su57_felon=False,
             coldwarassets=False,
             frenchpack=False,
@@ -423,7 +536,7 @@ def _acquire_single_instance_lock() -> bool:
     without ever showing a window, and is left orphaned when the first window closes.
     """
     global _single_instance_lock
-    lock_path = Path(tempfile.gettempdir()) / "dcs_retribution.lock"
+    lock_path = Path(tempfile.gettempdir()) / "dcs_escalation.lock"
     try:
         handle = open(lock_path, "w")
     except OSError:
@@ -449,7 +562,7 @@ def main():
 
     if not _acquire_single_instance_lock():
         logging.warning(
-            "DCS Retribution is already running; exiting this duplicate instance."
+            "DCS Escalation is already running; exiting this duplicate instance."
         )
         sys.exit(0)
 
@@ -496,7 +609,7 @@ def main():
 
     liberation_install.init()
     with Server(liberation_install.server_port()).run_in_thread():
-        run_ui(game, UiFlags(args.dev, args.show_sim_speed_controls))
+        run_ui(game, UiFlags(args.dev))
 
 
 if __name__ == "__main__":

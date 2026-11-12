@@ -1,0 +1,66 @@
+{
+    "nameInUI": "Cruise missile strikes",
+    "descriptionInUI": "Ship-launched land-attack cruise missiles. Planned raids fire at their own moment inside the launch window so several groups do not ripple together, and an F10 'Cruise Missile Strike' menu calls a salvo onto your last map marker from the nearest capable ship -- a number in the marker text fires that many. The campaign magazine is the mission's hard cap, shared by raids and player salvos, with no rearm and the expenditure reported for the turn debit. Real weapons from real ships, so a sunk ship fires nothing, and the defender's air defence near the aimpoint is woken to alarm RED for the missile's flight -- which DCS will not do by itself. Inert unless the cruise missile setting is on and a ship with stock exists.",
+    "defaultValue": true,
+    "specificOptions": [
+        {
+            "nameInUI": "Auto-raid launch window opens (s after mission start)",
+            "mnemonic": "raidDelayMinS",
+            "defaultValue": 240
+        },
+        {
+            "nameInUI": "Auto-raid launch window closes (s after mission start)",
+            "mnemonic": "raidDelayMaxS",
+            "defaultValue": 900
+        },
+        {
+            "nameInUI": "Player call-for-fire salvo size (default when the marker text has no number)",
+            "mnemonic": "playerSalvoSize",
+            "defaultValue": 4
+        },
+        {
+            "nameInUI": "Assigned targets and call-for-fire range limit (NM)",
+            "descriptionInUI": "Campaign range limit for persistent ship targets and F10 call-for-fire. A weapon's own engagement envelope can restrict it further. Automatic target selection retains its conservative 250 NM planning limit.",
+            "mnemonic": "playerRangeNm",
+            "defaultValue": 250
+        },
+        {
+            "nameInUI": "Impact dispersion radius (m)",
+            "mnemonic": "salvoRadiusM",
+            "defaultValue": 100
+        },
+        {
+            "nameInUI": "F10 call-for-fire menu",
+            "mnemonic": "menuEnabled",
+            "defaultValue": true
+        },
+        {
+            "nameInUI": "Launch wakes defender air defenses near the aimpoint (alarm RED for the flight window)",
+            "mnemonic": "defenderWake",
+            "defaultValue": true
+        },
+        {
+            "nameInUI": "Defender wake radius around the impact point (NM)",
+            "mnemonic": "defenderWakeRadiusNm",
+            "defaultValue": 8
+        },
+        {
+            "nameInUI": "Defender wake held past estimated missile arrival (s)",
+            "mnemonic": "defenderWakeExtraS",
+            "defaultValue": 300
+        },
+        {
+            "nameInUI": "Auto-plan raids",
+            "descriptionInUI": "Each turn, a side with a cruise-missile ship in range commits one raid: a salvo fired early in the mission at its highest-value reachable enemy ground object -- command centers and comms first, then war industry, then anything strikeable. Watch for the LAUNCH WARNING: an enemy raid is your point-defense SAMs' problem, or yours.",
+            "mnemonic": "autoRaids",
+            "defaultValue": false
+        }
+    ],
+    "scriptsWorkOrders": [],
+    "configurationWorkOrders": [
+        {
+            "file": "cruisemissiles-config.lua",
+            "mnemonic": "cruisemissiles-config"
+        }
+    ]
+}

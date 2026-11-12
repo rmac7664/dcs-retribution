@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Type
 
-from game.utils import Distance, Speed
+from game.utils import Distance, Speed, nautical_miles
 from .capbuilder import CapBuilder
+from .refuelneed import needs_refuelling
 from .patrolling import PatrollingFlightPlan, PatrollingLayout
 from .waypointbuilder import WaypointBuilder
+from .. import prerefuel
 
 if TYPE_CHECKING:
     from ..flightwaypoint import FlightWaypoint
@@ -16,39 +17,26 @@ if TYPE_CHECKING:
 
 @dataclass
 class TarCapLayout(PatrollingLayout):
-    refuel: FlightWaypoint | None
+    """Kept as its own type only so the plan class can be parameterised on it.
 
-    def iter_waypoints(self) -> Iterator[FlightWaypoint]:
-        yield self.departure
-        yield from self.nav_to
-        yield self.patrol_start
-        yield self.patrol_end
-        if self.refuel is not None:
-            yield self.refuel
-        yield from self.nav_from
-        yield self.arrival
-        if self.divert is not None:
-            yield self.divert
-        yield self.bullseye
-        yield from self.custom_waypoints
-
-    def delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
-        if waypoint == self.refuel:
-            self.refuel = None
-            return True
-        elif super().delete_waypoint(waypoint):
-            return True
-        return False
+    The refuel slot, and the waypoint ordering that carries it, now belong to every
+    patrol (:class:`PatrollingLayout`), so there is nothing left to add here.
+    """
 
 
 class TarCapFlightPlan(PatrollingFlightPlan[TarCapLayout]):
     @property
     def patrol_duration(self) -> timedelta:
-        # Note that this duration only has an effect if there are no
-        # flights in the package that have requested escort. If the package
-        # requests an escort the CAP self.flight will remain on station for the
-        # duration of the escorted mission, or until it is winchester/bingo.
-        return self.flight.coalition.doctrine.cap_duration
+        # Only has an effect when no flight in the package has requested an escort. If
+        # one has, the CAP stays for as long as the escorted mission does, or until it
+        # is winchester or bingo.
+        #
+        # Its own setting rather than the BARCAP one: a BARCAP guards a base for hours
+        # and a TARCAP covers an attack. It used to read doctrine.cap_duration, which is
+        # a flat 30 minutes in all three doctrines -- Doctrine.from_settings does map
+        # the BARCAP setting onto it, but nothing has ever called that method, so the
+        # number a player typed never reached a TARCAP.
+        return self.flight.coalition.game.settings.desired_tarcap_mission_duration
 
     @property
     def patrol_speed(self) -> Speed:
@@ -101,23 +89,46 @@ class Builder(CapBuilder[TarCapFlightPlan, TarCapLayout]):
         orbit0p, orbit1p = self.cap_racetrack_for_objective(location, barcap=False)
 
         start, end = builder.race_track(orbit0p, orbit1p, patrol_alt)
+        pre_refuel = prerefuel.build_stop(self.flight, start.position)
 
         refuel = None
         nav_from_origin = orbit1p
 
-        if self.package.waypoints is not None:
-            refuel = builder.refuel(self.package.waypoints.refuel)
+        # TARCAP asked for neither a helicopter check nor a tanker in the air wing,
+        # so it was the one plan that added the waypoint unconditionally.
+        #
+        # Its laps are most of what it burns: a patrol judged on the way out and back
+        # alone comes out at about half its real need, which is the one flight type
+        # that most often does want a tanker.
+        settings = self.flight.coalition.game.settings
+        hours = settings.desired_tarcap_mission_duration.total_seconds() / 3600.0
+        on_station = nautical_miles(
+            self.flight.unit_type.preferred_patrol_speed(patrol_alt).knots * hours
+        )
+        meeting_point = self.package.refuel_point
+        if meeting_point is not None and needs_refuelling(
+            self.flight,
+            self.package,
+            settings,
+            patrol_alt,
+            patrol_alt,
+            on_station,
+        ):
+            refuel = builder.refuel(meeting_point)
             nav_from_origin = refuel.position
 
         return TarCapLayout(
             departure=builder.takeoff(self.flight.departure),
             nav_to=builder.nav_path(
-                self.flight.departure.position, orbit0p, patrol_alt
+                self.flight.departure.position,
+                pre_refuel.position if pre_refuel else orbit0p,
+                patrol_alt,
             ),
             nav_from=builder.nav_path(
                 nav_from_origin, self.flight.arrival.position, patrol_alt
             ),
             patrol_start=start,
+            pre_push_refuel=pre_refuel,
             patrol_end=end,
             refuel=refuel,
             arrival=builder.land(self.flight.arrival),

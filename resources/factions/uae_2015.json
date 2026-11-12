@@ -8,7 +8,6 @@
     "AH-64D Apache Longbow (AI)",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "C-17A",
     "CH-47D",
     "CH-47F Block I",
@@ -18,7 +17,8 @@
     "Mirage 2000-5",
     "Mirage 2000C",
     "UH-60A",
-    "UH-60L"
+    "UH-60L",
+    "WingLoong-I"
   ],
   "awacs": [
     "E-3A"
@@ -44,7 +44,8 @@
   "preset_groups": [
     "Hawk",
     "Rapier",
-    "Patriot"
+    "Patriot",
+    "GPS Jamming Site (Blue)"
   ],
   "naval_units": [
     "FFG Oliver Hazard Perry"

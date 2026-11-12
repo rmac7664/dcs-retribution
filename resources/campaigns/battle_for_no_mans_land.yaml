@@ -1,7 +1,7 @@
 ---
-name: Falklands - Battle for No Man's Land
-theater: Falklands
-authors: Starfire
+name: South Atlantic - Battle for No Man's Land
+theater: South Atlantic
+authors: Starfire, modified by juanjux
 recommended_player_faction: USA 2005
 recommended_enemy_faction: Private Military Company - Russian (Hard)
 description:
@@ -36,31 +36,50 @@ recommended_start_date: 2001-11-10
 version: "10.9"
 settings:
   squadron_start_full: true
+
 squadrons:
   #Port Stanley
   1:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - RQ-1A Predator
+      size: 2
+      pilots: 6
     - primary: DEAD
       secondary: any
       aircraft:
         - AH-64D Apache Longbow
       size: 6
+      pilots: 10
     - primary: BAI
       secondary: any
       aircraft:
         - OH-58D(R) Kiowa Warrior
       size: 6
+      pilots: 10
     - primary: Air Assault
       secondary: any
       aircraft:
         - CH-47F Block I
       size: 4
+      pilots: 8
   #San Carlos FOB
   3:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "WingLoong-I"
+      size: 2
+      pilots: 6
     - primary: DEAD
       secondary: any
       aircraft:
         - Ka-50 Hokum III
       size: 6
+      pilots: 10
   #Goose Green
   24:
     - primary: BAI
@@ -68,8 +87,10 @@ squadrons:
       aircraft:
         - Mi-24P Hind-F
       size: 4
+      pilots: 8
     - primary: Air Assault
       secondary: any
       aircraft:
         - Mi-8MTV2 Hip
       size: 2
+      pilots: 6

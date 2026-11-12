@@ -10,8 +10,13 @@ from typing import TYPE_CHECKING, TypeVar
 from dcs import Point
 
 from game.flightplan import HoldZoneGeometry
+from game.theater import MissionTarget, TheaterGroundObject, TheaterUnit
 from game.theater import MissionTarget
-from game.utils import nautical_miles, Speed, feet
+from game.theater.theatergroundobject import MotorpoolGroundObject
+from game.utils import meters, nautical_miles, Speed, feet
+from . import alignpoint
+from .. import prerefuel
+from .refuelneed import needs_refuelling
 from .flightplan import FlightPlan
 from .formation import FormationFlightPlan, FormationLayout
 from .ibuilder import IBuilder
@@ -28,10 +33,52 @@ if TYPE_CHECKING:
 class FormationAttackFlightPlan(FormationFlightPlan, ABC):
     @property
     def package_speed_waypoints(self) -> set[FlightWaypoint]:
+        """The waypoints the package flies together, at one speed.
+
+        The run-in from the join to the ingress belongs here: it was the one leg of the
+        route every flight priced on its own, so nothing held the package together
+        across it and an escort with a faster airframe arrived at the ingress ahead of
+        the striker it was escorting.
+        """
         return {
             self.layout.join,
+            self.layout.ingress,
             self.layout.split,
         } | set(self.layout.targets)
+
+    @property
+    def combat_speed_waypoints(self) -> set[FlightWaypoint]:
+        """Package speed is not combat burn: the run-in is still cruise.
+
+        `fuel_rate_to_between_points` charges the combat rate for a leg that ends on
+        one of these, so leaving the ingress out keeps the fuel model where it was.
+        """
+        return self.package_speed_waypoints - {self.layout.ingress}
+
+    def can_delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        """One of several target points can go; the last one cannot.
+
+        A strike spreads itself over one waypoint per target, and dropping one of them
+        is the player saying he does not want that building. Dropping the only one
+        leaves an attack with nothing to attack, which is the degrade-to-custom path.
+        """
+        if self._is_one_of_several_targets(waypoint):
+            return True
+        return super().can_delete_waypoint(waypoint)
+
+    def delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        if self._is_one_of_several_targets(waypoint):
+            self.layout.targets = [
+                target for target in self.layout.targets if target is not waypoint
+            ]
+            return True
+        return super().delete_waypoint(waypoint)
+
+    def _is_one_of_several_targets(self, waypoint: FlightWaypoint) -> bool:
+        # By identity: FlightWaypoint compares by value, and two target points on
+        # identical buildings are equal without being the same waypoint.
+        targets = self.layout.targets
+        return len(targets) > 1 and any(waypoint is target for target in targets)
 
     def speed_between_waypoints(self, a: FlightWaypoint, b: FlightWaypoint) -> Speed:
         # FlightWaypoint is only comparable by identity, so adding
@@ -77,6 +124,8 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
                 )
                 break
             total += self.travel_time_between_waypoints(previous_waypoint, waypoint)
+            if previous_waypoint is self.layout.pre_push_refuel:
+                total += prerefuel.tanking_time(self.flight)
         else:
             raise PlanningError(
                 f"Did not find destination waypoint {destination} in "
@@ -90,6 +139,34 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
             self.layout.join, self.layout.ingress
         )
         return self.ingress_time - travel_time
+
+    def total_time_between_waypoints(
+        self, a: FlightWaypoint, b: FlightWaypoint
+    ) -> timedelta:
+        duration = super().total_time_between_waypoints(a, b)
+        if a is self.layout.pre_push_refuel:
+            duration += prerefuel.tanking_time(self.flight)
+        return duration
+
+    @property
+    def push_time(self) -> datetime:
+        if self.layout.pre_push_refuel is None or self.layout.hold is None:
+            return super().push_time
+        points = [
+            self.layout.hold,
+            self.layout.pre_push_refuel,
+            *self.layout.nav_to,
+            self.layout.join,
+        ]
+        duration = sum(
+            (
+                self.total_time_between_waypoints(a, b)
+                for a, b in zip(points, points[1:])
+            ),
+            timedelta(),
+        )
+        # The hold's dwell is planned before its departure, not after it.
+        return self.join_time - duration + self.hold_duration
 
     @property
     def split_time(self) -> datetime:
@@ -131,6 +208,10 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
             return self.initial_time
         elif waypoint in self.layout.targets:
             return self.tot
+        elif waypoint is self.layout.pre_push_refuel and self.layout.hold is not None:
+            return self.push_time + self.travel_time_between_waypoints(
+                self.layout.hold, waypoint
+            )
         return super().tot_for_waypoint(waypoint)
 
 
@@ -140,11 +221,23 @@ class FormationAttackLayout(FormationLayout):
     targets: list[FlightWaypoint]
     initial: Optional[FlightWaypoint] = None
     lineup: Optional[FlightWaypoint] = None
+    pre_push_refuel: Optional[FlightWaypoint] = None
+
+    def delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        if waypoint is self.pre_push_refuel:
+            self.pre_push_refuel = None
+            return True
+        return super().delete_waypoint(waypoint)
+
+    def can_delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        return waypoint is self.pre_push_refuel or super().can_delete_waypoint(waypoint)
 
     def iter_waypoints(self) -> Iterator[FlightWaypoint]:
         yield self.departure
         if self.hold:
             yield self.hold
+        if self.pre_push_refuel is not None:
+            yield self.pre_push_refuel
         yield from self.nav_to
         yield self.join
         if self.lineup:
@@ -178,12 +271,31 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
         builder = WaypointBuilder(self.flight, targets)
 
         target_waypoints: list[FlightWaypoint] = []
-        if targets:
+        # Mission spec: STRIKE against a motorpool keeps one player-facing
+        # waypoint per parked unit, while motorpool BAI and ARMED_RECON use one
+        # target-area waypoint. Non-motorpool behavior remains per target.
+        is_motorpool = isinstance(self.package.target, MotorpoolGroundObject)
+        if targets and (
+            not is_motorpool or self.flight.flight_type == FlightType.STRIKE
+        ):
             for target in targets:
                 target_waypoints.append(
                     self.target_waypoint(self.flight, builder, target)
                 )
+        elif self.flight.flight_type == FlightType.BAI and isinstance(
+            self.package.target, MotorpoolGroundObject
+        ):
+            # Mission spec: motorpool BAI gets one waypoint for the motorpool
+            # total, named the way every other BAI flight names its target
+            # waypoint ("ATTACK ..."), not a strike-style area name.
+            target_waypoints.append(
+                builder.bai_group(
+                    StrikeTarget(self.package.target.name, self.package.target)
+                )
+            )
         else:
+            # Targetless missions and motorpool BAI/ARMED_RECON retain the
+            # single target-area waypoint.
             target_waypoints.append(
                 self.target_area_waypoint(
                     self.flight, self.flight.package.target, builder
@@ -200,6 +312,7 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
         join = builder.join(join_pos)
         split = builder.split(self._get_split())
         refuel = self._build_refuel(builder)
+        pre_refuel = prerefuel.build_stop(self.flight, join.position) if hold else None
 
         ingress = builder.ingress(
             ingress_type, self.package.waypoints.ingress, self.package.target
@@ -207,15 +320,17 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
 
         initial = None
         if ingress_type == FlightWaypointType.INGRESS_SEAD:
-            initial = builder.sead_search(self.package.target)
+            # The SEAD Search anchor is a stand-off loiter for HARM shooters; a decoy
+            # stand-off run (release_at_ingress) releases at the ingress, so the anchor
+            # only drags the flight past its release point -- drop it for those.
+            if not self.flight.release_at_ingress:
+                initial = builder.sead_search(self.package.target)
         elif ingress_type == FlightWaypointType.INGRESS_SEAD_SWEEP:
             initial = builder.sead_sweep(self.package.target)
 
+        # A strike used to get a line-up waypoint ten miles before the ingress. The
+        # ingress is already on the run-in, so it said nothing the ingress did not.
         lineup = None
-        if self.flight.flight_type == FlightType.STRIKE:
-            hdg = self.package.target.position.heading_between_point(ingress.position)
-            pos = ingress.position.point_from_heading(hdg, nautical_miles(10).meters)
-            lineup = builder.nav(pos, builder.get_combat_altitude)
 
         is_helo = self.flight.is_helo
         ingress_egress_altitude = builder.get_combat_altitude
@@ -224,8 +339,13 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
         return FormationAttackLayout(
             departure=builder.takeoff(self.flight.departure),
             hold=hold,
+            pre_push_refuel=pre_refuel,
             nav_to=builder.nav_path(
-                hold.position if hold else self.flight.departure.position,
+                (
+                    pre_refuel.position
+                    if pre_refuel
+                    else (hold.position if hold else self.flight.departure.position)
+                ),
                 join.position if join else ingress.position,
                 ingress_egress_altitude,
                 use_agl_ingress_egress,
@@ -249,12 +369,40 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
             custom_waypoints=list(),
         )
 
+    def _target_waypoints(
+        self, builder: WaypointBuilder, targets: list[StrikeTarget] | None
+    ) -> list[FlightWaypoint]:
+        # `targets` can be an *empty* list (not just None) -- e.g. a Strike/DEAD/
+        # SEAD against an objective whose units are all already destroyed, since
+        # strike_targets_for() only lists live units. Fall back to a single
+        # target-area waypoint in that case so the layout always has at least one
+        # target (tot_waypoint and the timing math index targets[0]).
+        if targets:
+            return [
+                self.target_waypoint(self.flight, builder, target) for target in targets
+            ]
+        return [
+            self.target_area_waypoint(self.flight, self.flight.package.target, builder)
+        ]
+
     def _build_refuel(self, builder: WaypointBuilder) -> Optional[FlightWaypoint]:
-        refuel: Optional[FlightWaypoint] = None
-        can_plan = self.flight.coalition.air_wing.can_auto_plan(FlightType.REFUELING)
-        if not self.flight.is_helo and can_plan and self.package.waypoints:
-            refuel = builder.refuel(self.package.waypoints.refuel)
-        return refuel
+        # It used to be enough that the flight was not a helicopter and the faction
+        # owned a tanker: every strike, escort and sweep got a refuelling waypoint,
+        # whether it could fly the plan twice over or not.
+        if not self.package.waypoints:
+            return None
+        settings = self.flight.coalition.game.settings
+        # The bands the rest of this layout is about to be built at, so the estimate
+        # is charged at the altitudes the flight will really be flown at.
+        if not needs_refuelling(
+            self.flight,
+            self.package,
+            settings,
+            builder.get_cruise_altitude,
+            builder.get_combat_altitude,
+        ):
+            return None
+        return builder.refuel(self.package.waypoints.refuel)
 
     @property
     def primary_flight_is_air_assault(self) -> bool:
@@ -267,6 +415,33 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
             assert self.package.primary_flight is not None
             fp = self.package.primary_flight.flight_plan
             return fp.is_airassault
+
+    @staticmethod
+    def strike_targets_for(location: TheaterGroundObject) -> list[StrikeTarget]:
+        """One StrikeTarget per individual unit of a ground objective.
+
+        This is the same per-unit list the kneeboard target page renders (with
+        coordinates). Mission types whose kneeboard lists targets with
+        coordinates (Strike, DEAD, SEAD) pass this to ``_build`` so each listed
+        target also gets its own TARGET_POINT waypoint in the aircraft, making it
+        trivial to designate with TOO.
+        """
+        return FormationAttackBuilder._targets_from(location.strike_targets)
+
+    @staticmethod
+    def sead_targets_for(location: TheaterGroundObject) -> list[StrikeTarget]:
+        """As above, but only the emitters: see `TheaterGroundObject.sead_targets`."""
+        return FormationAttackBuilder._targets_from(location.sead_targets)
+
+    @staticmethod
+    def _targets_from(units: list[TheaterUnit]) -> list[StrikeTarget]:
+        targets: list[StrikeTarget] = []
+        for idx, unit in enumerate(units):
+            # Vehicles read better as their type ("Patriot ln #3"); statics carry the
+            # objective in their name ("Factory Zaragoza-2"), which beats the DCS type.
+            name = unit.type.id if unit.unit_type is not None else unit.name
+            targets.append(StrikeTarget(f"{name} #{idx}", unit))
+        return targets
 
     @staticmethod
     def target_waypoint(
@@ -298,6 +473,9 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
 
     def _hold_point(self) -> Point:
         assert self.package.waypoints is not None
+        aligned = alignpoint.hold_point(self.flight, self.coalition.doctrine)
+        if aligned is not None:
+            return aligned
         origin = self.flight.departure.position
         target = self.package.target.position
         join = self.package.waypoints.join

@@ -1,7 +1,7 @@
 ---
 name: Caucasus - Slava Ukraini
 theater: Caucasus
-authors: Starfire
+authors: Starfire, modified by juanjux
 recommended_player_faction: Ukraine 2020
 recommended_enemy_faction: Redfor (Russia) 2020
 description:
@@ -13,38 +13,60 @@ description:
   military airfields where Russia's fighter and bomber squadrons are based.</p>
 miz: slava_ukraini.miz
 performance: 1
+advanced_iads: true
 recommended_start_date: 2026-02-24
 version: "10.9"
 settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: true
   ukrainemilitaryassetspack: true
   russianmilitaryassetspack: true
   squadron_start_full: true
+# GPS jamming: one site on the enemy EWR marker whose 15 nm radius covers the
+# most of its own air defences. No radar on it, so it is a STRIKE target, not
+# SEAD, and a satellite-guided weapon aimed inside the bubble lands wide.
+ground_forces:
+  Ground-56: GPS Jamming Site (Red)
+  Blue GPS Jammer Novorossiysk: GPS Jamming Site (Blue, Unescorted)
 squadrons:
   #Anapa-Vityazevo
   12:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "[CH] TB-2 UCAV"
+        - "RQ-1A Predator"
+      size: 2
+      pilots: 6
     - primary: BAI
       secondary: any
       aircraft:
         - "[CH] MiG-29MU2"
         - MIG-29-FULCRUM
       size: 12
+      pilots: 16
     - primary: Escort
       secondary: any
       aircraft:
         - "[CH] Su-27P1M"
         - Su-27 Flanker-B
       size: 12
+      pilots: 16
     - primary: DEAD
       secondary: air-to-ground
       aircraft:
         - "[CH] Su-24MU"
         - Su-24M Fencer-D
       size: 12     
+      pilots: 16
     - primary: Air Assault
       secondary: any
       aircraft:
         - Mi-24P Hind-F
       size: 4      
+      pilots: 8
   #Novorossiysk
   14:
     - primary: CAS
@@ -52,68 +74,88 @@ squadrons:
       aircraft:
         - Su-25 Frogfoot
       size: 12
+      pilots: 16
     - primary: BAI
       secondary: any
       aircraft:
         - F-16CM Fighting Falcon (Block 50)
       size: 12
+      pilots: 16
     - primary: BARCAP
       secondary: any
       aircraft:
         - Mirage 2000C
       size: 12
+      pilots: 16
   #Maykop-Khanskaya
   16:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - WingLoong-I
+      size: 2
+      pilots: 6
     - primary: Air Assault
       secondary: any
       aircraft:
         - Mi-26
       size: 2
+      pilots: 6
     - primary: SEAD Sweep
       secondary: air-to-ground
       aircraft:
         - Su-25T Frogfoot
       size: 12
+      pilots: 16
     - primary: BAI
       secondary: any
       aircraft:
          - "[CH] Ka-52"
          - Ka-50 Hokum III
       size: 8
+      pilots: 12
     - primary: CAS
       secondary: air-to-ground
       aircraft:
         - Mi-28N Havoc
       size: 4
+      pilots: 8
   #Mineralnye Vody
   26:
     - primary: Refueling
       aircraft:
         - IL-78M
       size: 2
+      pilots: 6
     - primary: Escort
       secondary: air-to-air
       aircraft:
         - Su-27 Flanker-B
       size: 12
+      pilots: 16
     - primary: DEAD
       secondary: air-to-ground
       aircraft:
         - Su-34 Fullback
       size: 12
+      pilots: 16
   #Mozdok
   28:  
     - primary: AEW&C
       aircraft:
         - A-50
       size: 2
+      pilots: 6
     - primary: Strike
       secondary: any
       aircraft:
         - Tu-95MS Bear-H
       size: 12
+      pilots: 16
     - primary: BARCAP
       secondary: any
       aircraft:
         - MIG-29-FULCRUM
       size: 12
+      pilots: 16

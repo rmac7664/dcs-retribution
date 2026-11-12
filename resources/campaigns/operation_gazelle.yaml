@@ -18,11 +18,14 @@ description:
     Israeli dominance in the crucial Sinai region.</p>
 miz: operation_gazelle.miz
 performance: 1
+advanced_iads: true
 recommended_start_date: 1973-10-15
 version: "10.9"
 settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: false
   a4_skyhawk: true
-  hercules: true
   squadron_start_full: true
 squadrons:
   # Ben-Gurion
@@ -30,9 +33,9 @@ squadrons:
     - primary: Transport
       secondary: any
       aircraft:
-        - C-130J-30 Super Hercules
         - C-130J-30
       size: 4
+      pilots: 8
   # Tel Nof
   23:
     - primary: SEAD
@@ -40,46 +43,68 @@ squadrons:
       aircraft:
         - F-4E-45MC Phantom II
       size: 20
+      pilots: 24
     - primary: Escort
       secondary: any
       aircraft:
         - F-4E-45MC Phantom II
       size: 20
+      pilots: 24
     - primary: AEW&C
       aircraft:
         - E-2C Hawkeye
       size: 2
+      pilots: 6
     - primary: Air Assault
       secondary: any
       aircraft:
         - UH-1H Iroquois
       size: 4
+      pilots: 8
     - primary: Escort
       secondary: any
       aircraft:
         - UH-1H Iroquois
       size: 4
+      pilots: 8
   # Hatzor
   20:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - UH-1H Iroquois
+      size: 2
+      pilots: 6
     - primary: BAI
       secondary: any
       aircraft:
         - A-4E Skyhawk
         - F-4E-45MC Phantom II
       size: 20
+      pilots: 24
     - primary: Strike
       secondary: any
       aircraft:
         - A-4E Skyhawk
         - F-4E-45MC Phantom II
       size: 20
+      pilots: 24
   # El Arish
   29:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - MiG-15bis Fagot
+      size: 2
+      pilots: 6
     - primary: CAS
       secondary: any
       aircraft:
         - MiG-19P Farmer-B
       size: 12
+      pilots: 16
   # Baluza
   27:
     - primary: Air Assault
@@ -87,6 +112,7 @@ squadrons:
       aircraft:
         - Mi-8MTV2 Hip
       size: 4
+      pilots: 8
   # Melez
   5:
     - primary: BAI
@@ -94,11 +120,13 @@ squadrons:
       aircraft:
         - MiG-15bis Fagot
       size: 16
+      pilots: 20
     - primary: Air Assault
       secondary: any
       aircraft:
         - Mi-8MTV2 Hip
       size: 4
+      pilots: 8
   # Al Mansurah
   14:
     - primary: BARCAP
@@ -106,11 +134,13 @@ squadrons:
       aircraft:
         - MiG-21bis Fishbed-N
       size: 16
+      pilots: 20
     - primary: BAI
       secondary: any
       aircraft:
         - MiG-19P Farmer-B
       size: 16
+      pilots: 20
   # Cairo West
   18:
     - primary: Strike
@@ -118,11 +148,13 @@ squadrons:
       aircraft:
         - Tu-16 Badger
       size: 14
+      pilots: 18
     - primary: Escort
       secondary: air-to-air
       aircraft:
         - MiG-21bis Fishbed-N
       size: 16
+      pilots: 20
   # FARP
   Port Tewfik Staging Area:
     - primary: Transport
@@ -130,3 +162,4 @@ squadrons:
       aircraft:
         - Mi-8MTV2 Hip
       size: 4
+      pilots: 8

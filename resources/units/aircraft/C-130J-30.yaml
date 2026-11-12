@@ -23,7 +23,26 @@ variants:
   C-130J-30: {}
 altitudes:
   cruise: 10000
-  combat: 1000
+  combat: 10000
+# The native MOAB was validated on the rear station with an AI bombing task.
+weapon_injections:
+  3:
+    - "{GBU-43}"
 tasks:
   # Air Assault: 0 #TODO: Add once we have proper support for paradrops
   Transport: 140
+  # Ground attack uses a single native MOAB, not the retired Hercules mod's weapons.
+  # These roles stay secondary and priced last; their squadron boxes start unticked.
+  Strike: 0
+  BAI: 0
+  OCA/Aircraft: 0
+  CAS: 0
+  # Named rather than left to be inferred from CAS and BAI, which would hand it to
+  # the planner with its box already ticked.
+  Armed Recon: 0
+secondary_tasks:
+  - Strike
+  - BAI
+  - OCA/Aircraft
+  - CAS
+  - Armed Recon

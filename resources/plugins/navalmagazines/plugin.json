@@ -1,0 +1,56 @@
+{
+    "nameInUI": "Naval magazines & weapons release",
+    "descriptionInUI": "Finite campaign anti-ship magazines, optional staggered weapons release and a per-mission salvo limit. Enemy attacks release the target and nearby friendly groups, not the whole coalition. Under attack, ships may exceed their salvo limit and spend up to one extra salvo past an empty campaign magazine to defend themselves. All anti-ship shots are counted; land-attack missiles use the separate cruise-missile magazine.",
+    "defaultValue": true,
+    "specificOptions": [
+        {
+            "nameInUI": "Formation release radius (NM; 0 releases only the target)",
+            "descriptionInUI": "An enemy attack releases friendly groups within this distance of the attacked group. Neighbours do not release further groups. The default is approximately 15 km.",
+            "mnemonic": "formationReleaseNm",
+            "defaultValue": 8.1,
+            "minimumValue": 0,
+            "maximumValue": 100
+        },
+        {
+            "nameInUI": "Anti-ship missiles per group per turn/mission (0 disables limit)",
+            "descriptionInUI": "Limits a group's offensive anti-ship expenditure in each generated mission, independently of its persistent campaign stock. Under attack the group may exceed this limit; after the campaign stock is empty it can fire up to one additional salvo before holding fire. Zero removes both salvo limits. Land-attack missiles are not affected.",
+            "mnemonic": "salvoPerMission",
+            "defaultValue": 6,
+            "minimumValue": 0,
+            "maximumValue": 100
+        },
+        {
+            "nameInUI": "Weapons-release window opens (s after mission start)",
+            "mnemonic": "releaseMinS",
+            "defaultValue": 120
+        },
+        {
+            "nameInUI": "Weapons-release window closes (s after mission start)",
+            "mnemonic": "releaseMaxS",
+            "defaultValue": 900
+        },
+        {
+            "nameInUI": "Announce when a ship group goes winchester",
+            "mnemonic": "announceWinchester",
+            "defaultValue": true
+        },
+        {
+            "nameInUI": "Anti-ship weapon name patterns (comma separated, matched inside the DCS weapon type name)",
+            "mnemonic": "ashmWeaponPatterns",
+            "defaultValue": "HARPOON,RGM_84,AGM_84,EXOCET,MM_38,MM_40,YJ,C_802,C_602,P_500,P_700,P_270,P_1000,KH_35,3M24,3M54,SS_N,NSM,RBS15,OTOMAT"
+        },
+        {
+            "nameInUI": "Stagger weapons release",
+            "descriptionInUI": "Warships start the mission on return-fire and are released to weapons-free one group at a time across a window, instead of every hull opening up at once. A modern anti-ship missile out-ranges the whole theatre, so without this both fleets are in range from the moment the mission loads and the entire naval battle happens in the first five minutes. They still defend themselves while they wait.",
+            "mnemonic": "releaseStagger",
+            "defaultValue": false
+        }
+    ],
+    "scriptsWorkOrders": [],
+    "configurationWorkOrders": [
+        {
+            "file": "navalmagazines-config.lua",
+            "mnemonic": "navalmagazines-config"
+        }
+    ]
+}

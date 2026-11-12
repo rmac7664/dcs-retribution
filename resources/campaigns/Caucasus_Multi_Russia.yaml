@@ -1,14 +1,19 @@
 ---
 name: Caucasus - Multi-Part Russia
 theater: Caucasus
-authors: Doc_of_Mur
+authors: Doc_of_Mur, modified by juanjux
 description: <p>This is part 2 of the Caucasus Multi-part campaign. After completing Multi-Part Georgia, play this campaign to invade Russia and finish the theater. As this is now Russia the recommended enemy faction has changed. To simulate still owning Georgia the player income has been supplemented through an increased number of blue strike targets at the starting bases. This is a more difficult scenario with a higher concentration of Redfor SAMs and Strike targets than usual.</p>
 recommended_player_faction: Bluefor Modern
 recommended_enemy_faction: Russia 2010
 recommended_start_date: 2008-08-01
 miz: Caucasus_Multi_Russia.miz
 performance: 2
+advanced_iads: true
 version: "9.1"
+settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: true
 squadrons:
   # Anapa-Vityazevo
   12:
@@ -60,6 +65,13 @@ squadrons:
       secondary: air-to-ground
   # Maykop-Khanskaya
   16:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "WingLoong-I"
+      size: 2
+      pilots: 6
     - primary: CAS
       secondary: air-to-ground
       aircraft:
@@ -106,6 +118,13 @@ squadrons:
       secondary: air-to-ground
   # Gudauta
   21:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - MQ-9 Reaper
+      size: 2
+      pilots: 6
     - primary: CAS
       secondary: air-to-ground
       aircraft:
@@ -267,3 +286,7 @@ squadrons:
       secondary: air-to-ground
     - primary: CAS
       secondary: air-to-ground
+
+ground_forces:
+  "Ground-29": GPS Jamming Site (Red, Unescorted)
+  "Blue GPS Jammer Tbilisi-Lochini": GPS Jamming Site (Blue, Unescorted)

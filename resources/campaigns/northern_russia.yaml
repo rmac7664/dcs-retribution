@@ -8,10 +8,26 @@ recommended_enemy_faction: Russia 1975
 recommended_start_date: 1995-06-13
 miz: northern_russia.miz
 performance: 2
+advanced_iads: true
 version: "10.5"
 squadrons:
   # Kutaisi
+  "Khashuri FOB":
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - Mi-8MTV2 Hip
+      size: 2
+      pilots: 6
   25:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "RQ-1A Predator"
+      size: 2
+      pilots: 6
     - primary: Refueling
       aircraft:
         - KC-135 Stratotanker MPRS
@@ -195,3 +211,8 @@ squadrons:
       secondary: air-to-ground
       aircraft:
         - AV-8B Harrier II Night Attack
+
+settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: false

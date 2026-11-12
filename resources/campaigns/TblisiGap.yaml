@@ -8,9 +8,18 @@ recommended_enemy_faction: Germany 1990
 recommended_start_date: 1980-09-21 6:40:00
 miz: TblisiGap.miz
 performance: 2
+advanced_iads: true
 version: "10.4"
 squadrons:
   #Vaziani, blufor jet base
+  "FARP Wild Horse":
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - SA 342M Gazelle
+      size: 2
+      pilots: 6
   31:
     - primary: BARCAP
       secondary: air-to-air
@@ -40,6 +49,13 @@ squadrons:
     - primary: AEW&C
   #Tbilisi-Lochini, blue helicopter base
   29:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - Mi-24V Hind-E
+      size: 2
+      pilots: 6
     - primary: CAS
       aircraft:
         - Mi-24P Hind-F
@@ -92,3 +108,8 @@ squadrons:
   23:
     - primary: Transport
     - primary: AEW&C
+
+settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: false

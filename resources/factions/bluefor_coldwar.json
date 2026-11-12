@@ -12,7 +12,6 @@
     "B-52H Stratofortress",
     "C-130",
     "C-130J-30",
-    "C-130J-30 Super Hercules",
     "F-14A Tomcat (AI)",
     "F-14A Tomcat (Block 135-GR Late)",
     "F-14B Tomcat",
@@ -27,7 +26,8 @@
     "Mirage-F1EE",
     "SA 342L Gazelle",
     "SA 342M Gazelle",
-    "UH-1H Iroquois"
+    "UH-1H Iroquois",
+    "OH-58D(R) Kiowa Warrior"
   ],
   "awacs": [
     "E-2C Hawkeye",

@@ -32,14 +32,24 @@ class GameUpdateEvents:
     deleted_flights: set[UUID] = field(default_factory=set)
     selected_flight: UUID | None = None
     deselected_flight: bool = False
+    saved_points_updated: bool = False
     updated_front_lines: set[FrontLine] = field(default_factory=set)
     deleted_front_lines: set[UUID] = field(default_factory=set)
     updated_tgos: set[TheaterGroundObject] = field(default_factory=set)
+    deleted_tgos: set[UUID] = field(default_factory=set)
     updated_control_points: set[ControlPoint] = field(default_factory=set)
     updated_iads: set[IadsNetworkNode] = field(default_factory=set)
     deleted_iads_connections: set[UUID] = field(default_factory=set)
     updated_supply_routes: bool = False
     reset_on_map_center: LatLng | None = None
+    #: Somewhere the player asked to be shown, rather than somewhere the campaign
+    #: has moved to, and how close to look at it. The map keeps its own zoom when
+    #: there is none.
+    fly_to: LatLng | None = None
+    fly_to_zoom: int | None = None
+    #: Transient button hover: owner, optional object identity, and position.
+    #: A position of None clears only this owner's highlight.
+    map_hover: tuple[UUID, UUID | None, LatLng | None] | None = None
     game_unloaded: bool = False
     new_turn: bool = False
     shutting_down: bool = False
@@ -123,7 +133,37 @@ class GameUpdateEvents:
         return self
 
     def update_tgo(self, tgo: TheaterGroundObject) -> GameUpdateEvents:
-        self.updated_tgos.add(tgo)
+        from game.groundmovement.presentation import empty_movement_group
+        from game.theater.theatergroundobject import VehicleGroupGroundObject
+
+        if (
+            isinstance(tgo, VehicleGroupGroundObject)
+            and tgo.absorbed_into_frontline is not None
+        ) or empty_movement_group(tgo):
+            return self.delete_tgo(tgo)
+        if tgo.id not in self.deleted_tgos:
+            self.updated_tgos.add(tgo)
+        return self
+
+    def delete_tgo(self, tgo: TheaterGroundObject) -> GameUpdateEvents:
+        self.updated_tgos.discard(tgo)
+        self.deleted_tgos.add(tgo.id)
+        return self
+
+    def update_motorpools_at(self, *control_points: ControlPoint) -> GameUpdateEvents:
+        """Adds every authored motorpool TGO at the given control points.
+
+        Event serialization reconciles the affected control points immediately
+        before building TGO payloads. Because :attr:`updated_tgos` is a set, a
+        motorpool refreshed by multiple operations in one batch is deduplicated
+        to a single refresh.
+        """
+        from game.theater.theatergroundobject import MotorpoolGroundObject
+
+        for control_point in control_points:
+            for tgo in getattr(control_point, "ground_objects", []):
+                if isinstance(tgo, MotorpoolGroundObject):
+                    self.updated_tgos.add(tgo)
         return self
 
     def update_control_point(self, control_point: ControlPoint) -> GameUpdateEvents:
@@ -151,6 +191,12 @@ class GameUpdateEvents:
                 game.theater.terrain.map_view_default.position.latlng()
             )
             self.game_unloaded = False
+        return self
+
+    def look_at(self, latlng: LatLng, zoom: int | None = None) -> GameUpdateEvents:
+        """Point the map at this, wherever it was looking, and how close."""
+        self.fly_to = latlng
+        self.fly_to_zoom = zoom
         return self
 
     def begin_new_turn(self) -> GameUpdateEvents:

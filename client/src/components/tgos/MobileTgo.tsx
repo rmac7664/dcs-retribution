@@ -12,9 +12,12 @@ import {
   setHoveredEmitter,
 } from "../../api/mapSlice";
 import { useAppDispatch, useAppSelector } from "../../app/hooks";
-import SplitLines from "../splitlines/SplitLines";
-import { MovementPath, MovementPathHandle } from "../controlpoints/MovementPath";
-import { TgoTooltip, iconForTgo } from "./shared";
+import { RANGE_CHECK_INTERVAL_MS } from "../map/dragging";
+import {
+  MovementPath,
+  MovementPathHandle,
+} from "../controlpoints/MovementPath";
+import { TgoTooltip, TgoTooltipContent, iconForTgo } from "./shared";
 import { LatLng, Marker as LMarker, LatLngLiteral } from "leaflet";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOMServer from "react-dom/server";
@@ -42,17 +45,17 @@ function formatLatLng(latLng: LatLng): string {
 function destinationTooltipText(
   tgo: TgoModel,
   destinationish: LatLngLiteral,
-  inRange: boolean
+  inRange: boolean,
 ): string {
   const destination = new LatLng(destinationish.lat, destinationish.lng);
   const distance = metersToNauticalMiles(
-    destination.distanceTo(tgo.position)
+    destination.distanceTo(tgo.position),
   ).toFixed(1);
   if (!inRange) {
     return `Out of range (${distance}nm away)`;
   }
   return `${tgo.name} moving ${distance}nm to ${formatLatLng(
-    destination
+    destination,
   )} next turn`;
 }
 
@@ -79,23 +82,46 @@ interface PrimaryMarkerProps {
 function PrimaryMarker(props: PrimaryMarkerProps) {
   const markerRef = useRef<LMarker | null>(null);
   const pathRef = useRef<MovementPathHandle | null>(null);
+  // True between dragstart and dragend. While the player is holding the mouse
+  // down, nothing arriving from the server may move this marker: react-leaflet
+  // answers a changed `position` prop with marker.setLatLng(), which yanks the
+  // icon out from under the cursor and reads exactly like the button being
+  // released. The event stream updates a tgo for reasons that have nothing to
+  // do with the drag -- an IADS link, a repair, the sim -- and each one carries
+  // a fresh `position` object, so the effect below fired on identity alone even
+  // when the coordinates were unchanged.
+  const dragging = useRef(false);
 
   // Stable icon reference. iconForTgo() builds a fresh leaflet Icon every call;
   // if a re-render happens mid-drag (the busy TGO event stream churns this
   // component while unrelated ships/SAMs update), react-leaflet would call
   // marker.setIcon() with the new ref and abort the in-progress drag. Memoize
   // on the sidc so the ref only changes when the symbol actually changes.
-  // Intentionally keyed on sidc only: the icon must stay referentially stable
-  // across drags so a re-render can't swap it mid-drag (see comment above).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const icon = useMemo(() => iconForTgo(props.tgo), [props.tgo.sidc]);
+  // Keyed on sidc + repairing: the icon must stay referentially stable across
+  // drags so a re-render can't swap it mid-drag; both change only at turn
+  // processing, never during a drag. `repairing` is needed because a repairing
+  // group keeps the same (damaged) sidc but must show the orange bar.
+  const icon = useMemo(
+    () => iconForTgo(props.tgo),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.tgo.sidc, props.tgo.repairing]
+  );
 
   const [hasDestination, setHasDestination] = useState<boolean>(
-    props.tgo.destination != null
+    props.tgo.destination != null,
   );
   const [position, setPosition] = useState<LatLngLiteral>(
-    props.tgo.destination ? props.tgo.destination : props.tgo.position
+    props.tgo.destination ? props.tgo.destination : props.tgo.position,
   );
+
+  useEffect(() => {
+    if (dragging.current) {
+      return;
+    }
+    const authoritativePosition = props.tgo.destination ?? props.tgo.position;
+    setPosition(authoritativePosition);
+    setHasDestination(props.tgo.destination != null);
+  }, [props.tgo.destination, props.tgo.position]);
 
   const setDestination = useCallback((destination: LatLng) => {
     setPosition(destination);
@@ -106,6 +132,10 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
     setPosition(props.tgo.position);
     setHasDestination(false);
   }, [props]);
+
+  // When the range check was last asked for, so a drag does not fire one per
+  // mouse position.
+  const lastAsked = useRef(0);
 
   const [putDestination, { isLoading }] = useSetTgoDestinationMutation();
   const [cancelTravel] = useClearTgoDestinationMutation();
@@ -118,7 +148,7 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
   const raised = useAppSelector(
     (state) =>
       selectHighlightEmitters(state) &&
-      selectHoveredEmitter(state) === props.tgo.id
+      selectHoveredEmitter(state) === props.tgo.id,
   );
 
   // Set the tooltip content imperatively against the empty <Tooltip/> rendered
@@ -129,16 +159,16 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
   // carrier marker (MobileControlPoint) avoids this the same way.  The drag
   // handler overrides this content live via setTooltipContent.
   useEffect(() => {
+    // The drag handler owns the tooltip while the drag lasts: it is showing the
+    // live distance, and overwriting it from here would flicker the name back
+    // in every time anything on the map updated.
+    if (dragging.current) {
+      return;
+    }
     markerRef.current?.setTooltipContent(
       props.tgo.destination
         ? destinationTooltipText(props.tgo, props.tgo.destination, true)
-        : ReactDOMServer.renderToString(
-            <>
-              {`${props.tgo.name} (${props.tgo.control_point_name})`}
-              <br />
-              <SplitLines items={props.tgo.units} />
-            </>
-          )
+        : ReactDOMServer.renderToString(<TgoTooltipContent tgo={props.tgo} />),
     );
   });
 
@@ -177,22 +207,37 @@ function PrimaryMarker(props: PrimaryMarkerProps) {
             }
           },
           mouseover: () =>
-            dispatch(setHoveredEmitter({ id: props.tgo.id, source: "emitter" })),
+            dispatch(
+              setHoveredEmitter({ id: props.tgo.id, source: "emitter" }),
+            ),
           mouseout: () => dispatch(setHoveredEmitter(null)),
+          dragstart: () => {
+            dragging.current = true;
+          },
           drag: (event) => {
             const dest = event.target.getLatLng() as LatLng;
+            // The path follows every pixel; the range check does not. Leaflet
+            // fires this several times a frame, and one HTTP round trip per
+            // mouse position is a request storm for an answer that only changes
+            // when the ship crosses its range ring.
+            pathRef.current?.setDestination(dest);
+            const now = Date.now();
+            if (now - lastAsked.current < RANGE_CHECK_INTERVAL_MS) {
+              return;
+            }
+            lastAsked.current = now;
             backend
               .get(
-                `/tgos/${props.tgo.id}/destination-in-range?lat=${dest.lat}&lng=${dest.lng}`
+                `/tgos/${props.tgo.id}/destination-in-range?lat=${dest.lat}&lng=${dest.lng}`,
               )
               .then((inRange) => {
                 markerRef.current?.setTooltipContent(
-                  destinationTooltipText(props.tgo, dest, inRange.data)
+                  destinationTooltipText(props.tgo, dest, inRange.data),
                 );
               });
-            pathRef.current?.setDestination(dest);
           },
           dragend: async (event) => {
+            dragging.current = false;
             const previous = new LatLng(position.lat, position.lng);
             const dest = event.target.getLatLng() as LatLng;
             setDestination(dest);
@@ -243,14 +288,17 @@ interface SecondaryMarkerProps {
  */
 function SecondaryMarker(props: SecondaryMarkerProps) {
   const dispatch = useAppDispatch();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const icon = useMemo(() => iconForTgo(props.tgo), [props.tgo.sidc]);
+  const icon = useMemo(
+    () => iconForTgo(props.tgo),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.tgo.sidc, props.tgo.repairing]
+  );
   const [openInfoDialog] = useOpenTgoInfoDialogMutation();
   const [openNewPackageDialog] = useOpenNewTgoPackageDialogMutation();
   const raised = useAppSelector(
     (state) =>
       selectHighlightEmitters(state) &&
-      selectHoveredEmitter(state) === props.tgo.id
+      selectHoveredEmitter(state) === props.tgo.id,
   );
 
   if (!props.destination) {

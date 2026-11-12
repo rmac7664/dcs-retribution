@@ -3,7 +3,11 @@
   "name": "Insurgents",
   "authors": "Khopa",
   "description": "<p>Insurgents faction.</p>",
-  "aircrafts": [],
+  "aircrafts": [
+    "WingLoong-I",
+    "Mi-8MTV2 Hip",
+    "UH-1H Iroquois"
+  ],
   "frontline_units": [
     "DIM' KAMIKAZE",
     "DIM' TOYOTA BLUE",
@@ -44,6 +48,8 @@
     "AAA ZU-23 Insurgent Closed Emplacement",
     "ZU-23 on Ural-375 Insurgent"
   ],
-  "preset_groups": [],
+  "preset_groups": [
+    "GPS Jamming Site (Red)"
+  ],
   "naval_units": []
 }

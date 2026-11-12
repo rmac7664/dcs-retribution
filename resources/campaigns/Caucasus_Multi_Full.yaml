@@ -1,14 +1,19 @@
 ---
 name: Caucasus - Full
 theater: Caucasus
-authors: Doc_of_Mur
+authors: Doc_of_Mur, modified by juanjux
 description: <p>This is a complete map of every airbase in the Caucasus Region, all bases are fully defended by Air, Land and/or Sea. The player starts by invading southern Georgia and works their way through Russia. The Strike and SAM targets are limited for performance reasons. If this Scenario is too taxing for your computer you may use the Multi-Part Scenarios. They are copied from this Campaign and are catered toward less powerful machines.</p>
 recommended_player_faction: Bluefor Modern
 recommended_enemy_faction: Russia 2010
 recommended_start_date: 2008-08-01
 miz: Caucasus_Multi_Full.miz
 performance: 3
+advanced_iads: true
 version: "9.1"
+settings:
+  plugins:
+    skynetiads: true
+    gpsjamming: true
 squadrons:
   # Anapa-Vityazevo
   12:
@@ -124,6 +129,13 @@ squadrons:
       secondary: air-to-ground
   # Batumi
   22:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - MQ-9 Reaper
+      size: 2
+      pilots: 6
     - primary: CAS
       secondary: air-to-ground
       aircraft:
@@ -156,6 +168,13 @@ squadrons:
         - C-130
   # Senaki-Kholki
   23:
+    - primary: AFAC — Area
+      secondary:
+        - AFAC — Frontline
+      aircraft:
+        - "WingLoong-I"
+      size: 2
+      pilots: 6
     - primary: CAS
       secondary: air-to-ground
     - primary: BAI
@@ -321,3 +340,7 @@ squadrons:
       secondary: air-to-ground
     - primary: CAS
       secondary: air-to-ground
+
+ground_forces:
+  "Ground-25": GPS Jamming Site (Red, Unescorted)
+  "Blue GPS Jammer Batumi": GPS Jamming Site (Blue, Unescorted)

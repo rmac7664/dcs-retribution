@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 import random
 from datetime import datetime
+from functools import cached_property
 from typing import Any, Optional, TYPE_CHECKING
 
 from dcs import Mission, Point
 from dcs.action import DoScript
 from dcs.flyingunit import FlyingUnit
+from dcs.planes import C_130J_30
 from dcs.task import OptReactOnThreat
 from dcs.translation import String
 from dcs.triggers import TriggerStart
@@ -15,9 +17,17 @@ from dcs.unit import Skill
 from dcs.unitgroup import FlyingGroup
 
 from game.ato import Flight, FlightType
+from game.ato.savedpoints import points_of, drawings_of
+from game.ato.flightplans.uizonedisplay import UiZoneDisplay
 from game.ato.flightplans.shiprecoverytanker import RecoveryTankerFlightPlan
 from game.callsigns import callsign_for_support_unit
 from game.data.weapons import Pylon, Weapon, WeaponType
+from game.data.gunammunition import (
+    GAU8_AIRCRAFT,
+    GAU8_AMMUNITION,
+    GAU8_DEFAULT_AMMUNITION,
+)
+from game.dcs.aircraftproperties import PropertyDateGate, night_vision_overrides
 from game.lasercodes.lasercode import LaserCode
 from game.missiongenerator.logisticsgenerator import LogisticsGenerator
 from game.missiongenerator.missiondata import MissionData, AwacsInfo, TankerInfo
@@ -29,8 +39,10 @@ from game.radio.tacan import (
     OutOfTacanChannelsError,
 )
 from game.runways import RunwayData
+from game.settings import NightMissions
 from game.missiongenerator.missiondata import EscortInfo
 from game.squadrons import Pilot
+from game.theater.daytimecalculator import includes_darkness
 from .aircraftbehavior import AircraftBehavior
 from .aircraftpainter import AircraftPainter
 from .bingoestimator import BingoEstimator
@@ -54,6 +66,11 @@ from ...theater import Fob
 if TYPE_CHECKING:
     from game.transfers import TransferOrder
     from game import Game
+
+
+# pydcs names the units of a flight group "<group name> Pilot #1", "... #2" and
+# so on. Everything before this separator is what keeps the name unique.
+PILOT_NAME_SEPARATOR = " Pilot #"
 
 
 class FlightGroupConfigurator:
@@ -85,6 +102,10 @@ class FlightGroupConfigurator:
         self._final_loadouts: list[tuple[FlyingUnit, Loadout]] = []
 
     def configure(self) -> FlightData:
+        if self.flight.flight_type.is_afac and self.flight.client_count:
+            raise ValueError(
+                "AFAC missions currently support AI pilots only. Replace player pilots before generating the mission."
+            )
         flight_channel = self.setup_radios()
         AircraftBehavior(self.flight.flight_type, self.mission_data).apply_to(
             self.flight, self.group
@@ -102,6 +123,8 @@ class FlightGroupConfigurator:
         laser_codes: list[Optional[int]] = []
         for unit, member in zip(self.group.units, self.flight.iter_members()):
             self.configure_flight_member(unit, member, laser_codes)
+
+        self.name_pilots()
 
         divert = None
         if self.flight.divert is not None:
@@ -164,6 +187,9 @@ class FlightGroupConfigurator:
             self.flight.flight_plan.waypoints,
         )
 
+        from game.ato.aircraftnotes import notes_for_flight
+
+        flight_plan = self.flight.flight_plan
         flight_data = FlightData(
             package=self.flight.package,
             aircraft_type=self.flight.unit_type,
@@ -186,6 +212,19 @@ class FlightGroupConfigurator:
             joker_fuel=bingo_estimator.estimate_joker(),
             custom_name=self.flight.custom_name,
             laser_codes=laser_codes,
+            start_type=self.flight.start_type,
+            saved_points=list(points_of(self.flight)),
+            saved_drawings=list(drawings_of(self.flight)),
+            aircraft_notes=notes_for_flight(self.flight),
+            group_name=str(self.group.name),
+            patrol_speed=(
+                flight_plan.patrol_speed if flight_plan.is_patrol(flight_plan) else None
+            ),
+            work_zone=(
+                flight_plan.ui_zone()
+                if isinstance(flight_plan, UiZoneDisplay)
+                else None
+            ),
         )
 
         self.register_escort_leash()
@@ -221,6 +260,7 @@ class FlightGroupConfigurator:
                 escort_group_id=escort_group_id,
                 escorted_group_id=escorted_group_id,
                 engagement_range_meters=int(engagement_range),
+                release_flag=f"split-{id(self.flight.package)}",
             )
         )
 
@@ -276,50 +316,6 @@ class FlightGroupConfigurator:
             laser_codes.append(code.code)
         else:
             laser_codes.append(None)
-
-        self.handle_ew_jamming(member, unit)
-
-    def handle_ew_jamming(self, member: FlightMember, unit: FlyingUnit) -> None:
-        if not member.is_player:
-            return
-        settings = self.flight.coalition.game.settings
-        if not settings.plugin_option("ewrj"):
-            return
-        # Check if ecm_required option is enabled
-        jammer_required = settings.plugin_option("ewrj.ecm_required")
-        offensive_jammer = member.loadout.has_weapon_of_type(
-            WeaponType.OFFENSIVE_JAMMER
-        )
-        offensive_inbuilt = self.flight.squadron.aircraft.has_built_in_jamming
-        has_jammer = (
-            member.loadout.has_weapon_of_type(WeaponType.JAMMER) or offensive_jammer
-        )
-        built_in_jammer = (
-            self.flight.squadron.aircraft.has_built_in_ecm or offensive_inbuilt
-        )
-        if jammer_required and not (has_jammer or built_in_jammer):
-            return
-        # Create the original ewrj_menu_trigger for player flight members
-        ewrj_menu_trigger = TriggerStart(comment=f"EWRJ-{unit.name}")
-        ewrj_menu_trigger.add_action(DoScript(String(f'EWJamming("{unit.name}")')))
-        self.mission.triggerrules.triggers.append(ewrj_menu_trigger)
-        self.group.points[0].tasks[0] = OptReactOnThreat(
-            OptReactOnThreat.Values.PassiveDefense
-        )
-        # Create LUA Flags for Offensive Jamming in EW Script for Player Flights
-        if not (offensive_jammer or offensive_inbuilt):
-            return
-        ewrj_offensive_trigger = TriggerStart(
-            comment=f"Offensive Jammer Flag {unit.name}"
-        )
-        ewrj_offensive_trigger.add_action(
-            DoScript(
-                String(
-                    f'trigger.action.setUserFlag("offensive_jamming_{unit.name}", 1)'
-                )
-            )
-        )
-        self.mission.triggerrules.triggers.append(ewrj_offensive_trigger)
 
     def setup_radios(self) -> RadioFrequency:
         freq = self.flight.frequency
@@ -401,13 +397,55 @@ class FlightGroupConfigurator:
         if pilot is None:
             logging.error(f"Cannot determine skill level: {unit.name} has not pilot")
             return squadron.base_skill
-        return squadron.pilot_skill(pilot)
+        # The skill he flies at, which morale and the company he is in move; his rank
+        # is a separate thing and does not change with how his week has gone.
+        return squadron.mission_skill(pilot, self.flight)
+
+    def name_pilots(self) -> None:
+        """Put the rank and name of the pilot where the label reads "Pilot #2".
+
+        Only the tail is replaced. The rest of the unit name carries the group
+        counter that makes it unique, and UnitMap.add_aircraft raises on a
+        duplicate, so keeping that prefix is what stops two pilots of the same
+        name from killing mission generation outright.
+
+        Has to run after every member is configured: set_skill decides player
+        versus client by looking for "Pilot #1" in the name, and would quietly
+        hand the player a client slot if the string were gone by then.
+        """
+        settings = self.game.settings
+        if not settings.live_pilots_enabled:
+            return
+        squadron = self.flight.squadron
+        used: set[str] = set()
+        for index, (unit, member) in enumerate(
+            zip(self.group.units, self.flight.iter_members()), start=1
+        ):
+            pilot = member.pilot
+            if pilot is None:
+                continue
+            # Rank and name both come with Live Pilots; neither is a switch of its
+            # own. Naming the men is most of what the feature is for.
+            parts: list[str] = []
+            rank = squadron.pilot_rank(pilot)
+            if rank is not None:
+                parts.append(rank.abbreviation)
+            parts.append(pilot.name)
+            head, separator, _ = str(unit.name).rpartition(PILOT_NAME_SEPARATOR)
+            if not separator:
+                continue
+            name = f"{head} {' '.join(parts)}"
+            if name in used:
+                name = f"{name} #{index}"
+            used.add(name)
+            unit.name = name
 
     def setup_props(self) -> None:
         unit: FlyingUnit
         member: FlightMember
         for unit, member in zip(self.group.units, self.flight.iter_members()):
             props = dict(member.properties)
+            self.setup_night_vision(props, member)
             if (code := member.weapon_laser_code) is not None:
                 for laser_code_config in self.flight.unit_type.laser_code_configs:
                     props.update(laser_code_config.property_dict_for_code(code.code))
@@ -417,6 +455,40 @@ class FlightGroupConfigurator:
                 self.degrade_props_for_date(props)
             for prop_id, value in props.items():
                 unit.set_property(prop_id, value)
+
+    def setup_night_vision(
+        self, props: dict[str, bool | float | int | str], member: FlightMember
+    ) -> None:
+        """Equip player slots for flights that encounter darkness."""
+        if not member.is_player:
+            return
+        policy = self.game.settings.night_day_missions
+        if policy is NightMissions.OnlyDay:
+            return
+
+        unit_type = self.flight.unit_type
+        gate = (
+            unit_type.property_date_gate
+            if self.game.settings.restrict_props_by_date
+            else PropertyDateGate()
+        )
+        nvg = dict(
+            night_vision_overrides(
+                unit_type.dcs_unit_type.properties, props, gate, self.game.date
+            )
+        )
+        if nvg and (policy is NightMissions.OnlyNight or self.encounters_darkness):
+            props.update(nvg)
+
+    @cached_property
+    def encounters_darkness(self) -> bool:
+        plan = self.flight.flight_plan
+        start = max(self.time, plan.startup_time())
+        end = max(start, plan.landing_time)
+        theater = self.game.theater
+        return includes_darkness(
+            theater.reference_position, theater.timezone, start, end
+        )
 
     def degrade_props_for_date(
         self, props: dict[str, bool | float | int | str]
@@ -480,18 +552,27 @@ class FlightGroupConfigurator:
 
         loadout = member.loadout
         if self.game.settings.restrict_weapons_by_date:
-            # Always apply target overrides for AI, only for players if setting is enabled
-            should_apply_overrides = (
-                not member.is_player
-                or self.game.settings.apply_target_overrides_to_loadouts
-            )
-            target = self.flight.package.target if should_apply_overrides else None
             loadout = loadout.degrade_for_date(
                 self.flight.unit_type,
                 self.game.date,
                 self.flight.squadron.coalition.faction,
-                target,
             )
+        # Upstream matched seeker heads only under the date rule; the two are unrelated.
+        if (
+            not member.is_player
+            or self.game.settings.apply_target_overrides_to_loadouts
+        ):
+            loadout = loadout.clone()
+            loadout.apply_target_overrides(self.flight.package.target)
+
+        if unit.type in GAU8_AIRCRAFT:
+            ammo_type = (
+                loadout.ammo_type
+                if loadout.ammo_type in GAU8_AMMUNITION
+                else GAU8_DEFAULT_AMMUNITION
+            )
+            # pydcs infers None for this field, but serializes integer DCS indices.
+            unit.ammo_type = ammo_type  # type: ignore[assignment]
 
         warehouse_plan = self.mission_data.warehouse_plan
         if warehouse_plan is not None:
@@ -508,6 +589,14 @@ class FlightGroupConfigurator:
                 member.weapon_laser_code,
             )
             pylon.equip(unit, weapon, settings)
+
+        if (
+            unit.unit_type is C_130J_30
+            and self.flight.flight_type is FlightType.STRIKE
+            and unit.pylons.get(3, {}).get("CLSID") == "{GBU-43}"
+        ):
+            unit.set_property("allow_moab", True)
+            unit.set_property("ramp_down", False)
 
     @staticmethod
     def _merge_laser_code(

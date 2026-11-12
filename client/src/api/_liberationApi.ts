@@ -162,10 +162,7 @@ const injectedRtkApi = api.injectEndpoints({
         method: "POST",
       }),
     }),
-    selectFlight: build.mutation<
-      SelectFlightApiResponse,
-      SelectFlightApiArg
-    >({
+    selectFlight: build.mutation<SelectFlightApiResponse, SelectFlightApiArg>({
       query: (queryArg) => ({
         url: `/qt/select-flight/${queryArg.flightId}`,
         method: "POST",
@@ -225,6 +222,32 @@ const injectedRtkApi = api.injectEndpoints({
         url: `/waypoints/${queryArg.flightId}/${queryArg.waypointIdx}/position`,
         method: "POST",
         body: queryArg.leafletPoint,
+      }),
+    }),
+    editWaypoint: build.mutation<EditWaypointApiResponse, EditWaypointApiArg>({
+      query: (queryArg) => ({
+        url: `/waypoints/${queryArg.flightId}/${queryArg.waypointIdx}`,
+        method: "PATCH",
+        body: queryArg.waypointEdit,
+      }),
+    }),
+    deleteWaypoint: build.mutation<
+      DeleteWaypointApiResponse,
+      DeleteWaypointApiArg
+    >({
+      query: (queryArg) => ({
+        url: `/waypoints/${queryArg.flightId}/${queryArg.waypointIdx}`,
+        method: "DELETE",
+      }),
+    }),
+    insertWaypoint: build.mutation<
+      InsertWaypointApiResponse,
+      InsertWaypointApiArg
+    >({
+      query: (queryArg) => ({
+        url: `/waypoints/${queryArg.flightId}/${queryArg.waypointIdx}/insert`,
+        method: "POST",
+        body: queryArg.waypointInsert,
       }),
     }),
     getIadsNetwork: build.query<
@@ -345,8 +368,7 @@ export type OpenControlPointInfoDialogApiResponse =
 export type OpenControlPointInfoDialogApiArg = {
   cpId: string;
 };
-export type SelectFlightApiResponse =
-  /** status 200 Successful Response */ any;
+export type SelectFlightApiResponse = /** status 200 Successful Response */ any;
 export type SelectFlightApiArg = {
   flightId: string;
 };
@@ -389,6 +411,38 @@ export type SetWaypointPositionApiArg = {
   waypointIdx: number;
   leafletPoint: LatLng;
 };
+export type EditWaypointApiResponse =
+  /** status 200 Successful Response */ WaypointEditResult;
+export type EditWaypointApiArg = {
+  flightId: string;
+  waypointIdx: number;
+  waypointEdit: WaypointEdit;
+};
+export type DeleteWaypointApiResponse =
+  /** status 204 Successful Response */ undefined;
+export type DeleteWaypointApiArg = {
+  flightId: string;
+  waypointIdx: number;
+};
+export type InsertWaypointApiResponse =
+  /** status 204 Successful Response */ undefined;
+export type InsertWaypointApiArg = {
+  flightId: string;
+  waypointIdx: number;
+  waypointInsert: WaypointInsert;
+};
+export type WaypointEdit = {
+  name?: string | null;
+  altitude_ft?: number | null;
+  altitude_reference?: string | null;
+};
+export type WaypointEditResult = {
+  warning?: string | null;
+};
+export type WaypointInsert = {
+  before?: boolean;
+  position?: LatLng | null;
+};
 export type GetIadsNetworkApiResponse =
   /** status 200 Successful Response */ IadsNetwork;
 export type GetIadsNetworkApiArg = void;
@@ -411,6 +465,7 @@ export type SupplyStatus = {
   main_base?: boolean;
 };
 export type ControlPoint = {
+  health?: HealthStatus | null;
   id: string;
   name: string;
   blue: boolean;
@@ -418,6 +473,12 @@ export type ControlPoint = {
   mobile: boolean;
   destination?: LatLng;
   sidc: string;
+  tacan?: string | null;
+  atc_frequency?: string | null;
+  units: string[];
+  threat_ranges: number[];
+  detection_ranges: number[];
+  dead?: boolean;
   supply?: SupplyStatus;
   main_base?: boolean;
 };
@@ -454,6 +515,13 @@ export type Waypoint = {
   should_mark: boolean;
   include_in_path: boolean;
   timing: string;
+  index: number;
+  can_delete: boolean;
+  speed_kts: number;
+  is_target: boolean;
+  target_id?: string | null;
+  shows_altitude: boolean;
+  pin?: string;
 };
 export type Flight = {
   id: string;
@@ -461,12 +529,40 @@ export type Flight = {
   position?: LatLng;
   sidc: string;
   waypoints?: Waypoint[];
+  aircraft?: string;
+  num_aircraft?: number;
+  flight_type?: string;
+  callsign?: string | null;
+  package_target?: string;
+  package_tot?: string;
 };
 export type FrontLine = {
   id: string;
   extents: LatLng[];
 };
+export type AggregateGroundUnitEntry = {
+  unit_type: string;
+  display_name: string;
+  count: number;
+};
+export type UnitHealthStatus = {
+  id: number;
+  name: string;
+  health_percent: number;
+  persistent: boolean;
+  damage_repaired_per_turn_percent: number;
+  repair_next_turn_percent: number;
+  health_next_turn_percent: number;
+};
+export type HealthStatus = {
+  health_percent: number;
+  damage_repaired_per_turn_percent: number;
+  repair_next_turn_percent: number;
+  health_next_turn_percent: number;
+  units: UnitHealthStatus[];
+};
 export type Tgo = {
+  health?: HealthStatus | null;
   id: string;
   name: string;
   control_point_name: string;
@@ -474,13 +570,25 @@ export type Tgo = {
   blue: boolean;
   position: LatLng;
   units: string[];
+  reserve_units?: string[];
+  expected_inventory?: AggregateGroundUnitEntry[];
+  unrendered_reserve?: AggregateGroundUnitEntry[];
+  in_transit_units?: AggregateGroundUnitEntry[];
   threat_ranges: number[];
   detection_ranges: number[];
+  jamming_range?: number | null;
   dead: boolean;
+  purchasable: boolean;
+  repairing?: boolean;
   sidc: string;
-  task?: string[];
+  task?: [string, string];
   mobile: boolean;
+  in_transit?: boolean;
+  movement_destination_label?: string | null;
   destination?: LatLng;
+  iads_state?: string | null;
+  iads_reason?: string | null;
+  iads_blind?: boolean;
 };
 export type SupplyRoute = {
   id: string;
@@ -540,6 +648,15 @@ export type Game = {
   map_center?: LatLng;
   unculled_zones: UnculledZone[];
   map_zones: MapZones;
+  high_command: HighCommandMark[];
+};
+export type HighCommandMark = {
+  name: string;
+  position: LatLng;
+  orders: number;
+  soonest: number;
+  last_turn: boolean;
+  tooltip: string;
 };
 export type MapZones = {
   inclusion: LatLng[][][];
@@ -578,6 +695,9 @@ export const {
   useClearTgoDestinationMutation,
   useListAllWaypointsForFlightQuery,
   useSetWaypointPositionMutation,
+  useEditWaypointMutation,
+  useDeleteWaypointMutation,
+  useInsertWaypointMutation,
   useGetIadsNetworkQuery,
   useGetIadsConnectionsForTgoQuery,
 } = injectedRtkApi;

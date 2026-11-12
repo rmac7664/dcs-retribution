@@ -5,6 +5,7 @@ import logging
 import math
 import random
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import Optional, TYPE_CHECKING
 
 from dcs.weather import Weather as PydcsWeather
@@ -41,6 +42,19 @@ class Weather(ABC):
         self.clouds = self.generate_clouds()
         self.fog = self.generate_fog()
         self.wind = self.generate_wind()
+
+    def restore_surface_wind(self) -> bool:
+        """Restore the forecast retained by the removed forced-calm workaround.
+
+        Older saves without a retained forecast keep their recorded weather.
+        Never invent a replacement wind or alter the winds aloft.
+        """
+        forecast = getattr(self, "forecast_surface_wind", None)
+        if forecast is None:
+            return False
+        self.wind = replace(self.wind, at_0m=forecast)
+        self.__dict__.pop("forecast_surface_wind", None)
+        return True
 
     def generate_atmospheric(
         self,

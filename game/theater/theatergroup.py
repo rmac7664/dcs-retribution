@@ -8,7 +8,7 @@ from dcs.triggers import TriggerZone
 from dcs.unittype import ShipType, StaticType, UnitType as DcsUnitType, VehicleType
 
 from game.data.radar_db import LAUNCHER_TRACKER_PAIRS, TELARS, TRACK_RADARS
-from game.data.units import ANTI_AIR_UNIT_CLASSES, UnitClass
+from game.data.units import ANTI_AIR_UNIT_CLASSES
 from game.dcs.groundunittype import GroundUnitType
 from game.dcs.shipunittype import ShipUnitType
 from game.dcs.unittype import UnitType
@@ -45,6 +45,28 @@ class TheaterUnit:
     fixed_hdg: bool = False
     # State of the unit, dead or alive
     alive: bool = True
+    # Turns remaining until the unit is repaired and revived.
+    repair_turns_remaining: Optional[int] = None
+    # Fraction of original health; older saves inherit full health.
+    health: float = 1.0
+    # Loaded at mission start; the piece shares its tractor's campaign loss.
+    transported_by_id: int | None = None
+    # Base stock may distinguish variants sharing the same native DCS model.
+    ground_unit_variant: str | None = None
+    # Actual payment for cancellable repair work; None on legacy saves.
+    repair_cost_paid: float | None = None
+
+    @property
+    def health_fraction(self) -> float:
+        return max(0.0, min(1.0, self.health)) if self.alive else 0.0
+
+    @property
+    def persistent_damage_eligible(self) -> bool:
+        from game.theater.theatergroundobject import BuildingGroundObject
+
+        return self.is_ship or (
+            isinstance(self.ground_object, BuildingGroundObject) and self.is_static
+        )
 
     @staticmethod
     def from_template(
@@ -68,6 +90,8 @@ class TheaterUnit:
     @property
     def unit_type(self) -> Optional[UnitType[Any]]:
         if issubclass(self.type, VehicleType):
+            if self.ground_unit_variant is not None:
+                return GroundUnitType.named(self.ground_unit_variant)
             return next(GroundUnitType.for_dcs_type(self.type))
         elif issubclass(self.type, ShipType):
             return next(ShipUnitType.for_dcs_type(self.type))
@@ -75,27 +99,27 @@ class TheaterUnit:
         return None
 
     def kill(self, events: GameUpdateEvents) -> None:
+        deck = (
+            self.ground_object.control_point
+            if self.ground_object.is_naval_control_point
+            else None
+        )
+        afloat = deck is not None and not deck.sunk
         self.alive = False
+        self.health = 1.0
         self.ground_object.invalidate_threat_poly()
         events.update_tgo(self.ground_object)
         if self.ground_object.is_iads:
             iads = self.ground_object.control_point.coalition.game.theater.iads_network
             iads.update_tgo(self.ground_object, events)
-        if self.ground_object.is_naval_control_point:
-            for unit in self.ground_object.units:
-                if (
-                    unit.unit_type
-                    and unit.unit_type.unit_class is UnitClass.AIRCRAFT_CARRIER
-                    and not unit.alive
-                ):
-                    cp = self.ground_object.control_point
-                    for squadron in cp.squadrons:
-                        cp.coalition.air_wing.squadrons[squadron.aircraft].remove(
-                            squadron
-                        )
+        if deck is not None and afloat and deck.sunk:
+            # This death took the flight deck down; the escorts dying after it do not.
+            deck.sink(events)
 
     def revive(self, events: GameUpdateEvents) -> None:
         self.alive = True
+        self.health = 1.0
+        self.repair_cost_paid = None
         self.ground_object.threat_poly()
         events.update_tgo(self.ground_object)
         if self.ground_object.is_iads:
@@ -107,15 +131,25 @@ class TheaterUnit:
         return f"{str(self.id).zfill(4)} | {self.name}"
 
     @property
+    def status_suffix(self) -> str:
+        if self.alive:
+            return ""
+        if self.repair_turns_remaining is not None:
+            return " [REPAIRING]"
+        return " [DEAD]"
+
+    @property
     def display_name(self) -> str:
-        dead_label = " [DEAD]" if not self.alive else ""
-        unit_label = self.unit_type or self.type.name or self.name
-        return f"{str(self.id).zfill(4)} | {unit_label}{dead_label}"
+        # Statics have no unit_type, and their name carries the objective it belongs to
+        # ("Command Zaragoza-1"), which beats repeating the DCS type. Older saves named
+        # them after the type anyway, so they render exactly as before.
+        unit_label = self.unit_type or self.name or self.type.name
+        return f"{str(self.id).zfill(4)} | {unit_label}{self.status_suffix}"
 
     @property
     def short_name(self) -> str:
-        dead_label = " [DEAD]" if not self.alive else ""
-        return f"<b>{self.type.id[0:18]}</b> {dead_label}"
+        label = self.type.id if self.unit_type is not None else self.name
+        return f"<b>{label[0:18]}</b> {self.status_suffix}"
 
     @property
     def is_static(self) -> bool:
@@ -142,16 +176,36 @@ class TheaterUnit:
 
     @property
     def repairable(self) -> bool:
-        # Only let units with UnitType be repairable as we just have prices for them
-        return self.unit_type is not None
+        if getattr(self.ground_object, "in_transit", False):
+            return False
+        # Only ground objects with a priced UnitType are repairable. Ships/naval are
+        # not part of the repair economy (losses are permanent, and their price is 0),
+        # so exclude them — otherwise a dead cruiser wrongly showed a "Repair [0M]".
+        return self.unit_type is not None and not issubclass(self.type, ShipType)
 
     @property
     def detection_range(self) -> Distance:
+        from game.theater.theatergroundobject import IadsGroundObject
+
+        if isinstance(self.ground_object, IadsGroundObject) and getattr(
+            self.ground_object, "in_transit", False
+        ):
+            return meters(0)
+        if self.transported_by_id is not None:
+            return meters(0)
         unit_range = getattr(self.type, "detection_range", None)
         return meters(unit_range if unit_range is not None and self.alive else 0)
 
     @property
     def threat_range(self) -> Distance:
+        from game.theater.theatergroundobject import IadsGroundObject
+
+        if isinstance(self.ground_object, IadsGroundObject) and getattr(
+            self.ground_object, "in_transit", False
+        ):
+            return meters(0)
+        if self.transported_by_id is not None:
+            return meters(0)
         unit_range = getattr(self.type, "threat_range", None)
         return meters(unit_range if unit_range is not None and self.alive else 0)
 
@@ -174,13 +228,11 @@ class SceneryUnit(TheaterUnit):
 
     @property
     def display_name(self) -> str:
-        dead_label = " [DEAD]" if not self.alive else ""
-        return f"{str(self.id).zfill(4)} | {self.name}{dead_label}"
+        return f"{str(self.id).zfill(4)} | {self.name}{self.status_suffix}"
 
     @property
     def short_name(self) -> str:
-        dead_label = " [DEAD]" if not self.alive else ""
-        return f"<b>{self.name[0:18]}</b> {dead_label}"
+        return f"<b>{self.name[0:18]}</b> {self.status_suffix}"
 
     @property
     def icon(self) -> str:
@@ -238,9 +290,14 @@ class TheaterGroup:
         ranges = (u.detection_range for u in self.units if u.is_anti_air)
         return max(ranges, default=meters(0))
 
-    def max_threat_range(self, radar_only: bool = False) -> Distance:
+    def max_threat_range(
+        self, radar_only: bool = False, *, include_relocating: bool = False
+    ) -> Distance:
         """Calculate the maximum threat range of the TheaterGroup.
         This also checks for Launcher and Tracker Pairs and if they are functioning or not. Allows to also use only radar emitting units for the calculation with the parameter.
+
+        include_relocating is for nominal map coverage only. Planning and mission
+        generation must retain the default operational ranges during transit.
         """
         max_non_radar = meters(0)
         max_telar_range = meters(0)
@@ -250,17 +307,22 @@ class TheaterGroup:
         for unit in self.units:
             if not unit.alive or not unit.is_anti_air:
                 continue
+            threat_range = (
+                meters(getattr(unit.type, "threat_range", 0) or 0)
+                if include_relocating
+                else unit.threat_range
+            )
             if unit.type in TRACK_RADARS:
                 live_trs.add(unit.type)
             elif unit.type in TELARS:
-                max_telar_range = max(max_telar_range, unit.threat_range)
+                max_telar_range = max(max_telar_range, threat_range)
             elif (
                 issubclass(unit.type, VehicleType)
                 and unit.type in LAUNCHER_TRACKER_PAIRS
             ):
-                launchers[unit.type] = unit.threat_range
+                launchers[unit.type] = threat_range
             else:
-                max_non_radar = max(max_non_radar, unit.threat_range)
+                max_non_radar = max(max_non_radar, threat_range)
         for launcher, threat_range in launchers.items():
             for tr in LAUNCHER_TRACKER_PAIRS[launcher]:
                 if tr in live_trs:
