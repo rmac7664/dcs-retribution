@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Callable, Iterator, Optional, TypeVar
 
 from PySide6.QtCore import (
@@ -33,6 +34,16 @@ from game.theater.missiontarget import MissionTarget
 from game.transfers import PendingTransfers, TransferOrder
 from qt_ui.simcontroller import SimController
 from qt_ui.uiconstants import AIRCRAFT_ICONS
+
+
+def _paused(game_model: Any) -> AbstractContextManager[Any]:
+    """Pauses the fast-forward sim while a package changes, when there is one."""
+    controller = getattr(game_model, "sim_controller", None)
+    paused = getattr(controller, "paused_sim", None)
+    context = paused() if callable(paused) else None
+    if hasattr(context, "__enter__") and hasattr(context, "__exit__"):
+        return context  # type: ignore[return-value]
+    return nullcontext()
 
 
 class DeletableChildModelManager:
@@ -164,7 +175,7 @@ class PackageModel(QAbstractListModel):
 
     def add_flight(self, flight: Flight) -> None:
         """Adds the given flight to the package."""
-        with self.game_model.sim_controller.paused_sim():
+        with _paused(self.game_model):
             self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
             self.package.add_flight(flight)
             # update_tot is not called here because the new flight does not have a
@@ -179,7 +190,7 @@ class PackageModel(QAbstractListModel):
             self.cancel_or_abort_flight(flight)
 
     def cancel_or_abort_flight(self, flight: Flight) -> None:
-        with self.game_model.sim_controller.paused_sim():
+        with _paused(self.game_model):
             if flight.state.cancelable:
                 self.delete_flight(flight)
                 EventStream.put_nowait(GameUpdateEvents().delete_flight(flight))
@@ -189,7 +200,7 @@ class PackageModel(QAbstractListModel):
 
     def delete_flight(self, flight: Flight) -> None:
         """Removes the given flight from the package."""
-        with self.game_model.sim_controller.paused_sim():
+        with _paused(self.game_model):
             index = self.package.flights.index(flight)
             self.beginRemoveRows(QModelIndex(), index, index)
             self.package.remove_flight(flight)
@@ -229,12 +240,12 @@ class PackageModel(QAbstractListModel):
         return self.package.flights[index.row()]
 
     def set_tot(self, tot: datetime.datetime) -> None:
-        with self.game_model.sim_controller.paused_sim():
+        with _paused(self.game_model):
             self.package.time_over_target = tot
             self.update_tot()
 
     def set_asap(self, asap: bool) -> None:
-        with self.game_model.sim_controller.paused_sim():
+        with _paused(self.game_model):
             self.package.auto_asap = asap
             if asap:
                 self.package.auto_coordinated = False
@@ -261,7 +272,7 @@ class PackageModel(QAbstractListModel):
             self.package.time_over_target = earliest
 
     def update_tot(self) -> None:
-        with self.game_model.sim_controller.paused_sim():
+        with _paused(self.game_model):
             if self.package.auto_coordinated and self.package.flights:
                 coalition = self.package.flights[0].coalition
                 apply_tot_mode(
@@ -334,7 +345,7 @@ class AtoModel(QAbstractListModel):
 
     def add_package(self, package: Package) -> None:
         """Adds a package to the ATO."""
-        with self.game_model.sim_controller.paused_sim():
+        with _paused(self.game_model):
             self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
             self.ato.add_package(package)
             # We do not need to send events for new flights in the package here. Events
@@ -349,7 +360,7 @@ class AtoModel(QAbstractListModel):
         self.cancel_or_abort_package(self.package_at_index(index))
 
     def cancel_or_abort_package(self, package: Package) -> None:
-        with self.game_model.sim_controller.paused_sim():
+        with _paused(self.game_model):
             with EventStream.event_context() as events:
                 if all(f.state.cancelable for f in package.flights):
                     events.delete_flights_in_package(package)

@@ -38,7 +38,8 @@ class QBaseMenuTabs(QTabWidget):
         self.sections: dict[str, int] = {}
         self._build(cp, game_model)
         game = game_model.game
-        if game is not None and game.warehouse_logistics.is_managed(cp, game.settings):
+        warehouses = getattr(game, "warehouse_logistics", None)
+        if warehouses is not None and warehouses.is_managed(cp, game.settings):
             self.warehouse = QWarehouseInfo(cp, game)
             self._add(self.warehouse, "Logistics")
 

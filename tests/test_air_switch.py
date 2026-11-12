@@ -10,7 +10,9 @@ def test_removing_replaced_flight_keeps_new_transport() -> None:
     cargo: Any = SimpleNamespace(transport=SimpleNamespace(flight=new_flight))
     old_flight.cargo = cargo
     package: Any = SimpleNamespace(
-        flights=[old_flight], _db=SimpleNamespace(remove=lambda _id: None)
+        flights=[old_flight],
+        _db=SimpleNamespace(remove=lambda _id: None),
+        label_formation_waypoints=lambda: None,
     )
     Package.remove_flight(package, old_flight)
     assert cargo.transport is not None

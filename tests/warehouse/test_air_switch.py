@@ -115,7 +115,7 @@ class FakeTransfers:
         self.cancelled.append(transport)
         transfer.transport = None
 
-    def arrange_transport(self, transfer: Any, _now: Any) -> None:
+    def arrange_transport(self, transfer: Any, _now: Any, _events: Any = None) -> None:
         assert not transfer.request_airflift
         transfer.transport = FakeConvoy()
 

@@ -1384,7 +1384,10 @@ class ControlPoint(MissionTarget, SidcDescribable, ABC):
         transferring_out: dict[GroundUnitType, int] = defaultdict(int)
         for transfer in transfers:
             # Supply runs carry cargo in trucks; the trucks aren't reinforcements.
-            if transfer.destination == self and transfer.supplies is None:
+            if (
+                transfer.destination == self
+                and getattr(transfer, "supplies", None) is None
+            ):
                 for unit_type, count in transfer.units.items():
                     transferring[unit_type] += count
             if transfer.origin == self:

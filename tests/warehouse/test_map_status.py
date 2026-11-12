@@ -110,7 +110,12 @@ def test_main_base_is_drawn_as_a_headquarters(monkeypatch: pytest.MonkeyPatch) -
         target_position=None,
         moveable=False,
         sidc=sidc,
+        ground_objects=[],
+        is_fleet=False,
     )
+    import game.server.controlpoints.models as models
+
+    monkeypatch.setattr(models, "_comms_summary", lambda _cp: (None, None))
     monkeypatch.setattr(ControlPointJs, "supply_for", staticmethod(lambda _cp: None))
     for main, digit in ((False, "0"), (True, "2")):
         monkeypatch.setattr(

@@ -574,7 +574,8 @@ class FlightGroupConfigurator:
             # pydcs infers None for this field, but serializes integer DCS indices.
             unit.ammo_type = ammo_type  # type: ignore[assignment]
 
-        warehouse_plan = self.mission_data.warehouse_plan
+        mission_data = getattr(self, "mission_data", None)
+        warehouse_plan = getattr(mission_data, "warehouse_plan", None)
         if warehouse_plan is not None:
             loadout = warehouse_plan.constrain(self.flight, loadout)
             self._final_loadouts.append((unit, loadout))

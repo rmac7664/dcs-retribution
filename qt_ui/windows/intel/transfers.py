@@ -177,7 +177,7 @@ class TransfersPane(QWidget):
         self.cancel.setEnabled(transfer is not None and transfer.player.is_blue)
         movement = isinstance(transfer, GroundMovementEntry)
         air = "" if movement else self._air_state(transfer)
-        game = self.model.game_model.game
+        game = getattr(getattr(self.model, "game_model", None), "game", None)
         self.air.setVisible(game is not None and game.settings.logistics_enabled)
         self.air.setText("Undo air delivery" if air == "undo" else "Send by air…")
         self.air.setEnabled(bool(air))
@@ -214,7 +214,7 @@ class TransfersPane(QWidget):
         from game.transfers import TransferOrder
         from game.warehouse.airswitch import can_undo, switchable
 
-        game = self.model.game_model.game
+        game = getattr(getattr(self.model, "game_model", None), "game", None)
         if game is None or not isinstance(transfer, TransferOrder):
             return ""
         if not transfer.player.is_blue:
@@ -231,7 +231,7 @@ class TransfersPane(QWidget):
         index = self.view.currentIndex()
         transfer = index.data(TransferModel.TransferRole) if index.isValid() else None
         state = self._air_state(transfer)
-        game = self.model.game_model.game
+        game = getattr(getattr(self.model, "game_model", None), "game", None)
         if not state or game is None:
             return
         self.model.beginResetModel()

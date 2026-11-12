@@ -1147,7 +1147,7 @@ class PendingTransfers:
         if transfer.transport is not None:
             self.cancel_transport(transfer.transport, transfer, events)
         self.pending_transfers.remove(transfer)
-        if transfer.supplies is not None:
+        if getattr(transfer, "supplies", None) is not None:
             # A supply run's cargo goes back into stock where it is now.
             from game.warehouse.supply import return_to
 

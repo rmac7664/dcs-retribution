@@ -388,7 +388,18 @@ local function discoverDebriefingFilePath()
     return nil
 end
 
-debriefing_file_location = lfs.writedir() .. "Missions\\state.json"
+debriefing_file_location = discoverDebriefingFilePath()
+-- Personal branch: state.json goes to Saved Games\<DCS folder>\Missions, unless an
+-- export folder is set (a dedicated server). Retribution looks there too. If that
+-- folder can't be written, the normal search above stands, and with file access
+-- blocked the "unable to write" message is shown instead of failing silently.
+if lfs and not (exportEnvironment("ESCALATION_EXPORT_DIR")
+        or exportEnvironment("RETRIBUTION_EXPORT_DIR")) then
+    local missions = testDebriefingFilePath(lfs.writedir() .. "Missions\\", "the Missions folder", false)
+    if missions then
+        debriefing_file_location = missions
+    end
+end
 local error_message_shown = false
 
 write_state_error_handling = function()

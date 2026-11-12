@@ -321,7 +321,7 @@ class ObjectiveFinder:
         )
 
     def cargo_ships(self) -> Iterator[CargoShip]:
-        if self.game.settings.perf_disable_cargo_ships:
+        if getattr(self.game.settings, "perf_disable_cargo_ships", False):
             return
         yield from self._enemy_transports(
             self.game.coalition_for(self.is_player.opponent).transfers.cargo_ships
@@ -352,6 +352,8 @@ class ObjectiveFinder:
                 if id(transport) not in seen:
                     seen.add(id(transport))
                     yield transport
+        if not getattr(self.game.settings, "logistics_enabled", False):
+            return
         reach = REAR_SUPPLY_RANGE.meters
         for transport in transports:
             if id(transport) in seen or transport.is_friendly(self.is_player):

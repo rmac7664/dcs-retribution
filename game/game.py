@@ -654,7 +654,7 @@ class Game:
         for control_point in self.theater.controlpoints:
             control_point.process_turn(self, events)
 
-        if self.settings.logistics_enabled:
+        if getattr(getattr(self, "settings", None), "logistics_enabled", False):
             if not skipped:
                 from game.warehouse.supply import reveal_enemy_main_base
 

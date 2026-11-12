@@ -90,7 +90,12 @@ class FakeTransports:
 
 def transport(name: str, destination: Any, supplies: Any = None) -> Any:
     order = SimpleNamespace(supplies=supplies)
-    return SimpleNamespace(name=name, destination=destination, transfers=[order])
+    return SimpleNamespace(
+        name=name,
+        destination=destination,
+        transfers=[order],
+        is_friendly=lambda _player: False,
+    )
 
 
 def test_ai_targets_the_enemys_convoys_and_cargo_ships() -> None:
@@ -117,7 +122,9 @@ def test_ai_targets_the_enemys_convoys_and_cargo_ships() -> None:
     )
     game: Any = SimpleNamespace(
         settings=SimpleNamespace(
-            perf_disable_convoys=False, perf_disable_cargo_ships=False
+            perf_disable_convoys=False,
+            perf_disable_cargo_ships=False,
+            logistics_enabled=True,
         ),
         theater=SimpleNamespace(conflicts=lambda: [front_line]),
         coalition_for=coalition_for,

@@ -56,9 +56,14 @@ def test_supply_trucks_are_not_reinforcements() -> None:
         base=SimpleNamespace(armor={}),
     )
     supply_run = SimpleNamespace(
-        destination=base, units={truck: 3}, supplies=SupplyLoad({AIM_120C: 1})
+        destination=base,
+        origin=None,
+        units={truck: 3},
+        supplies=SupplyLoad({AIM_120C: 1}),
     )
-    reinforcements = SimpleNamespace(destination=base, units={tank: 4}, supplies=None)
+    reinforcements = SimpleNamespace(
+        destination=base, origin=None, units={tank: 4}, supplies=None
+    )
 
     allocated = ControlPoint.allocated_ground_units(
         base, [supply_run, reinforcements]  # type: ignore[arg-type]

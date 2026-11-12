@@ -1420,7 +1420,7 @@ class SupplyPlanner:
                     depot,
                     cp,
                     {truck: 1},
-                    player=self.coalition.player,
+                    player=depot.captured,
                     request_airflift=True,
                     supplies=SupplyLoad(
                         munitions=load, fuel_kg=fuel, tons=tons, carriers=1
@@ -1478,7 +1478,7 @@ class SupplyPlanner:
                     depot,
                     cp,
                     {vehicle: carriers},
-                    player=self.coalition.player,
+                    player=depot.captured,
                     # Fuel isn't flown: hundreds of tonnes don't fit in transports.
                     request_airflift=(
                         self.settings.logistics_prefer_airlift and bool(munitions)
@@ -1711,7 +1711,7 @@ class SupplyPlanner:
                 depot,
                 carrier,
                 {truck: 1},
-                player=self.coalition.player,
+                player=depot.captured,
                 request_airflift=True,
                 supplies=SupplyLoad(munitions=load, tons=tons, carriers=1),
             )

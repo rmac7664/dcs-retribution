@@ -104,7 +104,9 @@ def test_runs_meant_for_the_air_take_the_road_if_no_aircraft_can(
     monkeypatch.setattr(
         transfers_module,
         "AirliftPlanner",
-        lambda *_a: SimpleNamespace(create_package_for_airlift=lambda _now: None),
+        lambda *_a: SimpleNamespace(
+            create_package_for_airlift=lambda _now, _events: None
+        ),
     )
     monkeypatch.setattr("game.warehouse.supply.load_into_trucks", lambda *_a: None)
     pending = PendingTransfers.__new__(PendingTransfers)
