@@ -105,5 +105,5 @@ def test_empty_pylons_are_skipped_when_listing_what_is_carried() -> None:
             assert None not in list(weapons)
             return {"weapons.bombs.GBU_12": 2, "weapons.missiles.AIM_120C": 2}, 0, 0
 
-    loadout = SimpleNamespace(pylons={1: None, 2: object()})
+    loadout: Any = SimpleNamespace(pylons={1: None, 2: object()})
     assert weaponeering.carried([loadout], Catalog()) == {"weapons.bombs.GBU_12": 2}
