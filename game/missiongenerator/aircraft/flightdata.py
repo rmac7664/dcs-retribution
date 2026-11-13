@@ -84,6 +84,9 @@ class FlightData:
     saved_points: list[SavedPoint] = field(default_factory=list)
     aircraft_notes: list[tuple[str, str]] = field(default_factory=list, kw_only=True)
     saved_drawings: list[SavedDrawing] = field(default_factory=list, kw_only=True)
+    #: Air-to-ground munitions the flight carries, by DCS munition name, for the
+    #: weapons-required column of the strike kneeboard page.
+    munitions: dict[str, int] = field(default_factory=dict, kw_only=True)
 
     #: The DCS group's name, which is what the tanker and AEW&C records go by.
     group_name: str = ""

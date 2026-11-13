@@ -216,6 +216,7 @@ class FlightGroupConfigurator:
             saved_points=list(points_of(self.flight)),
             saved_drawings=list(drawings_of(self.flight)),
             aircraft_notes=notes_for_flight(self.flight),
+            munitions=self.carried_munitions(),
             group_name=str(self.group.name),
             patrol_speed=(
                 flight_plan.patrol_speed if flight_plan.is_patrol(flight_plan) else None
@@ -230,6 +231,22 @@ class FlightGroupConfigurator:
         self.register_escort_leash()
 
         return flight_data
+
+    def carried_munitions(self) -> dict[str, int]:
+        """Air-to-ground munitions aboard the flight, for the kneeboard."""
+        from game import weaponeering
+
+        try:
+            return dict(
+                weaponeering.carried(
+                    [member.loadout for member in self.flight.iter_members()],
+                    weaponeering.catalog_for(self.game),
+                )
+            )
+        except Exception:
+            # The kneeboard column is a convenience; never fail a mission over it.
+            logging.exception("Could not list the munitions of %s", self.flight)
+            return {}
 
     def register_escort_leash(self) -> None:
         if self.flight.flight_type not in [

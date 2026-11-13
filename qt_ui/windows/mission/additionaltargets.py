@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from PySide6.QtCore import Qt
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from game import weaponeering
 from game.ato import multitarget
 from game.ato.package import Package
 from game.game import Game
@@ -114,6 +116,14 @@ class AdditionalTargetsDialog(QDialog):
         available_column.addLayout(available_buttons)
         columns.addLayout(available_column, 1)
 
+        self.weapons_label = value_label("")
+        self.weapons_label.setWordWrap(True)
+        self.weapons_label.setToolTip(
+            "A planning estimate from resources/weaponeering.yaml, counting "
+            "everything still alive at the main target and the targets added."
+        )
+        layout.addWidget(self.weapons_label)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -148,6 +158,19 @@ class AdditionalTargetsDialog(QDialog):
         if 0 <= select < len(self.targets):
             self.chosen.setCurrentRow(select + 1)
         self._update_buttons()
+        self._update_weapons()
+
+    def _update_weapons(self) -> None:
+        try:
+            text = weaponeering.summary_for_flights(
+                multitarget.strike_flights(self.package),
+                [self.package.target, *self.targets],
+                self.game,
+            )
+        except Exception:
+            logging.exception("Could not estimate the weapons required")
+            text = ""
+        self.weapons_label.setText(text)
 
     def _fill_available(self) -> None:
         wanted = self.search.text().strip().lower()

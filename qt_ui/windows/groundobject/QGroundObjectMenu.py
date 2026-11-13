@@ -231,6 +231,9 @@ class QGroundObjectMenu(QDialog):
             body.addWidget(self._heading())
             if self.ground_object.is_iads and not self._friendly:
                 body.addWidget(self._mfd_switch())
+        weapons = self._weapons_required()
+        if weapons is not None:
+            body.addWidget(weapons)
         body.addStretch()
         order_line = self._high_command_line()
         if order_line is not None:
@@ -485,6 +488,40 @@ class QGroundObjectMenu(QDialog):
             )
         except (ValueError, PermissionError) as exc:
             QMessageBox.warning(self, "Cannot stop movement", str(exc))
+
+    def _weapons_required(self) -> Optional[QWidget]:
+        """Planning estimate of the weapons it takes to destroy what is alive here.
+
+        Only for the other side's objectives: nobody weaponeers their own depot.
+        """
+        from game import weaponeering
+
+        if self._friendly:
+            return None
+        try:
+            lines = weaponeering.requirements(self.ground_object.strike_targets)
+        except Exception:
+            logging.exception("Could not estimate the weapons required")
+            return None
+        if not lines:
+            return None
+        holder = QWidget()
+        grid = QGridLayout(holder)
+        grid.setContentsMargins(14, 10, 14, 10)
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(4)
+        half = (len(lines) + 1) // 2
+        for index, line in enumerate(lines):
+            text = label(f"<b>{line.count}</b> × {line.label}", 12.5, TEXT_BASE)
+            text.setTextFormat(Qt.TextFormat.RichText)
+            grid.addWidget(text, index % half, index // half)
+        holder.setToolTip(
+            "Any one of these destroys everything still alive here. Planning "
+            "figures for guided weapons, from resources/weaponeering.yaml; "
+            f"unguided bombs take about {weaponeering.table().unguided_factor:g} "
+            "times as many."
+        )
+        return captioned("Weapons to destroy (any one line)", holder)
 
     def _high_command_line(self) -> Optional[QWidget]:
         """The line saying this is an order's objective, if it is."""

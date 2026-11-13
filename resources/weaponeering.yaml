@@ -1,0 +1,112 @@
+# Desired weapon effects: how many weapons it takes to destroy one target.
+#
+# Rows are kinds of target, columns are kinds of weapon. Each number is the
+# weapons needed for ONE target of that kind, assuming a guided weapon or an
+# accurate delivery. A fraction means one weapon covers several targets (0.5 =
+# one weapon per two targets). "-" means the weapon is not suited to the target.
+#
+# These are planning figures, not DCS damage values. Change any number here to
+# match what you see in the game; no other file needs to change.
+
+# Unguided bombs and unguided cluster bombs need this many times the figure.
+unguided_factor: 2
+
+weapons:
+  bomb_250: "250 lb bomb"
+  bomb_500: "500 lb bomb"
+  bomb_1000: "1,000 lb bomb"
+  bomb_2000: "2,000 lb bomb"
+  penetrator: "Penetrator bomb"
+  cluster: "Cluster bomb"
+  sfw: "Sensor-fuzed cluster"
+  missile_small: "Small missile (AGM-65D/H class)"
+  missile_large: "Large missile (AGM-65F/G/K class)"
+  atgm: "Anti-tank missile"
+  rocket: "Rocket"
+  rocket_heavy: "Heavy rocket"
+
+targets:
+  soft:
+    label: "Soft target"
+    bomb_250: 1
+    bomb_500: 1
+    bomb_1000: 1
+    bomb_2000: 1
+    penetrator: 1
+    cluster: 0.5
+    sfw: 0.5
+    missile_small: 1
+    missile_large: 1
+    atgm: 1
+    rocket: 4
+    rocket_heavy: 1
+  light_armor:
+    label: "Light armor"
+    bomb_250: 1
+    bomb_500: 1
+    bomb_1000: 1
+    bomb_2000: 1
+    penetrator: 1
+    cluster: 0.5
+    sfw: 0.5
+    missile_small: 1
+    missile_large: 1
+    atgm: 1
+    rocket: 8
+    rocket_heavy: 2
+  armor:
+    label: "Tank"
+    bomb_250: 2
+    bomb_500: 1
+    bomb_1000: 1
+    bomb_2000: 1
+    penetrator: 1
+    cluster: 2
+    sfw: 0.5
+    missile_small: 1
+    missile_large: 1
+    atgm: 1
+    rocket: "-"
+    rocket_heavy: 3
+  small_building:
+    label: "Small building"
+    bomb_250: 2
+    bomb_500: 1
+    bomb_1000: 1
+    bomb_2000: 1
+    penetrator: 1
+    cluster: "-"
+    sfw: "-"
+    missile_small: 2
+    missile_large: 1
+    atgm: 3
+    rocket: 12
+    rocket_heavy: 3
+  large_building:
+    label: "Large building"
+    bomb_250: 8
+    bomb_500: 4
+    bomb_1000: 2
+    bomb_2000: 1
+    penetrator: 1
+    cluster: "-"
+    sfw: "-"
+    missile_small: 6
+    missile_large: 3
+    atgm: "-"
+    rocket: "-"
+    rocket_heavy: 8
+  hardened:
+    label: "Hardened target"
+    bomb_250: "-"
+    bomb_500: 8
+    bomb_1000: 4
+    bomb_2000: 2
+    penetrator: 1
+    cluster: "-"
+    sfw: "-"
+    missile_small: "-"
+    missile_large: 4
+    atgm: "-"
+    rocket: "-"
+    rocket_heavy: "-"

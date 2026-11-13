@@ -1191,7 +1191,7 @@ class SeadTaskPage(KneeboardPage):
 class StrikeTaskPage(KneeboardPage):
     """A kneeboard page containing strike target information."""
 
-    WAYPOINT_DESC_MAX_LEN = 35
+    WAYPOINT_DESC_MAX_LEN = 24
 
     def __init__(self, flight: FlightData, dark_kneeboard: bool) -> None:
         self.flight = flight
@@ -1225,13 +1225,50 @@ class StrikeTaskPage(KneeboardPage):
                     target.waypoint.position.latlng().format_dms(
                         include_decimal_seconds=True
                     ),
+                    self._weapons_required(target.waypoint),
                 ]
                 for i, target in enumerate(self.targets)
             ],
-            headers=["STPT", "Description", "Location"],
+            headers=["STPT", "Description", "Location", "DWE"],
         )
 
         writer.write(path)
+
+    def _target_unit(self, waypoint: FlightWaypoint) -> Optional[TheaterUnit]:
+        """The unit a target point is on.
+
+        Target points do not keep their unit, but the ingress waypoints list every
+        unit to attack, and a target point sits exactly on its unit.
+        """
+        best: Optional[tuple[float, TheaterUnit]] = None
+        for other in self.flight.waypoints:
+            for unit in other.targets:
+                position = getattr(unit, "position", None)
+                if position is None:
+                    continue
+                distance = position.distance_to_point(waypoint.position)
+                if distance <= 5 and (best is None or distance < best[0]):
+                    best = (distance, unit)
+        return best[1] if best is not None else None
+
+    def _weapons_required(self, waypoint: FlightWaypoint) -> str:
+        """Desired weapon effect: what this flight needs to destroy the target.
+
+        "2 GBU-12" per munition the flight carries that suits the target; blank
+        when the target is unknown or nothing aboard suits it.
+        """
+        from game import weaponeering
+
+        unit = self._target_unit(waypoint)
+        munitions = getattr(self.flight, "munitions", {})
+        if unit is None or not munitions:
+            return ""
+        parts = [
+            f"{needed} {label}"
+            for label, needed, _carried in weaponeering.for_carried([unit], munitions)
+            if needed is not None
+        ]
+        return " or ".join(parts)
 
     @staticmethod
     def _target_description(display_name: str, index: int, is_f15e: bool) -> str:
