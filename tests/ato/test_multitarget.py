@@ -243,3 +243,12 @@ def test_each_target_set_is_left_its_share_of_the_weapons() -> None:
     assert _strike_builder(1).share_of_payload() is Expend.Half
     assert _strike_builder(2).share_of_payload() is Expend.Quarter
     assert _strike_builder(2).target_sets == 3
+
+
+def test_the_last_target_set_gets_everything_that_is_left() -> None:
+    builder = _strike_builder(2)
+    (first, _), (last, _) = builder.flight.flight_plan.layout.follow_on_sets()
+    builder.waypoint = first
+    assert builder.share_of_payload() is Expend.Half
+    builder.waypoint = last
+    assert builder.share_of_payload() is Expend.All

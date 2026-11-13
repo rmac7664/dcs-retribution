@@ -35,6 +35,18 @@ def summary(package: Package) -> str:
     return "Then: " + ", then ".join(names)
 
 
+def describe(target: MissionTarget) -> str:
+    """ "BUTTERFLY: Ammo depot at Aleppo", or just the name when that is all there is."""
+    try:
+        kind = str(target)
+    except KeyError:
+        kind = ""
+    base = getattr(getattr(target, "control_point", None), "name", "")
+    if not kind or kind == target.name:
+        return target.name
+    return f"{target.name}: {kind} at {base}" if base else f"{target.name}: {kind}"
+
+
 class AdditionalTargetsDialog(QDialog):
     """Picks, orders and removes the targets a strike flies on to.
 
@@ -83,9 +95,11 @@ class AdditionalTargetsDialog(QDialog):
         columns.addLayout(chosen_column, 1)
 
         available_column = QVBoxLayout()
-        available_column.addWidget(caption("Available targets"))
+        available_column.addWidget(
+            caption("Available targets, nearest to the last one first")
+        )
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search by name")
+        self.search.setPlaceholderText("Search by name, type or base")
         self.search.textChanged.connect(self._fill_available)
         available_column.addWidget(styled_input(self.search))
         self.available = QListWidget()
@@ -124,11 +138,11 @@ class AdditionalTargetsDialog(QDialog):
 
     def _fill_chosen(self, select: int = -1) -> None:
         self.chosen.clear()
-        first = QListWidgetItem(f"1. {self.package.target.name} (main target)")
+        first = QListWidgetItem(f"1. {describe(self.package.target)} (main target)")
         first.setFlags(Qt.ItemFlag.NoItemFlags)
         self.chosen.addItem(first)
         for number, target in enumerate(self.targets, start=2):
-            item = QListWidgetItem(f"{number}. {target.name}")
+            item = QListWidgetItem(f"{number}. {describe(target)}")
             item.setData(TARGET_ROLE, target)
             self.chosen.addItem(item)
         if 0 <= select < len(self.targets):
@@ -140,11 +154,11 @@ class AdditionalTargetsDialog(QDialog):
         origin = [self.package.target, *self.targets][-1].position
         self.available.clear()
         for target in self._candidates():
-            if wanted and wanted not in target.name.lower():
+            if wanted and wanted not in describe(target).lower():
                 continue
             distance = meters(target.position.distance_to_point(origin))
             item = QListWidgetItem(
-                f"{target.name}  ({distance.nautical_miles:.0f} NM from the last target)"
+                f"{describe(target)}  ({distance.nautical_miles:.0f} NM)"
             )
             item.setData(TARGET_ROLE, target)
             self.available.addItem(item)

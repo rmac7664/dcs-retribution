@@ -52,9 +52,27 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
         sets = getattr(layout, "follow_on_sets", None)
         return 1 if sets is None else 1 + len(sets())
 
+    @property
+    def sets_remaining(self) -> int:
+        """How many target sets are still to be attacked, this one included.
+
+        1 for an ordinary flight and for the last set of a multi-target one, so the
+        last target is not attacked with weapons held back for nothing.
+        """
+        layout = self.flight.flight_plan.layout
+        sets = getattr(layout, "follow_on_sets", None)
+        if sets is None:
+            return 1
+        ingresses = [ingress for ingress, _ in sets()]
+        waypoint = getattr(self, "waypoint", None)
+        for index, ingress in enumerate(ingresses):
+            if waypoint is ingress:
+                return len(ingresses) - index
+        return 1 + len(ingresses)
+
     def share_of_payload(self) -> Expend:
         """The most one target set may use, so that later sets get their share."""
-        sets = self.target_sets
+        sets = self.sets_remaining
         if sets <= 1:
             return Expend.All
         if sets == 2:
@@ -157,7 +175,7 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
         """
         bomber = self.group.units[0].unit_type in [B_1B, B_52H]
         # A flight with further target sets to fly keeps a share back for them.
-        sets = self.target_sets
+        sets = self.sets_remaining
         ratio = len(self.group.units) / (len(targets) * sets)
         for target in targets:
             bombing = Bombing(target.position, weapon_type=weapon_type)
