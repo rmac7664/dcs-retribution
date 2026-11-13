@@ -54,7 +54,7 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
                 getattr(self.layout, "climb", None),
             )
             if waypoint is not None
-        }
+        } | {point for _, point in getattr(self.layout, "pop_points", [])}
         return (
             {
                 self.layout.join,
@@ -301,6 +301,18 @@ class FormationAttackLayout(FormationLayout):
     #: Where a low-level egress climbs back up, between the last target and the split.
     climb: Optional[FlightWaypoint] = field(default=None, kw_only=True)
 
+    #: The pull-up or pop-up point of each target set, for player flights, paired
+    #: with the ingress of the set it belongs to. Flown between the two.
+    pop_points: list[tuple[FlightWaypoint, FlightWaypoint]] = field(
+        default_factory=list, kw_only=True
+    )
+
+    def pop_point_after(self, ingress: FlightWaypoint) -> Optional[FlightWaypoint]:
+        for owner, point in getattr(self, "pop_points", []):
+            if owner is ingress:
+                return point
+        return None
+
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
         # Saved before follow-on targets existed.
@@ -309,6 +321,7 @@ class FormationAttackLayout(FormationLayout):
         self.__dict__.setdefault("attack_profile", None)
         self.__dict__.setdefault("low_level_height_ft", None)
         self.__dict__.setdefault("climb", None)
+        self.__dict__.setdefault("pop_points", [])
 
     @property
     def follow_on_waypoints(self) -> list[FlightWaypoint]:
@@ -347,14 +360,28 @@ class FormationAttackLayout(FormationLayout):
             return True
         return False
 
+    def _is_pop_point(self, waypoint: FlightWaypoint) -> bool:
+        return any(waypoint is point for _, point in getattr(self, "pop_points", []))
+
     def delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
         if waypoint is self.pre_push_refuel:
             self.pre_push_refuel = None
             return True
+        if self._is_pop_point(waypoint):
+            self.pop_points = [
+                (owner, point)
+                for owner, point in self.pop_points
+                if point is not waypoint
+            ]
+            return True
         return super().delete_waypoint(waypoint)
 
     def can_delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
-        return waypoint is self.pre_push_refuel or super().can_delete_waypoint(waypoint)
+        return (
+            waypoint is self.pre_push_refuel
+            or self._is_pop_point(waypoint)
+            or super().can_delete_waypoint(waypoint)
+        )
 
     def iter_waypoints(self) -> Iterator[FlightWaypoint]:
         yield self.departure
@@ -367,10 +394,17 @@ class FormationAttackLayout(FormationLayout):
         if self.lineup:
             yield self.lineup
         yield self.ingress
+        pop = self.pop_point_after(self.ingress)
+        if pop is not None:
+            yield pop
         if self.initial is not None:
             yield self.initial
         yield from self.targets
-        yield from self.follow_on_waypoints
+        for waypoint in self.follow_on_waypoints:
+            yield waypoint
+            pop = self.pop_point_after(waypoint)
+            if pop is not None:
+                yield pop
         climb = getattr(self, "climb", None)
         if climb is not None:
             yield climb
@@ -593,10 +627,7 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
         layout.attack_profile = profile.value
         layout.low_level_height_ft = round(height.feet)
 
-        if self.flight.client_count == 0 or layout.initial is not None:
-            return
-        first = layout.targets[0].position if layout.targets else None
-        if first is None:
+        if self.flight.client_count == 0:
             return
         if profile is AttackProfile.LOFT:
             distance = attackprofile.loft_solution(height).pull_up
@@ -606,20 +637,31 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
             name, description = "POP-UP", "Pop up for the dive"
         else:
             return
-        to_target = first.distance_to_point(layout.ingress.position)
-        if to_target <= distance.meters:
-            return
-        heading = first.heading_between_point(layout.ingress.position)
-        layout.initial = FlightWaypoint(
-            name,
-            FlightWaypointType.NAV,
-            first.point_from_heading(heading, distance.meters),
-            height,
-            "RADIO",
-            description=description,
-            pretty_name=name,
-            only_for_player=True,
-        )
+        # One for every target set: the main one and each additional target.
+        sets = [(layout.ingress, layout.targets), *layout.follow_on_sets()]
+        for ingress, targets in sets:
+            if not targets:
+                continue
+            target = targets[0].position
+            to_target = target.distance_to_point(ingress.position)
+            if to_target <= distance.meters:
+                continue
+            heading = target.heading_between_point(ingress.position)
+            layout.pop_points.append(
+                (
+                    ingress,
+                    FlightWaypoint(
+                        name,
+                        FlightWaypointType.NAV,
+                        target.point_from_heading(heading, distance.meters),
+                        height,
+                        "RADIO",
+                        description=description,
+                        pretty_name=name,
+                        only_for_player=True,
+                    ),
+                )
+            )
 
     def _follow_on_waypoints(
         self, ingress_type: FlightWaypointType

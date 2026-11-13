@@ -272,7 +272,7 @@ def attack_settings(
     return None
 
 
-def briefing_lines(layout: object, route_number: Optional[int] = None) -> list[str]:
+def briefing_lines(layout: object, route_numbers: Iterable[int] = ()) -> list[str]:
     """What the strike kneeboard page says about the flight's attack profile."""
     name = getattr(layout, "attack_profile", None)
     height_ft = getattr(layout, "low_level_height_ft", None)
@@ -283,7 +283,11 @@ def briefing_lines(layout: object, route_number: Optional[int] = None) -> list[s
     except ValueError:
         return []
     height = feet(height_ft)
-    point = f" (STPT {route_number})" if route_number is not None else ""
+    numbers = list(route_numbers)
+    point = ""
+    if numbers:
+        label = "STPT" if len(numbers) == 1 else "STPTs"
+        point = f" ({label} {', '.join(str(n) for n in numbers)})"
     lines = [
         f"{profile.short_name.upper()}: {height_ft:,} ft AGL from the descent point "
         f"({LOW_RUN_IN.nautical_miles:.0f} NM before the ingress) to the climb point "

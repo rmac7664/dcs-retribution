@@ -131,9 +131,10 @@ def test_the_kneeboard_describes_the_profile() -> None:
     layout = SimpleNamespace(
         attack_profile="Loft (player flights)", low_level_height_ft=500
     )
-    lines = briefing_lines(layout, 6)
+    lines = briefing_lines(layout, [6])
     assert lines[0].startswith("LOFT: 500 ft AGL")
     assert "Pull up (STPT 6)" in lines[1]
+    assert "(STPTs 6, 11)" in briefing_lines(layout, [6, 11])[1]
     assert briefing_lines(SimpleNamespace()) == []
     popup = SimpleNamespace(attack_profile="Pop-up dive", low_level_height_ft=1000)
     assert "roll in and dive" in briefing_lines(popup)[1]

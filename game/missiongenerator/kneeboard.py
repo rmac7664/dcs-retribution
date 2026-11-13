@@ -1191,7 +1191,7 @@ class SeadTaskPage(KneeboardPage):
 class StrikeTaskPage(KneeboardPage):
     """A kneeboard page containing strike target information."""
 
-    WAYPOINT_DESC_MAX_LEN = 24
+    WAYPOINT_DESC_MAX_LEN = 35
 
     def __init__(self, flight: FlightData, dark_kneeboard: bool) -> None:
         self.flight = flight
@@ -1225,16 +1225,26 @@ class StrikeTaskPage(KneeboardPage):
                     target.waypoint.position.latlng().format_dms(
                         include_decimal_seconds=True
                     ),
-                    self._weapons_required(target.waypoint),
                 ]
                 for i, target in enumerate(self.targets)
             ],
-            headers=["STPT", "Description", "Location", "DWE"],
+            headers=["STPT", "Description", "Location"],
         )
+
+        # Weapons to destroy each target, in a table of its own: weapon names are
+        # too long to fit beside the coordinates.
+        dwe = [
+            [str(target.number), self._weapons_required(target.waypoint)]
+            for target in self.targets
+        ]
+        dwe = [row for row in dwe if row[1]]
+        if dwe:
+            writer.heading("Weapons to destroy (DWE)")
+            writer.table(dwe, headers=["STPT", "Weapons needed"])
 
         from game.ato.attackprofile import briefing_lines
 
-        lines = briefing_lines(self.flight, self._pop_point_number())
+        lines = briefing_lines(self.flight, self._pop_point_numbers())
         if lines:
             writer.heading("Attack profile")
             for line in lines:
@@ -1242,12 +1252,15 @@ class StrikeTaskPage(KneeboardPage):
 
         writer.write(path)
 
-    def _pop_point_number(self) -> Optional[int]:
-        """The steerpoint number of the pull-up or pop-up point, if the route has one."""
-        for number, waypoint in zip(route_numbers(self.flight), self.flight.waypoints):
-            if waypoint.name in ("PULL-UP", "POP-UP"):
-                return number
-        return None
+    def _pop_point_numbers(self) -> list[int]:
+        """The steerpoint numbers of the pull-up or pop-up points, one per target set."""
+        return [
+            number
+            for number, waypoint in zip(
+                route_numbers(self.flight), self.flight.waypoints
+            )
+            if waypoint.name in ("PULL-UP", "POP-UP")
+        ]
 
     def _target_unit(self, waypoint: FlightWaypoint) -> Optional[TheaterUnit]:
         """The unit a target point is on.
