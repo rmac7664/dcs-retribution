@@ -64,7 +64,7 @@ class CustomFlightPlan(FlightPlan[CustomLayout]):
             FlightWaypointType.TARGET_SHIP,
         )
         for waypoint in self.waypoints:
-            if waypoint in target_types:
+            if waypoint.waypoint_type in target_types:
                 return waypoint
         return self.layout.departure
 

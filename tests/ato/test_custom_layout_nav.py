@@ -30,3 +30,18 @@ def test_custom_points_can_be_deleted() -> None:
     assert not layout.can_delete_waypoint(departure)
     assert layout.delete_waypoint(a)
     assert layout.custom_waypoints == []
+
+
+def test_custom_plan_times_its_first_target_not_take_off() -> None:
+    from types import SimpleNamespace
+
+    from game.ato.flightplans.custom import CustomFlightPlan
+    from game.ato.flightwaypointtype import FlightWaypointType
+
+    departure, ingress, target = nav(0), nav(100), nav(200)
+    target.waypoint_type = FlightWaypointType.TARGET_POINT
+    layout = CustomLayout(departure, [ingress, target])
+    plan = CustomFlightPlan.__new__(CustomFlightPlan)
+    plan.layout = layout
+    plan.flight = SimpleNamespace()  # type: ignore[assignment]
+    assert plan.tot_waypoint is target
