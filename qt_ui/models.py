@@ -257,6 +257,15 @@ class PackageModel(QAbstractListModel):
             self.package.auto_asap = False
         self.update_tot()
 
+    def set_additional_targets(self, targets: list[MissionTarget]) -> None:
+        """Sets the further targets the package's strike flights fly on to."""
+        from game.ato import multitarget
+
+        with _paused(self.game_model):
+            multitarget.set_additional_targets(self.package, targets)
+            self.push_tot_if_unreachable()
+            self.update_tot()
+
     def push_tot_if_unreachable(self) -> None:
         """Move the package TOT later if any flight can no longer make it.
 

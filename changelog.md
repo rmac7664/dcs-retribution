@@ -1,6 +1,7 @@
 ﻿# Escalation v1.0.0
 
 ## Features/Improvements
+* **[Flight Plans]** Optional additional targets for strike packages: strike flights attack each target in order before returning, sharing their weapons between them, with escorts staying on. Set from "Additional targets" in the package window.
 * **[UI]** Suggest the campaign name and current date when saving a new campaign for the first time (adapted from RetLab #1387).
 * **[Flight Plans]** Place attack Escort and SEAD Escort holds at ingress instead of near the target, preserving patrol and transport protection.
 * **[Intel]** Economy map links with icon hover highlighting and direct base-tab links from Air and Ground forces.

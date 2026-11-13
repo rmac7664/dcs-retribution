@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from abc import ABC
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
 from typing import TYPE_CHECKING, TypeVar
 
 from dcs import Point
@@ -15,7 +15,7 @@ from game.theater import MissionTarget
 from game.theater.theatergroundobject import MotorpoolGroundObject
 from game.utils import meters, nautical_miles, Speed, feet
 from . import alignpoint
-from .. import prerefuel
+from .. import multitarget, prerefuel
 from .refuelneed import needs_refuelling
 from .flightplan import FlightPlan
 from .formation import FormationFlightPlan, FormationLayout
@@ -30,6 +30,11 @@ if TYPE_CHECKING:
     from ..flight import Flight
 
 
+#: How far before a follow-on target its ingress is placed, when the leg from the
+#: previous target is long enough.
+FOLLOW_ON_RUN_IN = nautical_miles(15)
+
+
 class FormationAttackFlightPlan(FormationFlightPlan, ABC):
     @property
     def package_speed_waypoints(self) -> set[FlightWaypoint]:
@@ -40,11 +45,15 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
         across it and an escort with a faster airframe arrived at the ingress ahead of
         the striker it was escorting.
         """
-        return {
-            self.layout.join,
-            self.layout.ingress,
-            self.layout.split,
-        } | set(self.layout.targets)
+        return (
+            {
+                self.layout.join,
+                self.layout.ingress,
+                self.layout.split,
+            }
+            | set(self.layout.targets)
+            | set(self._follow_on)
+        )
 
     @property
     def combat_speed_waypoints(self) -> set[FlightWaypoint]:
@@ -64,6 +73,8 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
         """
         if self._is_one_of_several_targets(waypoint):
             return True
+        if self._is_follow_on(waypoint):
+            return True
         return super().can_delete_waypoint(waypoint)
 
     def delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
@@ -72,7 +83,18 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
                 target for target in self.layout.targets if target is not waypoint
             ]
             return True
+        if self._is_follow_on(waypoint) and self.layout.remove_follow_on(waypoint):
+            return True
         return super().delete_waypoint(waypoint)
+
+    @property
+    def _follow_on(self) -> list[FlightWaypoint]:
+        # Layouts without follow-on targets include ones saved before they existed.
+        return getattr(self.layout, "follow_on", [])
+
+    def _is_follow_on(self, waypoint: FlightWaypoint) -> bool:
+        # By identity, for the same reason as the target points below.
+        return any(waypoint is other for other in self._follow_on)
 
     def _is_one_of_several_targets(self, waypoint: FlightWaypoint) -> bool:
         # By identity: FlightWaypoint compares by value, and two target points on
@@ -176,14 +198,42 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
         travel_time_egress = self.total_time_between_waypoints(
             self.target_area_waypoint, self.layout.split
         )
-        minutes_at_target = 0.75 * len(self.layout.targets)
-        timedelta_at_target = timedelta(minutes=minutes_at_target)
+        timedelta_at_target = self._time_over(self.layout.targets)
+        if self._follow_on:
+            return self._follow_on_schedule()[1]
         return (
             self.ingress_time
             + travel_time_ingress
             + timedelta_at_target
             + travel_time_egress
         )
+
+    @staticmethod
+    def _time_over(targets: list[FlightWaypoint]) -> timedelta:
+        return timedelta(minutes=0.75 * len(targets))
+
+    def _follow_on_schedule(self) -> tuple[dict[int, datetime], datetime]:
+        """Arrival times of the follow-on waypoints, and the split time after them.
+
+        Times are keyed by waypoint identity. Each further target set is flown after
+        the one before it: the leg to its ingress, the leg to the set, and the same
+        time over each target as the first set is given.
+        """
+        times: dict[int, datetime] = {}
+        clock = self.tot + self._time_over(self.layout.targets)
+        previous = self.target_area_waypoint
+        for ingress, targets in self.layout.follow_on_sets():
+            clock += self.total_time_between_waypoints(previous, ingress)
+            times[id(ingress)] = clock
+            previous = ingress
+            if targets:
+                clock += self.total_time_between_waypoints(previous, targets[0])
+                for target in targets:
+                    times[id(target)] = clock
+                clock += self._time_over(targets)
+                previous = targets[0]
+        clock += self.total_time_between_waypoints(previous, self.layout.split)
+        return times, clock
 
     @property
     def ingress_time(self) -> datetime:
@@ -206,6 +256,8 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
             return self.ingress_time
         elif waypoint == self.layout.initial:
             return self.initial_time
+        elif self._is_follow_on(waypoint):
+            return self._follow_on_schedule()[0].get(id(waypoint))
         elif waypoint in self.layout.targets:
             return self.tot
         elif waypoint is self.layout.pre_push_refuel and self.layout.hold is not None:
@@ -222,6 +274,53 @@ class FormationAttackLayout(FormationLayout):
     initial: Optional[FlightWaypoint] = None
     lineup: Optional[FlightWaypoint] = None
     pre_push_refuel: Optional[FlightWaypoint] = None
+
+    #: Further target sets flown after the first one, in flight order. Each set is an
+    #: ingress waypoint, which carries the attack tasks for the AI, followed by one
+    #: target point per target.
+    follow_on: list[FlightWaypoint] = field(default_factory=list, kw_only=True)
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        # Saved before follow-on targets existed.
+        self.__dict__.setdefault("follow_on", [])
+
+    @property
+    def follow_on_waypoints(self) -> list[FlightWaypoint]:
+        return getattr(self, "follow_on", [])
+
+    def is_follow_on(self, waypoint: FlightWaypoint) -> bool:
+        # By identity: two waypoints on identical targets compare equal.
+        return any(waypoint is other for other in self.follow_on_waypoints)
+
+    def follow_on_sets(self) -> list[tuple[FlightWaypoint, list[FlightWaypoint]]]:
+        """The follow-on waypoints as (ingress, target points) per target set."""
+        sets: list[tuple[FlightWaypoint, list[FlightWaypoint]]] = []
+        for waypoint in self.follow_on_waypoints:
+            if waypoint.waypoint_type is FlightWaypointType.TARGET_POINT and sets:
+                sets[-1][1].append(waypoint)
+            else:
+                sets.append((waypoint, []))
+        return sets
+
+    def remove_follow_on(self, waypoint: FlightWaypoint) -> bool:
+        """Removes a follow-on waypoint. Says whether it was one.
+
+        Removing an ingress removes its whole target set, because the attack tasks
+        are on the ingress. Removing the last target point of a set does the same.
+        """
+        for ingress, targets in self.follow_on_sets():
+            if waypoint is ingress or (len(targets) == 1 and waypoint is targets[0]):
+                doomed = [ingress, *targets]
+            elif any(waypoint is target for target in targets):
+                doomed = [waypoint]
+            else:
+                continue
+            self.follow_on = [
+                w for w in self.follow_on_waypoints if not any(w is d for d in doomed)
+            ]
+            return True
+        return False
 
     def delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
         if waypoint is self.pre_push_refuel:
@@ -246,6 +345,7 @@ class FormationAttackLayout(FormationLayout):
         if self.initial is not None:
             yield self.initial
         yield from self.targets
+        yield from self.follow_on_waypoints
         yield self.split
         if self.refuel is not None:
             yield self.refuel
@@ -355,6 +455,7 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
             ingress=ingress,
             initial=initial,
             targets=target_waypoints,
+            follow_on=self._follow_on_waypoints(ingress_type),
             split=split,
             refuel=refuel,
             nav_from=builder.nav_path(
@@ -368,6 +469,36 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
             bullseye=builder.bullseye(),
             custom_waypoints=list(),
         )
+
+    def _follow_on_waypoints(
+        self, ingress_type: FlightWaypointType
+    ) -> list[FlightWaypoint]:
+        """Waypoints for the package's additional strike targets, in order.
+
+        Only strike flights fly them. Each additional target gets its own ingress,
+        on the line from the previous target, and one target point per live unit.
+        A target with nothing left alive is skipped.
+        """
+        if self.flight.flight_type is not FlightType.STRIKE:
+            return []
+        if ingress_type is not FlightWaypointType.INGRESS_STRIKE:
+            return []
+        waypoints: list[FlightWaypoint] = []
+        previous = self.package.target.position
+        for location in multitarget.live_additional_targets(self.package):
+            targets = self.strike_targets_for(location)
+            builder = WaypointBuilder(self.flight, targets)
+            leg = location.position.distance_to_point(previous)
+            run_in = min(leg / 2, FOLLOW_ON_RUN_IN.meters)
+            position = location.position.point_from_heading(
+                location.position.heading_between_point(previous), run_in
+            )
+            waypoints.append(builder.ingress(ingress_type, position, location))
+            waypoints.extend(
+                self.target_waypoint(self.flight, builder, target) for target in targets
+            )
+            previous = location.position
+        return waypoints
 
     def _target_waypoints(
         self, builder: WaypointBuilder, targets: list[StrikeTarget] | None
@@ -487,9 +618,20 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
     def _get_split(self) -> Point:
         assert self.package.waypoints is not None
         assert self.package.primary_flight is not None
-        split_pos = (
-            self.package.primary_flight.arrival.position
-            if self.package.primary_flight.is_helo
-            else self.package.waypoints.split
+        primary = self.package.primary_flight
+        if primary.is_helo:
+            return primary.arrival.position
+        split = self.package.waypoints.split
+        further = multitarget.live_additional_targets(self.package)
+        if not further or primary.flight_type is not FlightType.STRIKE:
+            return split
+        # The package split is placed for the main target. With further targets the
+        # package leaves from the last one instead, the same distance out on the
+        # way home, so the route does not double back.
+        last = further[-1].position
+        home = primary.arrival.position
+        reach = min(
+            self.package.target.position.distance_to_point(split),
+            last.distance_to_point(home) / 2,
         )
-        return split_pos
+        return last.point_from_heading(last.heading_between_point(home), reach)

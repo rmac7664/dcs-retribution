@@ -48,6 +48,9 @@ class Package(RadioFrequencyContainer):
         self.frequency = frequency
         self.custom_name = custom_name
         self.single_route_for_all_flights: bool | None = None
+        #: Further strike targets, hit in this order after the main target. Empty
+        #: for an ordinary package.
+        self.additional_targets: list[MissionTarget] = []
 
         # True if the package ToT should be reset to ASAP whenever the player makes a
         # change. This is really a UI property rather than a game property, but we want
@@ -70,6 +73,7 @@ class Package(RadioFrequencyContainer):
         self.__dict__.setdefault("auto_coordinated", False)
         # Existing manually edited routes must not be silently replaced on load.
         self.__dict__.setdefault("single_route_for_all_flights", False)
+        self.__dict__.setdefault("additional_targets", [])
 
     @property
     def has_players(self) -> bool:
@@ -371,6 +375,7 @@ class Package(RadioFrequencyContainer):
         clone = Package(package.target, package._db, package.auto_asap)
         clone.auto_coordinated = package.auto_coordinated
         clone.single_route_for_all_flights = package.single_route_for_all_flights
+        clone.additional_targets = list(package.additional_targets)
         clone.time_over_target = deepcopy(package.time_over_target)
         for f in package.flights:
             cf = Flight.clone_flight(f)

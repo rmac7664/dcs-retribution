@@ -129,6 +129,18 @@ class QPackageDialog(QDialog):
         shared_route_row.addWidget(self.shared_route_checkbox)
         shared_route_row.addStretch()
         identity_layout.addLayout(shared_route_row)
+        targets_row = QHBoxLayout()
+        targets_row.setContentsMargins(14, 2, 14, 4)
+        self.additional_targets_button = button(
+            "Additional targets", handler=self.on_additional_targets
+        )
+        self.additional_targets_button.setAutoDefault(False)
+        targets_row.addWidget(self.additional_targets_button)
+        self.additional_targets_label = value_label("")
+        self.additional_targets_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.additional_targets_label.setWordWrap(True)
+        targets_row.addWidget(self.additional_targets_label, 1)
+        identity_layout.addLayout(targets_row)
         settings_row.addWidget(identity, 1)
 
         timing = card()
@@ -323,6 +335,22 @@ class QPackageDialog(QDialog):
             )
         self.update_package_context()
 
+    def on_additional_targets(self) -> None:
+        """Lets the player choose further targets for the strike flights."""
+        from qt_ui.windows.mission.additionaltargets import AdditionalTargetsDialog
+
+        package = self.package_model.package
+        dialog = AdditionalTargetsDialog(self.game, package, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.package_model.set_additional_targets(dialog.targets)
+        except PlanningError as ex:
+            logging.exception("Could not plan the additional targets")
+            QMessageBox.critical(self, "Could not plan the additional targets", str(ex))
+        EventStream.put_nowait(GameUpdateEvents().update_flights_in_package(package))
+        self.package_changed.emit()
+
     def update_tot(self) -> None:
         with QSignalBlocker(self.tot_spinner):
             self.tot_spinner.setTime(self.tot_qtime())
@@ -448,6 +476,20 @@ class QPackageDialog(QDialog):
             reason
             or "Share route positions, not altitudes. Manually edited height profiles are kept unchanged. Automatic profiles use 1,000 ft separation (200 ft between helicopters) where matching altitude references and altitude limits allow it. Manual profiles need their own separation planning. Moving a waypoint updates all flights. Departure, landing, alternate and runway alignment stay individual."
         )
+        from game.ato import multitarget
+        from qt_ui.windows.mission.additionaltargets import summary as targets_summary
+
+        can_add_targets = multitarget.supported(package)
+        self.additional_targets_button.setEnabled(
+            can_add_targets and package.all_flights_waiting_for_start()
+        )
+        self.additional_targets_button.setToolTip(
+            "Have the strike flights attack further targets, in order, before they "
+            "return."
+            if can_add_targets
+            else "Needs a strike flight in the package."
+        )
+        self.additional_targets_label.setText(targets_summary(package))
         flights = list(package.flights)
         self.package_type_text.setText(self.package_model.description)
         self.flight_stack.setCurrentIndex(0 if flights else 1)

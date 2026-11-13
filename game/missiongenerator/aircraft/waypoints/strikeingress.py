@@ -35,7 +35,31 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
         waypoint.tasks.append(OptFormation.ww2_bomber_element_close())
         self.add_bombing_tasks(waypoint)
         waypoint.tasks.append(OptFormation.finger_four_open())
-        self.register_special_ingress_points()
+        if not self.is_follow_on:
+            self.register_special_ingress_points()
+
+    @property
+    def is_follow_on(self) -> bool:
+        """True for the ingress of an additional target set, after the first."""
+        layout = self.flight.flight_plan.layout
+        check = getattr(layout, "is_follow_on", None)
+        return bool(check is not None and check(self.waypoint))
+
+    @property
+    def target_sets(self) -> int:
+        """How many target sets this flight attacks, the first one included."""
+        layout = self.flight.flight_plan.layout
+        sets = getattr(layout, "follow_on_sets", None)
+        return 1 if sets is None else 1 + len(sets())
+
+    def share_of_payload(self) -> Expend:
+        """The most one target set may use, so that later sets get their share."""
+        sets = self.target_sets
+        if sets <= 1:
+            return Expend.All
+        if sets == 2:
+            return Expend.Half
+        return Expend.Quarter
 
     def add_moab_task(self, waypoint: MovingPoint) -> None:
         """Use one normal bombing pass without the generic jet-speed override."""
@@ -60,7 +84,9 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
 
     def add_bombing_tasks(self, waypoint: MovingPoint) -> None:
         targets = self.waypoint.targets
-        if isinstance(self.package.target, MotorpoolGroundObject):
+        if not self.is_follow_on and isinstance(
+            self.package.target, MotorpoolGroundObject
+        ):
             # The motorpool is a live cache reconciled from the current reserve;
             # re-derive the units at ingress so the tasks match what actually
             # rendered. Mission spec: one bomb task per parked unit (an empty
@@ -85,7 +111,7 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
             bombing = CarpetBombing(
                 center,
                 weapon_type=WeaponType.Bombs,
-                expend=Expend.All,
+                expend=self.share_of_payload(),
                 carpet_length=avg_spacing,
                 altitude=waypoint.alt,
             )
@@ -93,7 +119,7 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
             bombing = Bombing(
                 center,
                 weapon_type=WeaponType.Bombs,
-                expend=Expend.All,
+                expend=self.share_of_payload(),
                 group_attack=True,
                 altitude=waypoint.alt,
             )
@@ -110,7 +136,7 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
         self.add_bombing_task_per_target(waypoint, self.waypoint.targets, weapon_type)
 
         # Register special waypoints
-        if not self._special_wpts_injected:
+        if not self._special_wpts_injected and not self.is_follow_on:
             self.register_special_strike_points(self.waypoint.targets)
             if self.flight.unit_type.dcs_unit_type == F_15ESE:
                 self.register_special_strike_points(self.flight.custom_targets, 2)
@@ -130,13 +156,16 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
         target, and progressively less as targets outnumber aircraft.
         """
         bomber = self.group.units[0].unit_type in [B_1B, B_52H]
-        ratio = len(self.group.units) / len(targets)
+        # A flight with further target sets to fly keeps a share back for them.
+        sets = self.target_sets
+        ratio = len(self.group.units) / (len(targets) * sets)
         for target in targets:
             bombing = Bombing(target.position, weapon_type=weapon_type)
-            # If there is only one target, drop all ordnance in one pass with group attack.
             if len(targets) == 1:
-                bombing.params["expend"] = Expend.All.value
                 bombing.params["groupAttack"] = True
+            # If there is only one target, drop all ordnance in one pass with group attack.
+            if len(targets) == 1 and sets == 1:
+                bombing.params["expend"] = Expend.All.value
             elif ratio >= 1:
                 # #TGTs > 1 & #AC >= #TGTs => each AC drops entire payload per TGT
                 bombing.params["expend"] = Expend.All.value
@@ -152,6 +181,10 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
             elif bomber:
                 # #TGTs > 1 & 6 * #AC < #TGTs & bomber => each AC drops 2 bombs per TGT
                 bombing.params["expend"] = Expend.Two.value
+            elif sets > 1:
+                # More target sets to fly => one weapon per target, so that the
+                # first set does not take everything.
+                bombing.params["expend"] = Expend.One.value
             # else => Auto QTY
 
             waypoint.tasks.append(bombing)
