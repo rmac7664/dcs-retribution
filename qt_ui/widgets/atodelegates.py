@@ -69,14 +69,25 @@ def _font(
 
 
 def flight_timeline(plan: Any) -> list[tuple[str, datetime]]:
-    """(label, time) for a flight's departure, its working point, and its landing.
+    """(label, time) for a flight's start-up, departure, working point and landing.
+
+    Start-up comes first: it is when the flight's crews are in the cockpit, so for
+    player flights it is when the mission actually starts for them.
 
     The middle one is whatever that kind of flight plan actually does: the ingress
     for anything that runs in on a target, the start of the corridor for a fighter
     sweep, the start of the orbit for a patrol or a tanker. A plan with none of
     those just gets the two ends.
     """
-    timeline: list[tuple[str, datetime]] = [("dep", plan.takeoff_time())]
+    timeline: list[tuple[str, datetime]] = []
+    startup = getattr(plan, "startup_time", None)
+    if callable(startup):
+        try:
+            timeline.append(("start", startup()))
+        except Exception:
+            # A plan without a start-up time shows the rest.
+            pass
+    timeline.append(("dep", plan.takeoff_time()))
 
     sweep_start = getattr(plan, "sweep_start_time", None)
     ingress = getattr(plan, "ingress_time", None)

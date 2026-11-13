@@ -1,6 +1,7 @@
 ﻿# Escalation v1.0.0
 
 ## Features/Improvements
+* **[UI]** Flight rows in the ATO list and the flight window header show the start-up time alongside departure, ingress and landing.
 * **[Planning]** Desired weapon effects: enemy ground objects list the weapons needed to destroy them, the additional targets window compares what the strike flights carry with what the targets need, and the strike kneeboard page gains a DWE column. Figures come from `resources/weaponeering.yaml` and can be edited there.
 * **[Flight Plans]** Optional additional targets for strike packages: strike flights attack each target in order before returning, sharing their weapons between them, with escorts staying on. Set from "Additional targets" in the package window.
 * **[UI]** Suggest the campaign name and current date when saving a new campaign for the first time (adapted from RetLab #1387).

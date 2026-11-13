@@ -211,9 +211,17 @@ class FlightIdentity(QWidget):
         x = self._run(
             painter, x + 16, f"{distance:.0f} nm", _mono(12), TEXT_TERTIARY, LINE_3_Y
         )
-        self._run(
+        x = self._run(
             painter,
             x + 16,
+            f"start {_clock(self._startup())}",
+            _mono(12),
+            TEXT_TERTIARY,
+            LINE_3_Y,
+        )
+        self._run(
+            painter,
+            x + 12,
             f"dep {_clock(self._takeoff())}",
             _mono(12),
             TEXT_TERTIARY,
@@ -232,6 +240,12 @@ class FlightIdentity(QWidget):
     def _tot(self) -> Optional[datetime]:
         try:
             return self.flight.flight_plan.tot
+        except Exception:
+            return None
+
+    def _startup(self) -> Optional[datetime]:
+        try:
+            return self.flight.flight_plan.startup_time()
         except Exception:
             return None
 
