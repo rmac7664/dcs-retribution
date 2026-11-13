@@ -87,6 +87,10 @@ class FlightData:
     #: Air-to-ground munitions the flight carries, by DCS munition name, for the
     #: weapons-required column of the strike kneeboard page.
     munitions: dict[str, int] = field(default_factory=dict, kw_only=True)
+    #: The flight's low-level attack profile and height, for the kneeboard; the same
+    #: names as on the flight plan layout.
+    attack_profile: Optional[str] = field(default=None, kw_only=True)
+    low_level_height_ft: Optional[int] = field(default=None, kw_only=True)
 
     #: The DCS group's name, which is what the tanker and AEW&C records go by.
     group_name: str = ""

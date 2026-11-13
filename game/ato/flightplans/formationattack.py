@@ -45,6 +45,16 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
         across it and an escort with a faster airframe arrived at the ingress ahead of
         the striker it was escorting.
         """
+        # The descent and climb points of a low-level attack sit on the run-in and
+        # the egress, so they are flown at the same speed as the legs they split.
+        extra = {
+            waypoint
+            for waypoint in (
+                getattr(self.layout, "lineup", None),
+                getattr(self.layout, "climb", None),
+            )
+            if waypoint is not None
+        }
         return (
             {
                 self.layout.join,
@@ -53,6 +63,7 @@ class FormationAttackFlightPlan(FormationFlightPlan, ABC):
             }
             | set(self.layout.targets)
             | set(self._follow_on)
+            | extra
         )
 
     @property
@@ -280,10 +291,24 @@ class FormationAttackLayout(FormationLayout):
     #: target point per target.
     follow_on: list[FlightWaypoint] = field(default_factory=list, kw_only=True)
 
+    #: The low-level attack profile the route was built for (an AttackProfile
+    #: value), or None for a normal attack.
+    attack_profile: Optional[str] = field(default=None, kw_only=True)
+
+    #: Height above the ground of the low-level legs, for a low-level profile.
+    low_level_height_ft: Optional[int] = field(default=None, kw_only=True)
+
+    #: Where a low-level egress climbs back up, between the last target and the split.
+    climb: Optional[FlightWaypoint] = field(default=None, kw_only=True)
+
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
         # Saved before follow-on targets existed.
         self.__dict__.setdefault("follow_on", [])
+        # Saved before attack profiles existed.
+        self.__dict__.setdefault("attack_profile", None)
+        self.__dict__.setdefault("low_level_height_ft", None)
+        self.__dict__.setdefault("climb", None)
 
     @property
     def follow_on_waypoints(self) -> list[FlightWaypoint]:
@@ -346,6 +371,9 @@ class FormationAttackLayout(FormationLayout):
             yield self.initial
         yield from self.targets
         yield from self.follow_on_waypoints
+        climb = getattr(self, "climb", None)
+        if climb is not None:
+            yield climb
         yield self.split
         if self.refuel is not None:
             yield self.refuel
@@ -436,7 +464,7 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
         ingress_egress_altitude = builder.get_combat_altitude
         use_agl_ingress_egress = is_helo
 
-        return FormationAttackLayout(
+        layout = FormationAttackLayout(
             departure=builder.takeoff(self.flight.departure),
             hold=hold,
             pre_push_refuel=pre_refuel,
@@ -468,6 +496,129 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
             divert=builder.divert(self.flight.divert),
             bullseye=builder.bullseye(),
             custom_waypoints=list(),
+        )
+        if ingress_type in (
+            FlightWaypointType.INGRESS_STRIKE,
+            FlightWaypointType.INGRESS_BAI,
+        ):
+            self._apply_attack_profile(layout, builder)
+        return layout
+
+    def _apply_attack_profile(
+        self, layout: FormationAttackLayout, builder: WaypointBuilder
+    ) -> None:
+        """Brings the run-in, the attack and the egress down low, if the flight asked.
+
+        The low legs are heights above the ground, which the AI follows over hills.
+        The height is raised where the ground is rough or its height unknown, and an
+        AI flight whose run-in crosses mountains keeps the normal profile.
+        """
+        from game.ato import attackprofile
+        from game.ato.attackprofile import AttackProfile
+
+        profile = attackprofile.flown_profile(self.flight)
+        if not profile.low_level:
+            return
+        route = [layout.ingress, *layout.targets, *layout.follow_on_waypoints]
+        legs = [(a.position, b.position) for a, b in zip(route, route[1:])]
+        # The low stretches either side of the attack, as far as they go.
+        legs.append(
+            (
+                layout.ingress.position,
+                layout.ingress.position.point_from_heading(
+                    layout.ingress.position.heading_between_point(layout.join.position),
+                    min(
+                        attackprofile.LOW_RUN_IN.meters,
+                        layout.ingress.position.distance_to_point(layout.join.position),
+                    ),
+                ),
+            )
+        )
+        legs.append((route[-1].position, layout.split.position))
+        terrain = attackprofile.terrain_along(legs)
+        if terrain.mountainous and self.flight.client_count == 0:
+            return
+        height = attackprofile.low_height(terrain)
+        low = [layout.ingress]
+        low += [
+            waypoint
+            for waypoint in layout.follow_on_waypoints
+            if waypoint.waypoint_type is not FlightWaypointType.TARGET_POINT
+        ]
+
+        # Down from the join only for the last stretch of the run-in, and back up
+        # soon after the last target: a low leg is slow on fuel and the AI starts
+        # its descent as soon as it turns for a low waypoint.
+        run_in = meters(layout.join.position.distance_to_point(layout.ingress.position))
+        if run_in.meters > attackprofile.LOW_RUN_IN.meters + nautical_miles(5).meters:
+            heading = layout.ingress.position.heading_between_point(
+                layout.join.position
+            )
+            layout.lineup = FlightWaypoint(
+                "DESCENT",
+                FlightWaypointType.NAV,
+                layout.ingress.position.point_from_heading(
+                    heading, attackprofile.LOW_RUN_IN.meters
+                ),
+                layout.join.alt,
+                layout.join.alt_type,
+                description="Descend to low level",
+                pretty_name="Descent",
+            )
+        last = (
+            layout.follow_on_waypoints[-1]
+            if layout.follow_on_waypoints
+            else layout.targets[-1]
+        )
+        egress = meters(last.position.distance_to_point(layout.split.position))
+        if egress.meters > attackprofile.LOW_EGRESS.meters + nautical_miles(5).meters:
+            heading = last.position.heading_between_point(layout.split.position)
+            layout.climb = FlightWaypoint(
+                "CLIMB",
+                FlightWaypointType.NAV,
+                last.position.point_from_heading(
+                    heading, attackprofile.LOW_EGRESS.meters
+                ),
+                height,
+                "RADIO",
+                description="Climb out from low level",
+                pretty_name="Climb",
+            )
+        else:
+            low.append(layout.split)
+
+        for waypoint in low:
+            waypoint.alt = height
+            waypoint.alt_type = "RADIO"
+        layout.attack_profile = profile.value
+        layout.low_level_height_ft = round(height.feet)
+
+        if self.flight.client_count == 0 or layout.initial is not None:
+            return
+        first = layout.targets[0].position if layout.targets else None
+        if first is None:
+            return
+        if profile is AttackProfile.LOFT:
+            distance = attackprofile.loft_solution(height).pull_up
+            name, description = "PULL-UP", "Pull up for the loft"
+        elif profile is AttackProfile.POPUP:
+            distance = attackprofile.POPUP_DISTANCE
+            name, description = "POP-UP", "Pop up for the dive"
+        else:
+            return
+        to_target = first.distance_to_point(layout.ingress.position)
+        if to_target <= distance.meters:
+            return
+        heading = first.heading_between_point(layout.ingress.position)
+        layout.initial = FlightWaypoint(
+            name,
+            FlightWaypointType.NAV,
+            first.point_from_heading(heading, distance.meters),
+            height,
+            "RADIO",
+            description=description,
+            pretty_name=name,
+            only_for_player=True,
         )
 
     def _follow_on_waypoints(

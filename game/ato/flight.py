@@ -13,6 +13,7 @@ from game.ato.savedpoints import SavedPoint, points_of, SavedDrawing, drawings_o
 from game.dcs.aircrafttype import AircraftType
 from game.theater import ControlPoint, MissionTarget
 from game.utils import max_optional_distance
+from .attackprofile import AttackProfile
 from .flightmembers import FlightMembers
 from .flightroster import FlightRoster
 from .flightstate import FlightState, Navigating, Uninitialized
@@ -101,6 +102,8 @@ class Flight(
         # to weapon range, so a stand-off decoy/harassment run can bait SAMs from
         # outside their reach. Player/planner toggled; honored by SEAD ingress.
         self.release_at_ingress = False
+        # How a strike flight runs in and attacks; see game.ato.attackprofile.
+        self.attack_profile = AttackProfile.NORMAL
         self.refuel_before_push = False
         self.tanking_minutes: int | None = None
 
@@ -214,6 +217,7 @@ class Flight(
             state["use_same_loadout_for_all_members"] = True
         state.setdefault("halt_sim_on_spawn", False)
         state.setdefault("release_at_ingress", False)
+        state.setdefault("attack_profile", AttackProfile.NORMAL)
         state.setdefault("refuel_before_push", False)
         state.setdefault("tanking_minutes", None)
         state.setdefault("remain_at_destination", False)

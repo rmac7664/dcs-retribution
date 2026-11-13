@@ -1232,7 +1232,22 @@ class StrikeTaskPage(KneeboardPage):
             headers=["STPT", "Description", "Location", "DWE"],
         )
 
+        from game.ato.attackprofile import briefing_lines
+
+        lines = briefing_lines(self.flight, self._pop_point_number())
+        if lines:
+            writer.heading("Attack profile")
+            for line in lines:
+                writer.text(line, wrap=True)
+
         writer.write(path)
+
+    def _pop_point_number(self) -> Optional[int]:
+        """The steerpoint number of the pull-up or pop-up point, if the route has one."""
+        for number, waypoint in zip(route_numbers(self.flight), self.flight.waypoints):
+            if waypoint.name in ("PULL-UP", "POP-UP"):
+                return number
+        return None
 
     def _target_unit(self, waypoint: FlightWaypoint) -> Optional[TheaterUnit]:
         """The unit a target point is on.

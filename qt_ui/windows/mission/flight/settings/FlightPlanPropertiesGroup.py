@@ -12,6 +12,7 @@ from datetime import timedelta
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QMessageBox,
@@ -20,7 +21,8 @@ from PySide6.QtWidgets import (
 )
 
 from game import Game
-from game.ato import FlightType
+from game.ato import FlightType, attackprofile
+from game.ato.attackprofile import AttackProfile
 from game.ato.flight import Flight
 from game.ato.flightplans.planningerror import PlanningError
 from qt_ui.models import PackageModel
@@ -162,6 +164,9 @@ class FlightPlanPropertiesGroup(QWidget):
             )
             options.append(self._wrap_option(self.release_at_ingress_checkbox))
 
+        if attackprofile.supported(self.flight):
+            options.append(self._attack_profile_option())
+
         if self.flight.flight_type == FlightType.AIR_ASSAULT and self.flight.is_helo:
             self.remain_at_destination_checkbox = QCheckBox(
                 "Remain at the assault destination (do not return)"
@@ -187,6 +192,100 @@ class FlightPlanPropertiesGroup(QWidget):
             options.append(self._wrap_option(self.remain_at_destination_checkbox))
 
         return options
+
+    def _attack_profile_option(self) -> QWidget:
+        self.attack_profile = QComboBox()
+        for profile in AttackProfile:
+            self.attack_profile.addItem(profile.value, profile)
+        self.attack_profile.setCurrentIndex(
+            self.attack_profile.findData(attackprofile.profile_of(self.flight))
+        )
+        self.attack_profile.setToolTip(
+            wrapped_tooltip(
+                "How this flight runs in and attacks.\n\n"
+                "Normal: at the aircraft's usual attack altitude.\n"
+                "Low-level sled: the run-in and egress are flown low, and the bombs "
+                "are released in level flight. With slick (unretarded) unguided bombs "
+                "the AI climbs to 1,500 ft above the target to release, clear of the "
+                "fragments.\n"
+                "Pop-up dive: low run-in, then a climb to about 3,000 ft above the "
+                "target and a dive attack.\n"
+                "Loft: low run-in to a pull-up point, for the pilot to toss the bombs. "
+                "DCS AI cannot loft, so an AI flight flies the sled instead.\n\n"
+                "The low legs are flown 500 ft above the ground, or 1,000 ft where "
+                "the ground is hilly or its height could not be checked. An AI flight "
+                "whose run-in crosses mountains keeps the normal profile."
+            )
+        )
+        self.attack_profile.currentIndexChanged.connect(self.set_attack_profile)
+        self.attack_profile_note = value_label("")
+        self.attack_profile_note.setStyleSheet(f"color: {NOTE}; font-size: 11px;")
+        self.attack_profile_note.setWordWrap(True)
+        self._update_attack_profile_note()
+        combo_row = QHBoxLayout()
+        combo_row.setContentsMargins(0, 0, 0, 0)
+        combo_row.addStretch()
+        combo_row.addWidget(styled_input(self.attack_profile, width=200))
+        combo_holder = QWidget()
+        make_transparent(combo_holder)
+        combo_holder.setLayout(combo_row)
+
+        column = QVBoxLayout()
+        column.setContentsMargins(0, 0, 0, 6)
+        column.setSpacing(0)
+        column.addWidget(key_value("Attack profile", combo_holder, height=40))
+        note_row = QHBoxLayout()
+        note_row.setContentsMargins(14, 0, 14, 0)
+        note_row.addWidget(self.attack_profile_note)
+        column.addLayout(note_row)
+        holder = QWidget()
+        make_transparent(holder)
+        holder.setLayout(column)
+        return holder
+
+    def _update_attack_profile_note(self) -> None:
+        layout = self.flight.flight_plan.layout
+        chosen = attackprofile.profile_of(self.flight)
+        flown = getattr(layout, "attack_profile", None)
+        height = getattr(layout, "low_level_height_ft", None)
+        if not chosen.low_level:
+            text = ""
+        elif flown is None:
+            text = (
+                "The run-in crosses mountains, so this AI flight keeps the normal "
+                "profile."
+            )
+        else:
+            text = f"Low legs flown {height:,} ft above the ground."
+            if flown != chosen.value:
+                text += (
+                    f" AI flights cannot loft, so this one flies the {flown.lower()}."
+                )
+        self.attack_profile_note.setText(text)
+        self.attack_profile_note.setVisible(bool(text))
+
+    def set_attack_profile(self, index: int) -> None:
+        profile = self.attack_profile.itemData(index)
+        old = self.flight.attack_profile
+        if not isinstance(profile, AttackProfile) or profile is old:
+            return
+        self.flight.attack_profile = profile
+        try:
+            self.flight.recreate_flight_plan()
+        except PlanningError as ex:
+            self.flight.attack_profile = old
+            logging.exception("Could not change the attack profile")
+            QMessageBox.critical(
+                self,
+                "Could not update flight plan",
+                str(ex),
+                QMessageBox.StandardButton.Ok,
+            )
+            return
+        self.package_model.push_tot_if_unreachable()
+        self.package_model.update_tot()
+        self.update_departure_time()
+        self._update_attack_profile_note()
 
     @staticmethod
     def _wrap_option(checkbox: QCheckBox) -> QWidget:

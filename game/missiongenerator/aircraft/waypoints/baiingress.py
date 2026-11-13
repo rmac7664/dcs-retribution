@@ -6,9 +6,10 @@ from dcs.task import AttackGroup, OptFormation, WeaponType
 from game.theater import TheaterGroundObject
 from game.transfers import MultiGroupTransport
 from .pydcswaypointbuilder import PydcsWaypointBuilder
+from .lowlevel import LowLevelAttack
 
 
-class BaiIngressBuilder(PydcsWaypointBuilder):
+class BaiIngressBuilder(LowLevelAttack, PydcsWaypointBuilder):
     def add_tasks(self, waypoint: MovingPoint) -> None:
         self.register_special_ingress_points()
         if not self.flight.is_helo:
@@ -41,4 +42,6 @@ class BaiIngressBuilder(PydcsWaypointBuilder):
                 continue
 
             task = AttackGroup(miz_group.id, weapon_type=WeaponType.Auto)
+            if self.low_level:
+                self.apply_low_level(task, self.low_level_attack(miz_group.position))
             waypoint.tasks.append(task)

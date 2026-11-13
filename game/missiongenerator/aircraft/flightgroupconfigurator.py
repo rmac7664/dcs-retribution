@@ -217,6 +217,12 @@ class FlightGroupConfigurator:
             saved_drawings=list(drawings_of(self.flight)),
             aircraft_notes=notes_for_flight(self.flight),
             munitions=self.carried_munitions(),
+            attack_profile=getattr(
+                self.flight.flight_plan.layout, "attack_profile", None
+            ),
+            low_level_height_ft=getattr(
+                self.flight.flight_plan.layout, "low_level_height_ft", None
+            ),
             group_name=str(self.group.name),
             patrol_speed=(
                 flight_plan.patrol_speed if flight_plan.is_patrol(flight_plan) else None

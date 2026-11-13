@@ -9,10 +9,11 @@ from dcs.task import Bombing, Expend, OptFormation, WeaponType, CarpetBombing
 
 from game.theater.theatergroundobject import MotorpoolGroundObject
 from game.utils import mach, meters
+from .lowlevel import LowLevelAttack
 from .pydcswaypointbuilder import PydcsWaypointBuilder
 
 
-class StrikeIngressBuilder(PydcsWaypointBuilder):
+class StrikeIngressBuilder(LowLevelAttack, PydcsWaypointBuilder):
     _special_wpts_injected: bool = False
 
     def add_tasks(self, waypoint: MovingPoint) -> None:
@@ -141,6 +142,7 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
                 group_attack=True,
                 altitude=waypoint.alt,
             )
+        self.apply_low_level(bombing, self.low_level_attack(center))
         waypoint.tasks.append(bombing)
 
     def add_strike_tasks(
@@ -205,6 +207,7 @@ class StrikeIngressBuilder(PydcsWaypointBuilder):
                 bombing.params["expend"] = Expend.One.value
             # else => Auto QTY
 
+            self.apply_low_level(bombing, self.low_level_attack(target.position))
             waypoint.tasks.append(bombing)
 
             waypoint.speed = mach(0.85, meters(waypoint.alt)).meters_per_second
