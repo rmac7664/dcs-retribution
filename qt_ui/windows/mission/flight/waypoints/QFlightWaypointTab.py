@@ -313,7 +313,9 @@ class QFlightWaypointTab(QFrame):
             next_wpt = self.flight_waypoint_list.model.data(
                 index.siblingAtRow(index.row() + 1), Qt.ItemDataRole.UserRole
             )
-        if not self.flight.flight_plan.layout.add_waypoint(wpt, next_wpt):
+        layout = self.flight.flight_plan.layout
+        add = getattr(layout, "add_waypoint", None)
+        if add is None or not add(wpt, next_wpt):
             QMessageBox.critical(
                 QWidget(),
                 "Failed to add NAV waypoint",

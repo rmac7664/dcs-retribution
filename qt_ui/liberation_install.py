@@ -210,7 +210,14 @@ def replace_mission_scripting_file():
             copyfile(mission_scripting_path, backup_scripting_path)
 
         # Replace DCS file
-        copyfile(liberation_scripting_path, mission_scripting_path)
+        try:
+            copyfile(liberation_scripting_path, mission_scripting_path)
+        except OSError:
+            logging.warning(
+                "Could not update %s (no permission). Edit it by hand so missions "
+                "can write their results.",
+                mission_scripting_path,
+            )
 
 
 def restore_original_mission_scripting():
@@ -225,4 +232,11 @@ def restore_original_mission_scripting():
         and os.path.isfile(backup_scripting_path)
         and os.path.isfile(mission_scripting_path)
     ):
-        copyfile(backup_scripting_path, mission_scripting_path)
+        try:
+            copyfile(backup_scripting_path, mission_scripting_path)
+        except OSError:
+            # DCS installed under Program Files can't be written without admin
+            # rights. Not restoring it must not crash the shutdown.
+            logging.warning(
+                "Could not restore %s (no permission)", mission_scripting_path
+            )

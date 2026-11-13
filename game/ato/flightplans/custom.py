@@ -21,6 +21,30 @@ class CustomLayout(Layout):
         yield self.departure
         yield from self.custom_waypoints
 
+    def add_waypoint(
+        self, wpt: FlightWaypoint, next_wpt: FlightWaypoint | None
+    ) -> bool:
+        """Inserts a NAV point halfway to the next waypoint (or after the last)."""
+        from .standard import StandardLayout
+
+        new_wpt = StandardLayout.get_midpoint(wpt, next_wpt)
+        if wpt is self.departure:
+            self.custom_waypoints.insert(0, new_wpt)
+            return True
+        if wpt in self.custom_waypoints:
+            self.custom_waypoints.insert(self.custom_waypoints.index(wpt) + 1, new_wpt)
+            return True
+        return False
+
+    def can_delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        return waypoint in self.custom_waypoints
+
+    def delete_waypoint(self, waypoint: FlightWaypoint) -> bool:
+        if waypoint in self.custom_waypoints:
+            self.custom_waypoints.remove(waypoint)
+            return True
+        return False
+
 
 class CustomFlightPlan(FlightPlan[CustomLayout]):
     @staticmethod
