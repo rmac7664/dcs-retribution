@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, TimeoutError
+import threading
 from typing import Callable, TYPE_CHECKING, TypeVar
 from uuid import UUID
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 from game.groundmovement.dispatch import dispatch_armor, stop_armor
 from game.groundmovement.base import preview_base_movement, dispatch_base_movement
@@ -36,6 +37,10 @@ class GroundMovementCommands(QObject):
     def __init__(self, model: GameModel) -> None:
         super().__init__()
         self.model = model
+        # Python's own thread identity. Asking Qt for the current thread from a
+        # server worker thread makes Qt adopt that thread, and older Qt versions
+        # can crash once the worker thread exits.
+        self._owner_thread = threading.get_ident()
         self.requested.connect(self._execute, Qt.ConnectionType.QueuedConnection)
 
     @Slot(object, object)
@@ -48,7 +53,7 @@ class GroundMovementCommands(QObject):
             future.set_exception(exc)
 
     def run(self, action: Callable[[], T]) -> T:
-        if QThread.currentThread() == self.thread():
+        if threading.get_ident() == self._owner_thread:
             return action()
         future: Future[T] = Future()
         self.requested.emit(action, future)
