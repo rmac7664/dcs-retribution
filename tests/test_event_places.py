@@ -63,7 +63,7 @@ def test_double_clicking_an_entry_moves_the_map_without_zooming(
             Information("OPFOR has finished repairs at GRUMBLE", "", turn=5),
         ],
     )
-    events = EventList(game)
+    events: Any = EventList(game)
 
     events.doubleClicked.emit(events.entries.index(0, 0))
     events.doubleClicked.emit(events.entries.index(1, 0))

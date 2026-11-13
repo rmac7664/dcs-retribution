@@ -238,7 +238,7 @@ def test_order_delegate_paints_difficulty_separately_from_priority(
     monkeypatch.setattr(rows, "draw", capture)
     image = QPixmap(650, rows.ORDER_ROW)
     painter = QPainter(image)
-    option = QStyleOptionViewItem()
+    option: Any = QStyleOptionViewItem()
     option.rect = QRect(0, 0, image.width(), image.height())
     try:
         rows.OrderDelegate().paint(painter, option, model.index(0))

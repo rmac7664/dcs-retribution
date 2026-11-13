@@ -147,7 +147,7 @@ def test_custom_row_paint_uses_airwing_selection_and_card_colours(
     from qt_ui.widgets.cards import CARD_BG
     from qt_ui.windows.airwingconfig.common import ACCENT
 
-    option = QStyleOptionViewItem()
+    option: Any = QStyleOptionViewItem()
     option.rect = QRect(0, 0, 300, 52)
     image = QImage(300, 52, QImage.Format.Format_ARGB32)
     image.fill(QColor("black"))

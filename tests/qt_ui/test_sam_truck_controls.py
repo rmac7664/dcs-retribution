@@ -38,8 +38,8 @@ def test_controls_obey_remaining_shared_limit_and_refresh(
     holder = QGroundObjectMenu._towing_truck_purchase(
         context, sam_truck_options(w.game, w.sam.id, Player.BLUE)
     )
-    spin = holder.findChild(QSpinBox, "sam-towing-truck-quantity")
-    purchase = holder.findChild(QPushButton, "buy-sam-towing-trucks")
+    spin: Any = holder.findChild(QSpinBox, "sam-towing-truck-quantity")
+    purchase: Any = holder.findChild(QPushButton, "buy-sam-towing-trucks")
     assert spin is not None and purchase is not None
     assert spin.maximum() == 4 and purchase.isEnabled()
     spin.setValue(3)
@@ -57,7 +57,7 @@ def test_controls_disable_at_cap_and_when_unaffordable(app: Any, battery: Any) -
     holder = QGroundObjectMenu._towing_truck_purchase(
         context, sam_truck_options(w.game, w.sam.id, Player.BLUE)
     )
-    purchase = holder.findChild(QPushButton, "buy-sam-towing-trucks")
+    purchase: Any = holder.findChild(QPushButton, "buy-sam-towing-trucks")
     assert purchase is not None and not purchase.isEnabled()
     holder.deleteLater()
     w.a.coalition.budget = 100
@@ -86,8 +86,8 @@ def test_regular_armor_card_exposes_truck_purchases(app: Any, battery: Any) -> N
     )
     card = QGroundObjectMenu._ground_transport(context)
     assert card is not None
-    purchase = card.findChild(QPushButton, "buy-sam-towing-trucks")
+    purchase: Any = card.findChild(QPushButton, "buy-sam-towing-trucks")
     assert purchase is not None and purchase.isEnabled()
-    amount = card.findChild(QSpinBox, "sam-towing-truck-quantity")
+    amount: Any = card.findChild(QSpinBox, "sam-towing-truck-quantity")
     assert amount is not None and amount.maximum() == 5
     card.deleteLater()

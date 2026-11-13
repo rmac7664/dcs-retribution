@@ -118,7 +118,7 @@ def test_loan_rows_get_their_own_line_in_every_grouping(
     assert delegate.row_height(model.index(0, 0)) == base_height + LOAN_LINE_HEIGHT
     assert delegate.row_height(model.index(1, 0)) == base_height
     assert delegate.row_height(model.index(2, 0)) == GROUP_HEADER_HEIGHT
-    option = QStyleOptionViewItem()
+    option: Any = QStyleOptionViewItem()
     option.rect = QRect(0, 0, 1200, base_height + LOAN_LINE_HEIGHT)
     image = QImage(option.rect.size(), QImage.Format.Format_ARGB32)
     image.fill(Qt.GlobalColor.black)
@@ -143,7 +143,7 @@ def test_detail_header_shows_the_same_status(app: Any, on_loan: bool) -> None:
     dialog: Any = SimpleNamespace(squadron=squadron)
     holder = QWidget()
     holder.setLayout(SquadronDialog._build_header(dialog))
-    badge = holder.findChild(QLabel, "squadronLoanStatus")
+    badge: Any = holder.findChild(QLabel, "squadronLoanStatus")
     if on_loan:
         assert badge is not None and badge.text() == squadron_loan_text(squadron)
     else:

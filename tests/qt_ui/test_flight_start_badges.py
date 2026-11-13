@@ -74,7 +74,7 @@ def test_start_badge_is_current_and_right_aligned(
     item.setData(flight, PackageModel.FlightRole)
     model.appendRow(item)
     delegate = FlightRowDelegate()
-    option = QStyleOptionViewItem()
+    option: Any = QStyleOptionViewItem()
     option.rect = QRect(0, 0, width, FLIGHT_ROW_HEIGHT)
     if selected:
         option.state |= QStyle.StateFlag.State_Selected

@@ -523,7 +523,7 @@ def _paint_row(qt_app: Any, selected: bool) -> Any:
     width = 320
     image = QImage(width, PILOT_ROW_HEIGHT, QImage.Format.Format_RGB32)
     image.fill(0)
-    option = QStyleOptionViewItem()
+    option: Any = QStyleOptionViewItem()
     option.rect = QRect(0, 0, width, PILOT_ROW_HEIGHT)
     if selected:
         option.state |= QStyle.StateFlag.State_Selected

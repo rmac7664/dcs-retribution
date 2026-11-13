@@ -48,7 +48,7 @@ def test_a_card_is_hidden_before_it_loses_its_parent(qt_app: Any) -> None:
 
         def setParent(self, parent: Optional[QWidget]) -> None:  # type: ignore[override]
             self.done.append("kept" if parent is not None else "unparented")
-            super().setParent(parent)
+            super().setParent(cast(Any, parent))
 
     # The pane only asks its tab for the Add button's handler.
     pane = SquadronsPane(cast(Any, SimpleNamespace(add_squadron=lambda: None)))

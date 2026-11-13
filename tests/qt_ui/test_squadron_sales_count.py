@@ -70,7 +70,7 @@ def test_painted_row_uses_current_count_and_keeps_transfer_visible(
     item.setData(_squadron(pending=pending), AirWingModel.SquadronRole)
     model.appendRow(item)
     delegate = SquadronDelegate(MagicMock())
-    option = QStyleOptionViewItem()
+    option: Any = QStyleOptionViewItem()
     option.rect = QRect(0, 0, 1400, 48)
     painter = MagicMock()
 
@@ -99,7 +99,7 @@ def test_totals_and_sort_refresh_when_a_sale_changes(
     monkeypatch.setattr(SquadronPanel, "_settings", staticmethod(lambda: settings))
     sold = _squadron(pending=0)
     other = _squadron("Other squadron", owned=1, pending=0)
-    model = QStandardItemModel()
+    model: Any = QStandardItemModel()
     for squadron in (sold, other):
         item = QStandardItem()
         item.setData(squadron, AirWingModel.SquadronRole)

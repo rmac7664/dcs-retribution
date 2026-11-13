@@ -47,7 +47,7 @@ def test_scrollbar_thumb_contrasts_with_track_and_can_be_dragged(combo: Any) -> 
     bar = combo._list.verticalScrollBar()
     assert bar.isVisible()
     assert bar.maximum() > 0
-    option = QStyleOptionSlider()
+    option: Any = QStyleOptionSlider()
     option.initFrom(bar)
     option.orientation = Qt.Orientation.Vertical
     option.minimum = bar.minimum()

@@ -48,7 +48,7 @@ def test_default_button_contrast(
     widget.show()
     try:
         qt_app.processEvents()
-        option = QStyleOptionButton()
+        option: Any = QStyleOptionButton()
         option.initFrom(widget)
         option.state &= ~QStyle.StateFlag.State_MouseOver
         if hovered:

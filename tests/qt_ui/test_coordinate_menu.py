@@ -78,7 +78,7 @@ def test_location_row_saves_with_no_scheduled_flights(
         monkeypatch.setattr(unitcard, "unit_note", lambda _: "")
         units = unitcard.UnitCard(site, game.settings, None, game=game)
         row = units._unit_row(unit, 0)
-    coordinate = row.findChild(CoordinateLabel)
+    coordinate: Any = row.findChild(CoordinateLabel)
     assert coordinate is not None
     opened = _choose_action(monkeypatch, "Save as waypoint")
     elevation = Mock(return_value=height)

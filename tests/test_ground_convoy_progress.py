@@ -275,7 +275,7 @@ def test_midroad_cancel_warns_without_removing_a_qt_row(
     app = QApplication.instance() or QApplication([])
     order = _order(world)
     _advance(world)
-    model = TransferModel(SimpleNamespace(game=world.game))  # type: ignore[arg-type]
+    model: Any = TransferModel(SimpleNamespace(game=world.game))  # type: ignore[arg-type]
     removals: list[int] = []
     warnings: list[str] = []
     model.rowsAboutToBeRemoved.connect(lambda *_args: removals.append(1))
