@@ -122,6 +122,8 @@
 * **[UI]** Double-clicking a log entry that names a base or site moves the map to it, without zooming.
 
 ## Fixes
+* **[UI]** The ATO timeline no longer raises an error on the next campaign update after it has been closed and reopened, and packages that have already started can no longer be dragged.
+* **[Radios]** A malformed DCS-ATC frequencies file no longer stops mission generation.
 * **[Ground Movement]** Let existing armor groups and mobile SAMs leave a nearby terrain exclusion through a bounded off-road exit, retaining terrain and ownership checks for the rest of the route.
 * **[OPFOR AI]** Preserve ground orders and deliberately empty air plans instead of replacing them with the scripted Take Off fallback.
 * **[Campaign]** Remove captured aircraft from squadrons without an evacuation destination and clean up affected saves without paying capture proceeds twice.

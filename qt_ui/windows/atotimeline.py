@@ -406,6 +406,13 @@ class TimelineCanvas(QWidget):
         row = self._row_under(pos)
         if row is None or not row.editable or pos.x() < LABEL_WIDTH:
             return
+        if not row.package.all_flights_waiting_for_start():
+            QToolTip.showText(
+                event.globalPosition().toPoint(),
+                "This package has already started, so its time is fixed.",
+                self,
+            )
+            return
         if row.package.auto_asap or row.package.auto_coordinated:
             QToolTip.showText(
                 event.globalPosition().toPoint(),
@@ -523,13 +530,18 @@ class AtoTimelineWindow(QDialog):
         layout.addWidget(self.scroll_area, 1)
 
         signal = GameUpdateSignal.get_instance()
-        signal.gameupdated.connect(lambda _game: self.refresh())
+        # Bound methods, not lambdas: Qt drops these connections when the window is
+        # destroyed, where a lambda would go on calling into the deleted window.
+        signal.gameupdated.connect(self._on_game_updated)
         signal.ato_changed.connect(self.refresh)
         self.game_model.ato_model.layoutChanged.connect(self.refresh)
         self.game_model.ato_model.rowsInserted.connect(self.refresh)
         self.game_model.ato_model.rowsRemoved.connect(self.refresh)
         self.refresh()
         self.fit()
+
+    def _on_game_updated(self, _game: object) -> None:
+        self.refresh()
 
     def _centre_x(self) -> float:
         bar = self.scroll_area.horizontalScrollBar()

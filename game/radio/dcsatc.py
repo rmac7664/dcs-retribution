@@ -175,6 +175,8 @@ class DcsAtcFrequencies:
             except (OSError, ValueError) as e:
                 logging.warning("DCS-ATC: can't read %s (%s)", config_file, e)
                 config = {}
+            if not isinstance(config, dict):
+                config = {}
             for name, value in (config.get("Frequencies") or {}).items():
                 data.defaults[name.lower()] = _values(value)
             for name, value in (config.get("AtisFreqs") or {}).items():
@@ -183,7 +185,9 @@ class DcsAtcFrequencies:
         if freqs_file.exists():
             try:
                 data._read_frequencies(freqs_file.read_text("utf-8"), terrain)
-            except OSError as e:
+            except Exception as e:
+                # A hand-edited file with an unexpected shape must not stop the
+                # mission from generating; what was read so far is kept.
                 logging.warning("DCS-ATC: can't read %s (%s)", freqs_file, e)
         logging.info(
             "DCS-ATC: %d airfields with own frequencies, %d Center points on %s",
@@ -242,6 +246,8 @@ class DcsAtcFrequencies:
         try:
             obj = json.loads(text)
         except ValueError:
+            return
+        if not isinstance(obj, dict):
             return
         freqs = _values(obj.get("Freq"))
         if not freqs:
