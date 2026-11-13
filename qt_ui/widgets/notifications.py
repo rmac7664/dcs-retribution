@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QRectF, Qt, QTimer
+from PySide6.QtCore import QObject, QPoint, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPaintEvent
 from PySide6.QtWidgets import (
     QDialog,
@@ -175,7 +175,7 @@ class NotificationBell(QToolButton):
         self.refresh()
 
     def schedule_refresh(self) -> None:
-        QTimer.singleShot(0, self, self.refresh)
+        _later(self, self.refresh)
 
     def refresh(self) -> None:
         if self.model.game is not self.game:
@@ -244,3 +244,15 @@ class NotificationBell(QToolButton):
                 Qt.AlignmentFlag.AlignCenter,
                 str(len(self.notices)) if len(self.notices) < 100 else "99+",
             )
+
+
+def _later(context: QObject, slot: Callable[[], object]) -> None:
+    """Runs slot on the next event loop pass, unless context is gone by then.
+
+    Same as QTimer.singleShot(0, context, slot), which older Qt versions lack.
+    """
+    timer = QTimer(context)
+    timer.setSingleShot(True)
+    timer.timeout.connect(slot)
+    timer.timeout.connect(timer.deleteLater)
+    timer.start(0)

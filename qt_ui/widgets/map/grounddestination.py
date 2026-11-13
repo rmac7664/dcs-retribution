@@ -279,4 +279,16 @@ class GroundDestinationPicker(QObject):
     def choose(self, position: LatLng) -> None:
         self.selected = position
         # Let WebChannel return the click response before releasing this bridge.
-        QTimer.singleShot(0, self, self.reject)
+        _later(self, self.reject)
+
+
+def _later(context: QObject, slot: Callable[[], object]) -> None:
+    """Runs slot on the next event loop pass, unless context is gone by then.
+
+    Same as QTimer.singleShot(0, context, slot), which older Qt versions lack.
+    """
+    timer = QTimer(context)
+    timer.setSingleShot(True)
+    timer.timeout.connect(slot)
+    timer.timeout.connect(timer.deleteLater)
+    timer.start(0)
