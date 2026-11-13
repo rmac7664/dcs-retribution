@@ -7,9 +7,20 @@ from typing import Any
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QApplication, QMainWindow, QToolButton
+from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QToolButton
 
 from qt_ui.windows.QLiberationWindow import QLiberationWindow
+
+
+def _menu(window: Any, title: str) -> QMenu:
+    """The top-level menu with this title.
+
+    Looked up as a child of the menu bar: QAction.menu() hands back an invalid
+    object with older Qt versions.
+    """
+    return next(
+        menu for menu in window.menu_bar.findChildren(QMenu) if menu.title() == title
+    )
 
 
 def test_community_links_are_only_in_help() -> None:
@@ -48,30 +59,18 @@ def test_community_links_are_only_in_help() -> None:
     toolbar_actions = [
         button.defaultAction() for button in window.menu_strip.findChildren(QToolButton)
     ]
-    help_menu = next(
-        action.menu()
-        for action in window.menu_bar.actions()
-        if action.text() == "&Help"
-    )
+    help_menu = _menu(window, "&Help")
     assert [action.text() for action in window.menu_bar.actions()] == [
         "&File",
         "&Edit",
         "&Settings",
         "&Help",
     ]
-    edit_menu = next(
-        action.menu()
-        for action in window.menu_bar.actions()
-        if action.text() == "&Edit"
-    )
+    edit_menu = _menu(window, "&Edit")
     assert [action.text() for action in edit_menu.actions()] == ["Payloads"]
     edit_menu.actions()[0].trigger()
     assert opened == ["payloads"]
-    settings_menu = next(
-        action.menu()
-        for action in window.menu_bar.actions()
-        if action.text() == "&Settings"
-    )
+    settings_menu = _menu(window, "&Settings")
     assert settings_menu.actions() == [window.showLiberationPrefDialogAction]
     assert settings_menu.actions()[0].text() == "&General"
     assert settings_menu.actions()[0].isEnabled()
