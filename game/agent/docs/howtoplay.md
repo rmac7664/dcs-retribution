@@ -1456,7 +1456,9 @@ somewhere above; this is the list to re-read before you plan.
 8. **Commit your whole air wing — an idle crewed jet is wasted force.** Watch
    **`idle_flyable`** in `turn_context` (and `idle_flyable_remaining` in each
    `create_packages` result): it's the count of crewed aircraft still on the ramp, and
-   **your job is to drive it to 0.** Once your 1–3 objectives are covered, don't leave
+   **your job is to drive it to 0.** (With an `ai_aircraft_limit` set it counts only what
+   still fits under the limit, so 0 can mean the limit is reached: then choose what flies
+   by value, not by filling every slot.) Once your 1–3 objectives are covered, don't leave
    aircraft sitting if you have pilots for them. Put them to work: **reinforce** a BARCAP
    (more fighters per patrol), add **more BARCAPs** to cover more sectors (space) or
    **stagger their TOTs** so a fresh one is on station as the last goes bingo (time —
@@ -1785,6 +1787,12 @@ are being given to you), `turn`; `requests[]` {`objective`, `kind`, `base`, `ask
   wing** (sum of every squadron's `flyable`). This is force sitting on the ramp with
   crews. **Drive it toward 0** — every one is a jet you could commit (see step 7). `0`
   is shown as confirmation you've mustered everything;
+- `ai_aircraft_limit` / `ai_aircraft_planned` — present only when the player has capped
+  AI aircraft for server performance: the most AI aircraft you may have in the mission,
+  and how many your packages already use. **The limit is hard:** a package that would
+  take you over it is refused with the room left, and `idle_flyable` already stops at
+  what fits. Spend the room on your highest-value work first, and delete a weaker
+  package if you need the space for a better one;
 - `targets[]` — enemy objects you can attack — {`id`, `name`, `kind`
   (sam/ship/building/motorpool/front), `suggested_task` (DEAD/ANTISHIP/STRIKE/BAI/CAS), `pos`,
   `threat_nm`? (**air-defense umbrella radius in nm** — danger to ANY flight transiting

@@ -2328,6 +2328,57 @@ class Settings:
         section=PERFORMANCE_SECTION,
         default=False,
     )
+    perf_limit_ai_aircraft: bool = boolean_option(
+        "Limit AI aircraft per mission",
+        page=MISSION_GENERATOR_PAGE,
+        section=PERFORMANCE_SECTION,
+        default=False,
+        detail=(
+            "Caps how many AI aircraft each side puts in the mission. After planning, "
+            "the lowest-priority packages are dropped until the side is under its "
+            "limit: sweeps and fighter escorts first, then second BARCAP rotations, "
+            "then attacks on airfields and ships, strikes, air defences, close air "
+            "support and finally first BARCAPs. Packages with player slots, AEW&C, "
+            "tankers, transports and ferry flights are never dropped. The OPFOR AI "
+            "commander is held to red's limit too."
+        ),
+    )
+    perf_max_ai_aircraft_blue: int = bounded_int_option(
+        "Most AI aircraft for BLUFOR",
+        page=MISSION_GENERATOR_PAGE,
+        section=PERFORMANCE_SECTION,
+        default=35,
+        min=0,
+        max=300,
+        detail="AI wingmen in player flights count towards the limit.",
+        enabled_when=lambda settings: settings.perf_limit_ai_aircraft,
+    )
+    perf_max_ai_aircraft_red: int = bounded_int_option(
+        "Most AI aircraft for OPFOR",
+        page=MISSION_GENERATOR_PAGE,
+        section=PERFORMANCE_SECTION,
+        default=35,
+        min=0,
+        max=300,
+        enabled_when=lambda settings: settings.perf_limit_ai_aircraft,
+    )
+    perf_red_ai_start_type: str = choices_option(
+        "OPFOR AI aircraft start",
+        page=MISSION_GENERATOR_PAGE,
+        section=PERFORMANCE_SECTION,
+        default="default",
+        choices={
+            "Same as the default AI start type": "default",
+            "Cold": StartType.COLD.value,
+            "On the runway": StartType.RUNWAY.value,
+            "In flight": StartType.IN_FLIGHT.value,
+        },
+        detail=(
+            "Taxiing is some of the most expensive work DCS does for AI aircraft. "
+            "Starting OPFOR on the runway or in the air saves it, at the cost of "
+            "fewer parked targets for OCA/Aircraft strikes. BLUFOR is unaffected."
+        ),
+    )
     # Performance culling
     #: What the cockpit displays are allowed to show of the enemy's air defence.
     #: DCS paints a ring for every site it is not told to hide, so without these the

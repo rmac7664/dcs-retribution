@@ -282,6 +282,10 @@ class Coalition:
                     MissionScheduler(
                         self, self.game.settings.desired_player_mission_duration
                     ).schedule_missions(now)
+                with tracer.trace(f"{color} AI aircraft limit"):
+                    from game.commander import aircraftcap
+
+                    aircraftcap.enforce(self)
 
     def plan_procurement(self) -> None:
         # The first turn needs to buy a *lot* of aircraft to fill CAPs, so it gets much

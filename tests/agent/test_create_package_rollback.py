@@ -142,3 +142,21 @@ def test_a_tot_before_the_mission_starts_is_not_within_the_window(
     tot_minutes: int | None, expected: bool
 ) -> None:
     assert planner._within_window(tot_minutes, 60) is expected
+
+
+def test_a_package_over_the_aircraft_limit_is_refused_and_released(
+    monkeypatch: pytest.MonkeyPatch, game: Any, ato: AirTaskingOrder, flight: _Flight
+) -> None:
+    game.settings = SimpleNamespace(
+        perf_limit_ai_aircraft=True,
+        perf_max_ai_aircraft_red=1,
+        perf_max_ai_aircraft_blue=40,
+    )
+    flight.count = 2  # type: ignore[attr-defined]
+    flight.client_count = 0  # type: ignore[attr-defined]
+    (result,) = planner.create_packages(game, "red", [_spec()])
+    assert not result.ok
+    assert "over the AI aircraft limit" in (result.error or "")
+    assert "needs 2 aircraft but only 1 of 1 are left" in (result.error or "")
+    assert ato.packages == []
+    assert flight.returned

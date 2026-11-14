@@ -9,6 +9,7 @@ from game.ato.airtaaskingorder import AirTaskingOrder
 from game.ato.closestairfields import ObjectiveDistanceCache
 from game.ato.flightplans.refuelneed import package_needs_tanker
 from game.ato.flighttype import FlightType
+from game.ato.starttype import StartType
 from game.ato.package import Package
 from game.commander.missionproposals import EscortType, ProposedFlight, ProposedMission
 from game.commander.packagebuilder import PackageBuilder
@@ -42,6 +43,12 @@ class PackageFulfiller:
         self.settings = settings
         self.player_missions_asap = settings.auto_ato_player_missions_asap
         self.default_start_type = settings.default_start_type
+        red_start = getattr(settings, "perf_red_ai_start_type", "default")
+        if not coalition.player.is_blue and red_start != "default":
+            try:
+                self.default_start_type = StartType(red_start)
+            except ValueError:
+                pass
 
     @property
     def is_player(self) -> bool:

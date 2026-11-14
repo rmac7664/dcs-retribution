@@ -13,7 +13,7 @@ import contextlib
 import logging
 import math
 from datetime import datetime, timedelta
-from typing import Any, Iterable, TYPE_CHECKING, Union
+from typing import Any, Iterable, Optional, TYPE_CHECKING, Union
 from uuid import UUID
 
 from game.ato.flighttype import FlightType
@@ -691,6 +691,17 @@ def create_packages(
                         )
                     )
                     continue
+                refusal = _over_aircraft_limit(game, side, coalition, package)
+                if refusal is not None:
+                    # plan_mission claimed the aircraft: hand them back.
+                    coalition.ato.add_package(package)
+                    coalition.ato.remove_package(package)
+                    results.append(
+                        schemas.CreateResult(
+                            ok=False, target=target_name, error=refusal
+                        )
+                    )
+                    continue
                 coalition.ato.add_package(package)
                 try:
                     _apply_loadouts(package, keep)
@@ -724,6 +735,27 @@ def create_packages(
                     schemas.CreateResult(ok=False, target=target_name, error=str(exc))
                 )
     return results
+
+
+def _over_aircraft_limit(
+    game: Game, side: str, coalition: Any, package: Any
+) -> Optional[str]:
+    """Why a package can't be added under the side's AI aircraft limit, or None."""
+    from game.commander import aircraftcap
+
+    limit = aircraftcap.limit_for(game.settings, views.player_for_side(side))
+    if limit is None:
+        return None
+    planned = aircraftcap.ai_aircraft_in(coalition.ato.packages)
+    needed = aircraftcap.ai_aircraft_in([package])
+    if planned + needed <= limit:
+        return None
+    room = max(0, limit - planned)
+    return (
+        f"over the AI aircraft limit: this package needs {needed} aircraft but only "
+        f"{room} of {limit} are left ({planned} already planned). Make it smaller, or "
+        "delete a lower-priority package first."
+    )
 
 
 def evaluate_package(

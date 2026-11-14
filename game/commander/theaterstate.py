@@ -258,9 +258,10 @@ class TheaterState(WorldState["TheaterState"]):
         if land_station is not None and land_station not in aewc_targets:
             aewc_targets.append(land_station)
 
+        # One BARCAP per rotation for every base, carriers included. Carriers used to
+        # get two per rotation, which put two CAPs over the boat at the same time.
         barcaps_needed = {
-            cp: 2 * barcap_rounds if cp.is_fleet else barcap_rounds
-            for cp in finder.vulnerable_control_points()
+            cp: barcap_rounds for cp in finder.vulnerable_control_points()
         }
         # Bases receiving supply that enemy fighters can reach get cover for the
         # arrival, even if they aren't otherwise thought vulnerable.

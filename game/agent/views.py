@@ -621,6 +621,14 @@ class TurnContextView(BaseModel):
         None  # Own persistent road transports, including paused ones.
     )
     ground_movement: GroundMovementContextView | None = None
+    ai_aircraft_limit: int | None = (
+        None  # the most AI aircraft this side may have in the mission (set by the
+        # player for server performance); omitted = no limit. A package that would take
+        # you over it is refused, and `idle_flyable` already stops at what still fits.
+    )
+    ai_aircraft_planned: int | None = (
+        None  # AI aircraft in your packages now, counted against `ai_aircraft_limit`
+    )
     leave_requests: list[LeaveRequestView] = (
         []
     )  # pilots asking for leave this turn; empty most turns. Answer them with
@@ -955,11 +963,28 @@ def _unflyable_reason(sq: Squadron, grounded: bool) -> str | None:
 def idle_flyable_total(game: Game, side: str) -> int:
     """Total launchable-now aircraft still untasked across the side's air wing (the headline
     'force left on the ramp' number)."""
+    from game.commander import aircraftcap
+
     player = player_for_side(side)
-    return sum(
+    coalition = coalition_for_side(game, side)
+    idle = sum(
         _squadron_flyable(sq, _squadron_grounded(sq, player))
-        for sq in coalition_for_side(game, side).air_wing.iter_squadrons()
+        for sq in coalition.air_wing.iter_squadrons()
     )
+    # With the AI aircraft limit on, only what still fits under it can be launched.
+    room = aircraftcap.room_left(coalition)
+    return idle if room is None else min(idle, room)
+
+
+def ai_aircraft_limit(game: Game, side: str) -> tuple[int | None, int | None]:
+    """(limit, AI aircraft already planned) for the side, or (None, None) if off."""
+    from game.commander import aircraftcap
+
+    coalition = coalition_for_side(game, side)
+    limit = aircraftcap.limit_for(game.settings, coalition.player)
+    if limit is None:
+        return None, None
+    return limit, aircraftcap.ai_aircraft_in(coalition.ato.packages)
 
 
 def build_squadron(sq: Squadron, player: Player | None = None) -> SquadronView:
@@ -1682,6 +1707,8 @@ def build_turn_context(game: Game, side: str = "red") -> TurnContextView:
             for sq in coalition.air_wing.iter_squadrons()
         ],
         idle_flyable=idle_flyable_total(game, side),
+        ai_aircraft_limit=ai_aircraft_limit(game, side)[0],
+        ai_aircraft_planned=ai_aircraft_limit(game, side)[1],
         targets=targets,
         threats=build_threats(targets),
         naval=build_my_naval(game, side),
