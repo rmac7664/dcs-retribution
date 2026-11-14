@@ -72,5 +72,10 @@ class LowLevelAttack:
             task.params["altitudeEnabled"] = False
             task.params["altitude"] = 0
         # A carpet bombing run stays a level carpet: only the altitude changes.
-        if settings.attack_type is not None and "attackType" not in task.params:
+        # Runway bombing has no attack type at all: it is always a level pass.
+        if (
+            settings.attack_type is not None
+            and "attackType" not in task.params
+            and "runwayId" not in task.params
+        ):
             task.params["attackType"] = settings.attack_type

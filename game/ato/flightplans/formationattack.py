@@ -534,6 +534,8 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
         if ingress_type in (
             FlightWaypointType.INGRESS_STRIKE,
             FlightWaypointType.INGRESS_BAI,
+            FlightWaypointType.INGRESS_OCA_RUNWAY,
+            FlightWaypointType.INGRESS_OCA_AIRCRAFT,
         ):
             self._apply_attack_profile(layout, builder)
         return layout

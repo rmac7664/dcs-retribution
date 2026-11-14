@@ -28,6 +28,9 @@ class OcaAircraftIngressBuilder(PydcsWaypointBuilder):
         )
         task.params["attackQtyLimit"] = False
         task.params["directionEnabled"] = False
+        # No attack altitude even on a low-level profile: the AI picks its own
+        # passes on parked aircraft, and a height above the ground must never be
+        # handed to it as an altitude above sea level.
         task.params["altitudeEnabled"] = False
         task.params["groupAttack"] = True
         waypoint.tasks.append(task)

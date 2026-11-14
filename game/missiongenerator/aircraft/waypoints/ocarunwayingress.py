@@ -10,10 +10,11 @@ from dcs.task import (
 
 from game.data.weapons import WeaponType
 from game.theater import Airfield
+from .lowlevel import LowLevelAttack
 from .pydcswaypointbuilder import PydcsWaypointBuilder
 
 
-class OcaRunwayIngressBuilder(PydcsWaypointBuilder):
+class OcaRunwayIngressBuilder(LowLevelAttack, PydcsWaypointBuilder):
     def add_tasks(self, waypoint: MovingPoint) -> None:
         target = self.package.target
         waypoint.tasks.append(OptFormation.trail_open())
@@ -55,3 +56,8 @@ class OcaRunwayIngressBuilder(PydcsWaypointBuilder):
                 group_attack=True,
             )
         )
+        if self.low_level:
+            settings = self.low_level_attack(target.position)
+            for task in waypoint.tasks:
+                if isinstance(task, (Bombing, BombingRunway)):
+                    self.apply_low_level(task, settings)

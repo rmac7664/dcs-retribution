@@ -34,9 +34,12 @@ def flight(
     )
 
 
-def test_only_strike_and_bai_jets_can_fly_low() -> None:
+def test_only_jets_on_point_bombing_tasks_can_fly_low() -> None:
     assert attackprofile.supported(flight())
     assert attackprofile.supported(flight(FlightType.BAI))
+    assert attackprofile.supported(flight(FlightType.OCA_RUNWAY))
+    assert attackprofile.supported(flight(FlightType.OCA_AIRCRAFT))
+    assert not attackprofile.supported(flight(FlightType.ARMED_RECON))
     assert not attackprofile.supported(flight(FlightType.CAS))
     assert not attackprofile.supported(flight(helo=True))
     assert not attackprofile.supported(flight(dcs_id="B-52H"))

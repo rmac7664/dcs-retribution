@@ -48,8 +48,16 @@ class AttackProfile(Enum):
         return self.value.split(" (")[0]
 
 
-#: The tasks that can fly a low-level attack.
-SUPPORTED_TASKS = frozenset({FlightType.STRIKE, FlightType.BAI})
+#: The bombing tasks that can fly a low-level attack. Not CAS or armed recon, which
+#: hunt over an area rather than attack one point.
+SUPPORTED_TASKS = frozenset(
+    {
+        FlightType.STRIKE,
+        FlightType.BAI,
+        FlightType.OCA_RUNWAY,
+        FlightType.OCA_AIRCRAFT,
+    }
+)
 
 #: The low-level height over flat or gently rolling ground.
 LOW_HEIGHT = feet(500)
