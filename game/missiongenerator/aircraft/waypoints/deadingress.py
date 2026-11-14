@@ -13,6 +13,9 @@ from game.gpsjamming import (
     GPS_GUIDED_BOMB_PATTERNS,
 )
 from game.theater import TheaterGroundObject
+from game.ato.attackprofile import AttackSettings
+
+from .lowlevel import LowLevelAttack
 from .pydcswaypointbuilder import PydcsWaypointBuilder
 
 GPS_AIR_STORE_PATTERNS = (
@@ -28,7 +31,7 @@ SUPPORT_STORE_TYPES = {
 }
 
 
-class DeadIngressBuilder(PydcsWaypointBuilder):
+class DeadIngressBuilder(LowLevelAttack, PydcsWaypointBuilder):
     def _uses_coordinate_tasks(self) -> bool:
         # Use the exported payload so this also sees date substitutions and racks.
         clsids = {
@@ -114,6 +117,14 @@ class DeadIngressBuilder(PydcsWaypointBuilder):
                 ),
             ]
             tasks[-1].params["altitudeEnabled"] = False
+            if self.low_level:
+                settings = self.low_level_attack(miz_group.position)
+                for task in tasks[1:]:
+                    self.apply_low_level(task, settings)
+                # Anti-radiation missiles are left to pick their own launch height.
+                self.apply_low_level(
+                    tasks[0], AttackSettings(altitude_m=None, attack_type=None)
+                )
             if use_coordinates and miz_group.units:
                 # Keep the full task order and parameters of the point sequence
                 # verified in DCS. The point comes from the exported group's lead.

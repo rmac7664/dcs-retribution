@@ -214,7 +214,9 @@ class FlightPlanPropertiesGroup(QWidget):
                 "DCS AI cannot loft, so an AI flight flies the sled instead.\n\n"
                 "The low legs are flown 500 ft above the ground, or 1,000 ft where "
                 "the ground is hilly or its height could not be checked. An AI flight "
-                "whose run-in crosses mountains keeps the normal profile."
+                "whose run-in crosses mountains keeps the normal profile.\n\n"
+                "DEAD flights carrying anti-radiation missiles keep the normal "
+                "profile. Anti-ship flights only fly the route low."
             )
         )
         self.attack_profile.currentIndexChanged.connect(self.set_attack_profile)
@@ -250,6 +252,11 @@ class FlightPlanPropertiesGroup(QWidget):
         height = getattr(layout, "low_level_height_ft", None)
         if not chosen.low_level:
             text = ""
+        elif flown is None and attackprofile.carries_arms(self.flight):
+            text = (
+                "This flight carries anti-radiation missiles, which need altitude, "
+                "so it keeps the normal profile."
+            )
         elif flown is None:
             text = (
                 "The run-in crosses mountains, so this AI flight keeps the normal "
@@ -257,6 +264,8 @@ class FlightPlanPropertiesGroup(QWidget):
             )
         else:
             text = f"Low legs flown {height:,} ft above the ground."
+            if attackprofile.route_only(self.flight):
+                text += " Only the route is low: the attack on the ships is unchanged."
             if flown != chosen.value:
                 text += (
                     f" AI flights cannot loft, so this one flies the {flown.lower()}."

@@ -40,6 +40,23 @@ def test_only_jets_on_point_bombing_tasks_can_fly_low() -> None:
     assert attackprofile.supported(flight(FlightType.OCA_RUNWAY))
     assert attackprofile.supported(flight(FlightType.OCA_AIRCRAFT))
     assert not attackprofile.supported(flight(FlightType.ARMED_RECON))
+    assert attackprofile.supported(flight(FlightType.DEAD))
+    assert attackprofile.supported(flight(FlightType.ANTISHIP))
+    assert not attackprofile.supported(flight(FlightType.SEAD))
+
+
+def test_dead_flights_with_anti_radiation_missiles_stay_high() -> None:
+    harm = flight(FlightType.DEAD, AttackProfile.POPUP)
+    harm.any_member_has_weapon_of_type = lambda weapon_type: True
+    assert flown_profile(harm) is AttackProfile.NORMAL
+    bombs = flight(FlightType.DEAD, AttackProfile.POPUP)
+    bombs.any_member_has_weapon_of_type = lambda weapon_type: False
+    assert flown_profile(bombs) is AttackProfile.POPUP
+
+
+def test_anti_ship_only_flies_the_route_low() -> None:
+    assert attackprofile.route_only(flight(FlightType.ANTISHIP))
+    assert not attackprofile.route_only(flight(FlightType.STRIKE))
     assert not attackprofile.supported(flight(FlightType.CAS))
     assert not attackprofile.supported(flight(helo=True))
     assert not attackprofile.supported(flight(dcs_id="B-52H"))

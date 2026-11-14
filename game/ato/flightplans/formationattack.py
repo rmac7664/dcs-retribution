@@ -536,6 +536,8 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
             FlightWaypointType.INGRESS_BAI,
             FlightWaypointType.INGRESS_OCA_RUNWAY,
             FlightWaypointType.INGRESS_OCA_AIRCRAFT,
+            FlightWaypointType.INGRESS_DEAD,
+            FlightWaypointType.INGRESS_ANTI_SHIP,
         ):
             self._apply_attack_profile(layout, builder)
         return layout
@@ -575,6 +577,12 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
         if terrain.mountainous and self.flight.client_count == 0:
             return
         height = attackprofile.low_height(terrain)
+        # Weapons launched from far out: no pull-up or pop-up point, and the climb
+        # out starts from the launch point.
+        standoff = bool(layout.targets) and (
+            layout.ingress.position.distance_to_point(layout.targets[0].position)
+            > attackprofile.STANDOFF_RUN_IN.meters
+        )
         low = [layout.ingress]
         low += [
             waypoint
@@ -601,11 +609,16 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
                 description="Descend to low level",
                 pretty_name="Descent",
             )
-        last = (
-            layout.follow_on_waypoints[-1]
-            if layout.follow_on_waypoints
-            else layout.targets[-1]
-        )
+        # The climb-out starts where the flight turns for home. After a stand-off
+        # attack that is the last ingress, where the weapons are launched, not the
+        # target: measured from the target the climb point could sit over the
+        # defences the stand-off weapon was meant to keep the flight away from.
+        sets = [(layout.ingress, layout.targets), *layout.follow_on_sets()]
+        last_ingress, last_targets = sets[-1]
+        if not last_targets or standoff:
+            last = last_ingress
+        else:
+            last = last_targets[-1]
         egress = meters(last.position.distance_to_point(layout.split.position))
         if egress.meters > attackprofile.LOW_EGRESS.meters + nautical_miles(5).meters:
             heading = last.position.heading_between_point(layout.split.position)
@@ -629,7 +642,11 @@ class FormationAttackBuilder(IBuilder[FlightPlanT, LayoutT], ABC):
         layout.attack_profile = profile.value
         layout.low_level_height_ft = round(height.feet)
 
-        if self.flight.client_count == 0:
+        if (
+            self.flight.client_count == 0
+            or attackprofile.route_only(self.flight)
+            or standoff
+        ):
             return
         if profile is AttackProfile.LOFT:
             distance = attackprofile.loft_solution(height).pull_up

@@ -56,8 +56,15 @@ SUPPORTED_TASKS = frozenset(
         FlightType.BAI,
         FlightType.OCA_RUNWAY,
         FlightType.OCA_AIRCRAFT,
+        FlightType.DEAD,
+        FlightType.ANTISHIP,
     }
 )
+
+#: Tasks where only the route is flown low. Their attacks are left to the AI:
+#: anti-ship missiles fly their own profile, and a defended ship is no target for
+#: a low bombing pass.
+ROUTE_ONLY_TASKS = frozenset({FlightType.ANTISHIP})
 
 #: The low-level height over flat or gently rolling ground.
 LOW_HEIGHT = feet(500)
@@ -73,6 +80,9 @@ MOUNTAIN_RELIEF = meters(800)
 
 #: How far before the ingress the flight is down at low level.
 LOW_RUN_IN = nautical_miles(25)
+
+#: An ingress farther than this from its target is a stand-off launch point.
+STANDOFF_RUN_IN = nautical_miles(30)
 
 #: How far past the last target the flight stays low before climbing out.
 LOW_EGRESS = nautical_miles(20)
@@ -128,9 +138,32 @@ def flown_profile(flight: Flight) -> AttackProfile:
     The AI cannot loft, so an AI flight set to loft flies the sled instead.
     """
     profile = profile_of(flight)
+    if profile.low_level and carries_arms(flight):
+        return AttackProfile.NORMAL
     if profile is AttackProfile.LOFT and flight.client_count == 0:
         return AttackProfile.SLED
     return profile
+
+
+def carries_arms(flight: Flight) -> bool:
+    """Whether a DEAD flight carries anti-radiation missiles.
+
+    Those need altitude to see and reach the radar, so such a flight keeps the
+    normal profile. Bomb and Maverick DEAD flights can go in low.
+    """
+    from game.data.weapons import WeaponType
+
+    if flight.flight_type is not FlightType.DEAD:
+        return False
+    try:
+        return flight.any_member_has_weapon_of_type(WeaponType.ARM)
+    except Exception:
+        return False
+
+
+def route_only(flight: Flight) -> bool:
+    """Whether only the route is flown low, with the attack left as it is."""
+    return flight.flight_type in ROUTE_ONLY_TASKS
 
 
 def ground_m(position: Point) -> Optional[float]:

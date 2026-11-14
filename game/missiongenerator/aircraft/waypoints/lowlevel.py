@@ -11,6 +11,7 @@ from typing import Any, Optional, TYPE_CHECKING
 
 from dcs import Point
 
+from game.ato import attackprofile
 from game.ato.attackprofile import AttackProfile, AttackSettings, attack_settings
 from game.utils import feet
 
@@ -26,7 +27,8 @@ class LowLevelAttack:
     @property
     def low_level(self) -> bool:
         """Whether the flight's route was built for a low-level profile."""
-        layout = getattr(self.flight.flight_plan, "layout", None)
+        flight = getattr(self, "flight", None)
+        layout = getattr(getattr(flight, "flight_plan", None), "layout", None)
         return getattr(layout, "attack_profile", None) is not None
 
     def low_level_attack(self, target: Point) -> Optional[AttackSettings]:
@@ -35,6 +37,8 @@ class LowLevelAttack:
         profile_name = getattr(layout, "attack_profile", None)
         height_ft = getattr(layout, "low_level_height_ft", None)
         if profile_name is None or height_ft is None:
+            return None
+        if attackprofile.route_only(self.flight):
             return None
         try:
             profile = AttackProfile(profile_name)
