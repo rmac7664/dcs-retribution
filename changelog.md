@@ -125,6 +125,7 @@
 * **[UI]** Double-clicking a log entry that names a base or site moves the map to it, without zooming.
 
 ## Fixes
+* **[UI]** Opening a SAM site from a campaign saved before ground movement existed no longer raises an error.
 * **[Kneeboard]** The strike page lists weapons to destroy each target in a table of its own, so long weapon names no longer run off the page.
 * **[UI]** The ATO timeline no longer raises an error on the next campaign update after it has been closed and reopened, and packages that have already started can no longer be dragged.
 * **[Radios]** A malformed DCS-ATC frequencies file no longer stops mission generation.

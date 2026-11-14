@@ -74,7 +74,10 @@ def sam_truck_options(game: Game, source_id: UUID, owner: Player) -> SamTruckOpt
     reason = None
     if not limit:
         reason = "Only mobile SAM batteries or armor groups with towed units can buy towing trucks"
-    elif source.in_transit or active_transit(game, source.id) is not None:
+    elif (
+        getattr(source, "in_transit", False)
+        or active_transit(game, source.id) is not None
+    ):
         reason = "Stop the group before buying towing trucks"
     elif not any(u.alive for u in source.units):
         reason = "Repair the group before buying towing trucks"

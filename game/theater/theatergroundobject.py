@@ -166,6 +166,8 @@ class TheaterGroundObject(MissionTarget, SidcDescribable, ABC):
     def __setstate__(self, state: dict[str, Any]) -> None:
         state["_threat_poly"] = None
         state.setdefault("missile_target", None)
+        # Saved before ground groups could be moved.
+        state.setdefault("in_transit", False)
         self.__dict__.update(state)
 
     @property
